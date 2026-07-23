@@ -12,8 +12,11 @@ Each mod's own page has the details on what it does and how to use it.
 
 ## Installing
 
-Download the mod from its **Nexus Mods** page and install it with a mod manager (like Vortex), or
-extract the zip into your game folder. Restart the game to load it.
+These mods need **[BepInEx 5](https://github.com/BepInEx/BepInEx/releases)** installed in your game
+folder first (the mod loader they run on).
+
+Then download the mod from its **Nexus Mods** page and install it with a mod manager (like Vortex),
+or extract the zip into your game folder. Restart the game to load it.
 
 ## Help & community
 
