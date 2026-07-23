@@ -1,0 +1,79 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <AssemblyName>StationAssistant</AssemblyName>
+    <Product>Station Assistant</Product>
+    <Version>1.0.0</Version>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+
+    <!-- Game locations. Override GameDir on the command line if Steam is elsewhere:
+         dotnet build -c Release -p:GameDir="D:\SteamLibrary\steamapps\common\Vanguard Galaxy" -->
+    <GameDir Condition="'$(GameDir)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Vanguard Galaxy</GameDir>
+    <ManagedDir>$(GameDir)\VanguardGalaxy_Data\Managed</ManagedDir>
+    <BepInExCore>$(GameDir)\BepInEx\core</BepInExCore>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="BepInEx">
+      <HintPath>$(BepInExCore)\BepInEx.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(BepInExCore)\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(ManagedDir)\Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(ManagedDir)\UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(ManagedDir)\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.IMGUIModule">
+      <HintPath>$(ManagedDir)\UnityEngine.IMGUIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.InputLegacyModule">
+      <HintPath>$(ManagedDir)\UnityEngine.InputLegacyModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.JSONSerializeModule">
+      <HintPath>$(ManagedDir)\UnityEngine.JSONSerializeModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- Shared neutral settings-window host, compiled in (no shared DLL) so the plugin stays a single
+       self-contained assembly. One source of truth in the workspace; cross-mod calls reflect. -->
+  <ItemGroup>
+    <Compile Include="..\Shared\ModHost.cs" Link="ModHost.cs" />
+    <Compile Include="..\Shared\LoadoutCore.cs" Link="LoadoutCore.cs" />
+    <Compile Include="..\Shared\LoadoutStore.cs" Link="LoadoutStore.cs" />
+  </ItemGroup>
+
+  <!-- Language files shipped with the plugin (authoritative sources live in the repo). -->
+  <ItemGroup>
+    <LangFiles Include="lang\*.lang" />
+  </ItemGroup>
+
+  <!-- Drop the built DLL + language files straight into the game's plugin folder on every build. -->
+  <Target Name="DeployToBepInEx" AfterTargets="Build" Condition="Exists('$(GameDir)\BepInEx\plugins')">
+    <Copy SourceFiles="$(TargetPath)"
+          DestinationFolder="$(GameDir)\BepInEx\plugins\$(AssemblyName)"
+          SkipUnchangedFiles="false" />
+    <Copy SourceFiles="@(LangFiles)"
+          DestinationFolder="$(GameDir)\BepInEx\plugins\$(AssemblyName)\lang"
+          SkipUnchangedFiles="false" />
+    <Message Importance="high" Text="Deployed $(AssemblyName).dll + lang -> $(GameDir)\BepInEx\plugins\$(AssemblyName)" />
+  </Target>
+
+</Project>
