@@ -13,8 +13,9 @@ Quality-of-life mod for **Vanguard Galaxy** that handles chores at the station f
 
 ## Installing
 
-Install from **Nexus Mods** with a mod manager (like Vortex), or extract the zip into your game
-folder. Restart the game.
+Needs **[BepInEx 5](https://github.com/BepInEx/BepInEx/releases)** in your game folder first (the mod
+loader). Then install from **Nexus Mods** with a mod manager (like Vortex), or extract the zip into
+your game folder. Restart the game.
 
 ## Using it
 

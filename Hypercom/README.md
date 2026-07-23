@@ -12,9 +12,11 @@ browser.
 
 ## Installing
 
-1. Install this mod from **Nexus Mods** with a mod manager (like Vortex), or extract the zip into
+1. Install **[BepInEx 5](https://github.com/BepInEx/BepInEx/releases)** into your game folder (the
+   mod loader Hypercom runs on).
+2. Install this mod from **Nexus Mods** with a mod manager (like Vortex), or extract the zip into
    your game folder.
-2. Start the game. The Ship Optimizer opens in your browser automatically.
+3. Start the game. The Ship Optimizer opens in your browser automatically.
 
 ## Settings
 
