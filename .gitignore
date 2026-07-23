@@ -1,0 +1,23 @@
+# Build output
+bin/
+obj/
+dist/
+dist-ssr/
+
+# Node
+node_modules/
+*.log
+
+# Packaging
+**/dist/*.zip
+
+# IDE / editor
+.vs/
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.user
+*.suo
+*.DotSettings.user
+*.local
+.DS_Store
