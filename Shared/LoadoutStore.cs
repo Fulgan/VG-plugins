@@ -20,6 +20,7 @@ namespace VG.Loadout
         public string name;                // user-chosen loadout name
         public LoadoutPreset gear = new LoadoutPreset();
         public List<string> officers = new List<string>();
+        public string settings;            // opaque UI-settings blob (JSON owned by the web client); null = none
         public bool IsOrphan => string.IsNullOrEmpty(playthrough) || string.IsNullOrEmpty(shipGuid);
     }
 
@@ -32,7 +33,6 @@ namespace VG.Loadout
         private const char Sep = '␞';   // ␞ key separator
         private static readonly object Gate = new object();
         private static Dictionary<string, LoadoutEntry> _cache;
-        private static DateTime _loadedStamp; // file mtime the cache was built from — reload when it changes
         private static string Path => System.IO.Path.Combine(Paths.ConfigPath, "vg-loadouts.dat");
 
         private static string Key(string pt, string ship, string name) => (pt ?? "") + Sep + (ship ?? "") + Sep + name;
@@ -96,7 +96,16 @@ namespace VG.Loadout
 
         public static void Put(LoadoutEntry e)
         {
-            lock (Gate) { Store()[KeyOf(e)] = e; Persist(); }
+            lock (Gate)
+            {
+                var store = Store();
+                // Keep the opaque UI settings when the writer doesn't carry any. Both mods write the SAME
+                // entry, but only the web client knows about that blob — without this, re-saving a loadout
+                // from the in-game window silently wiped the web UI's optimizer preferences for it.
+                if (e.settings == null && store.TryGetValue(KeyOf(e), out var old)) e.settings = old.settings;
+                store[KeyOf(e)] = e;
+                Persist();
+            }
         }
 
         public static bool Remove(string pt, string shipGuid, string name)
@@ -143,7 +152,19 @@ namespace VG.Loadout
             var n = 0;
             lock (Gate)
             {
-                foreach (var e in entries) { e.playthrough = pt; Store()[KeyOf(e)] = e; n++; }
+                // ONE Store() call for the whole batch: it re-reads the file and replaces _cache every
+                // time, so calling it per entry threw away everything added on the previous iteration —
+                // an import of N loadouts persisted only the last one.
+                var store = Store();
+                foreach (var e in entries)
+                {
+                    e.playthrough = pt;
+                    // An export from an older build carries no settings blob — don't null out the prefs
+                    // already held for that loadout.
+                    if (e.settings == null && store.TryGetValue(KeyOf(e), out var old)) e.settings = old.settings;
+                    store[KeyOf(e)] = e;
+                    n++;
+                }
                 if (n > 0) Persist();
             }
             return n;
@@ -158,11 +179,12 @@ namespace VG.Loadout
             if (legacy == null) return;
             lock (Gate)
             {
+                var store = Store(); // once for the batch — see Import
                 var added = false;
                 foreach (var e in legacy)
                 {
                     var k = KeyOf(e);
-                    if (!Store().ContainsKey(k)) { Store()[k] = e; added = true; }
+                    if (!store.ContainsKey(k)) { store[k] = e; added = true; }
                 }
                 if (added) Persist();
             }
@@ -170,14 +192,13 @@ namespace VG.Loadout
 
         // ---- persistence (tab-delimited: E = entry header, T = gear slot) ----
 
-        // Reload the cache whenever the file's mtime differs from what we last loaded. Because the store
-        // is compiled separately into each plugin, they hold independent caches over the same file; the
-        // mtime check keeps them coherent and stops one plugin's stale write from clobbering the other's.
+        // Always read fresh from disk. The store is compiled separately into each plugin (Hypercom +
+        // Station Assistant), so each holds an independent copy of this class; an in-memory cache synced
+        // only by file mtime went stale across them — a loadout saved in the web UI didn't appear in the
+        // in-game tab until a restart. The file is tiny, so re-reading per call is cheap and always
+        // coherent, and because every write reloads first (via Store()) it can't clobber the other's data.
         private static Dictionary<string, LoadoutEntry> Store()
         {
-            var stamp = File.Exists(Path) ? File.GetLastWriteTimeUtc(Path) : DateTime.MinValue;
-            if (_cache != null && stamp == _loadedStamp) return _cache;
-            _loadedStamp = stamp;
             _cache = new Dictionary<string, LoadoutEntry>();
             try
             {
@@ -194,6 +215,7 @@ namespace VG.Loadout
                             {
                                 playthrough = Nz(c[1]), shipGuid = Nz(c[2]), shipLabel = c[3], name = c[4],
                                 officers = SplitList(c[5]),
+                                settings = c.Length >= 7 ? Nz(c[6]) : null, // added later; old files have 6 fields
                                 gear = new LoadoutPreset { name = c[4] },
                             };
                             _cache[KeyOf(e)] = e;
@@ -225,7 +247,8 @@ namespace VG.Loadout
                 {
                     sb.Append("E\t").Append(Esc(e.playthrough)).Append('\t').Append(Esc(e.shipGuid)).Append('\t')
                       .Append(Esc(e.shipLabel)).Append('\t').Append(Esc(e.name)).Append('\t')
-                      .Append(Esc(string.Join("|", (e.officers ?? new List<string>()).Select(o => o ?? "").ToArray()))).Append('\n');
+                      .Append(Esc(string.Join("|", (e.officers ?? new List<string>()).Select(o => o ?? "").ToArray()))).Append('\t')
+                      .Append(Esc(e.settings)).Append('\n'); // 7th field: opaque UI settings (minified JSON, no tabs/newlines)
                     if (e.gear?.slots != null)
                         foreach (var t in e.gear.slots)
                             sb.Append("T\t").Append(Esc(t.kind)).Append('\t').Append(Esc(t.slot)).Append('\t')
@@ -236,7 +259,6 @@ namespace VG.Loadout
                               .Append(Esc(string.Join("|", (t.stats ?? new List<string>()).ToArray()))).Append('\n');
                 }
                 File.WriteAllText(Path, sb.ToString());
-                _loadedStamp = File.GetLastWriteTimeUtc(Path); // our own write — don't trigger a needless reload
             }
             catch (Exception ex) { UnityEngine.Debug.LogWarning($"[VG.Loadout] store save failed: {ex.Message}"); }
         }

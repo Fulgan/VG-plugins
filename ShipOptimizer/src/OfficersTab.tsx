@@ -1,7 +1,13 @@
-import { useEffect, useMemo, useState, type CSSProperties, type MouseEvent } from "react";
-import { buildCatalog, defaultPriorities, evaluateRecruits, MAX_LEVEL, optimize, prioritiesFromCrew, type CatalogSkill, type OptimizeResult, type RecruitOfficer, type Scope } from "./officer";
-import { composeActivity, type ActivityProfile, type MainActivity } from "./activityPresets";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties, type MouseEvent } from "react";
+import ApplyBar, { ApplyMsg } from "./ApplyBar";
+import type { ApplyApi } from "./useApply";
+import { buildCatalog, buildFullCatalog, defaultPriorities, evaluateRecruits, exportPriorities, importPriorities, isNamePrio, MAX_LEVEL, namePrioLabel, optimize, prioritiesFromCrew, type BrowsableSkill, type CatalogSkill, type OptimizeResult, type RecruitOfficer, type Scope } from "./officer";
+import { composeActivity, defaultProfileForShip, DEFAULT_PROFILE, type ActivityProfile, type MainActivity } from "./activityPresets";
+import { ApiError, api, type Conn } from "./api";
 import type { Officer, Recruits } from "./types";
+import { RARITY_COLOR, brokeMsg, undockedMsg, affordLine } from "./format";
+import { load, save } from "./storage";
+import { useConfirm } from "./Modal";
 import "./officers.css";
 
 // Ship the optimizer targets (owned ship joined from /officers + /ships).
@@ -11,12 +17,10 @@ export interface BuilderShip {
   role: string | null;
   slots: number;
   hasDroneBay: boolean;
+  defenseLayer: "shield" | "armor" | null; // from the ship's equipped defensive module slot
   assigned: (string | null)[]; // currently-assigned officer guids (per slot)
 }
 
-const RARITY_COLOR: Record<string, string> = {
-  Standard: "#cfcfcf", Enhanced: "#58c26b", HighGrade: "#4aa3ff", Exotic: "#c07bff", Legendary: "#ffb020",
-};
 const initials = (nm: string) => nm.split(" ").map((w) => w[0]).slice(0, 2).join("");
 
 // Shared builder state (ship pick, per-ship priorities + pins, scope). Lifted into App so the Officers
@@ -25,8 +29,6 @@ export interface OfficerBuilder {
   officers: Officer[];
   ships: BuilderShip[];
   ship: BuilderShip | undefined;
-  shipIdx: number;
-  setShipIdx: (i: number) => void;
   scope: Scope;
   setScope: (s: Scope) => void;
   catalog: CatalogSkill[];
@@ -34,38 +36,44 @@ export interface OfficerBuilder {
   setPrio: (p: string[]) => void;
   forced: Set<string>;
   togglePin: (guid: string) => void;
+  setForced: (guids: string[]) => void; // replace the whole pin set (for restoring a saved loadout)
   result: OptimizeResult | null;
+  profile: ActivityProfile;
+  setProfile: (p: ActivityProfile) => void;
 }
 
-// Persisted builder choices (per-ship priorities + pins, scope) — survive page reloads.
+// Persisted builder choices (per-ship priorities + pins + activity profile, scope) — survive reloads.
 const BUILDER_KEY = "shipoptimizer.officerBuilder";
-interface BuilderSaved { prio: Record<string, string[]>; forced: Record<string, string[]>; scope: Scope }
+interface BuilderSaved { prio: Record<string, string[]>; forced: Record<string, string[]>; profile: Record<string, ActivityProfile>; scope: Scope }
 function loadBuilder(): BuilderSaved {
-  try {
-    const r = localStorage.getItem(BUILDER_KEY);
-    if (r) return { prio: {}, forced: {}, scope: "potential", ...JSON.parse(r) };
-  } catch { /* ignore */ }
-  return { prio: {}, forced: {}, scope: "potential" };
+  return { prio: {}, forced: {}, profile: {}, scope: "potential", ...load<Partial<BuilderSaved>>(BUILDER_KEY, {}) };
 }
 
-export function useOfficerBuilder(officers: Officer[], ships: BuilderShip[]): OfficerBuilder {
+export function useOfficerBuilder(officers: Officer[], ships: BuilderShip[], currentShipGuid: string | null): OfficerBuilder {
   const catalog = useMemo(() => buildCatalog(officers), [officers]);
-  const [shipIdx, setShipIdx] = useState(0);
-  const ship = ships[Math.min(shipIdx, Math.max(0, ships.length - 1))];
+  // Always optimize the current (docked) ship — there's no manual ship picker. Fall back to the first
+  // ship with officer slots when the current ship is unknown (e.g. undocked before ever docking).
+  const ship = ships.find((s) => s.guid === currentShipGuid) ?? ships[0];
 
   const [saved] = useState(loadBuilder);
   const [scope, setScope] = useState<Scope>(saved.scope);
   const [prioByShip, setPrioByShip] = useState<Record<string, string[]>>(saved.prio);
   const [forcedByShip, setForcedByShip] = useState<Record<string, string[]>>(saved.forced);
+  const [profileByShip, setProfileByShip] = useState<Record<string, ActivityProfile>>(saved.profile);
 
   // Persist choices whenever they change.
   useEffect(() => {
-    try { localStorage.setItem(BUILDER_KEY, JSON.stringify({ prio: prioByShip, forced: forcedByShip, scope })); } catch { /* quota */ }
-  }, [prioByShip, forcedByShip, scope]);
+    save(BUILDER_KEY, { prio: prioByShip, forced: forcedByShip, profile: profileByShip, scope });
+  }, [prioByShip, forcedByShip, profileByShip, scope]);
 
   // A ship with no stored priority list yet falls back to the role default (until the user edits it).
   const prio = ship ? prioByShip[ship.guid] ?? defaultPriorities(catalog, ship.role) : [];
   const setPrio = (next: string[]) => ship && setPrioByShip((m) => ({ ...m, [ship.guid]: next }));
+
+  // Activity profile is per-ship: until the user edits it, default from the ship's role + defensive
+  // module slot (combat ship with an armor slot → armor layer). Edits persist per ship.
+  const profile = ship ? profileByShip[ship.guid] ?? defaultProfileForShip(ship.role, ship.defenseLayer) : DEFAULT_PROFILE;
+  const setProfile = (next: ActivityProfile) => ship && setProfileByShip((m) => ({ ...m, [ship.guid]: next }));
 
   const forced = useMemo(() => new Set(ship ? forcedByShip[ship.guid] ?? [] : []), [forcedByShip, ship]);
   const togglePin = (guid: string) =>
@@ -74,29 +82,37 @@ export function useOfficerBuilder(officers: Officer[], ships: BuilderShip[]): Of
       if (cur.has(guid)) cur.delete(guid); else cur.add(guid);
       return { ...m, [ship.guid]: [...cur] };
     });
+  const setForced = (guids: string[]) => ship && setForcedByShip((m) => ({ ...m, [ship.guid]: [...guids] }));
 
+  // The WHOLE roster, deliberately: an officer serves several ships AT ONCE — 62 filled slots across 19
+  // ships can come from 23 officers — so crewing this ship takes nobody off another. This reads like a
+  // double-assignment bug and is not one; excluding officers seen on other ships would wrongly shrink the
+  // pool to almost nothing. `assigned` is passed only as the incumbency tie-break for THIS ship.
   const result = useMemo(
     () => ship
-      ? optimize({ officers, slots: ship.slots, role: ship.role, hasDroneBay: ship.hasDroneBay, priorities: prio, scope, forced })
+      ? optimize({ officers, slots: ship.slots, role: ship.role, hasDroneBay: ship.hasDroneBay, priorities: prio, scope, forced, assigned: new Set((ship.assigned ?? []).filter((g): g is string => !!g)) })
       : null,
     [officers, ship, prio, scope, forced],
   );
 
-  return { officers, ships, ship, shipIdx, setShipIdx, scope, setScope, catalog, prio, setPrio, forced, togglePin, result };
+  return { officers, ships, ship, scope, setScope, catalog, prio, setPrio, forced, togglePin, setForced, result, profile, setProfile };
 }
 
 export default function OfficersTab({
-  builder, portraitUrl, recruits, portraitByIcon, profile, setProfile, goSummary,
+  builder, portraitUrl, recruits, portraitByIcon, goSummary, conn, docked, credits, onHired, apply,
 }: {
   builder: OfficerBuilder;
   portraitUrl: (guid: string | null) => string | null;
   recruits: Recruits | null;
+  conn?: Conn;
+  docked?: boolean;
+  credits?: number | null;
+  onHired?: () => void;
   portraitByIcon: (icon: string | null) => string | null;
-  profile: ActivityProfile;
-  setProfile: (p: ActivityProfile) => void;
   goSummary: () => void;
+  apply?: ApplyApi;
 }) {
-  const { officers, ships, ship, shipIdx, setShipIdx, scope, setScope, catalog, prio, setPrio, forced, togglePin, result } = builder;
+  const { officers, ships, ship, scope, setScope, catalog, prio, setPrio, forced, togglePin, result, profile, setProfile } = builder;
 
   // Stable per-skill hue so a skill reads the same everywhere (priority list, cards, roster).
   const hueOf = useMemo(() => {
@@ -124,7 +140,10 @@ export default function OfficersTab({
     return (id: string) => m.get(id) ?? 0;
   }, [officers]);
 
-  const nameOf = (id: string) => catalog.find((c) => c.id === id)?.name ?? id;
+  // A `name:`-keyed priority (a skill no officer has yet, or an import that didn't resolve) carries its
+  // label in the key itself — otherwise the row would read "name:iron rage".
+  const nameOf = (id: string) =>
+    catalog.find((c) => c.id === id)?.name ?? (isNamePrio(id) ? namePrioLabel(id) : id);
   const byUnlock = (a: { unlock?: number }, b: { unlock?: number }) => (a.unlock ?? 0) - (b.unlock ?? 0); // activation order
 
   // Styled skill tooltip (game-like) — follows the cursor; one instance rendered per tab. Shared hover
@@ -181,7 +200,8 @@ export default function OfficersTab({
   const undoSuggest = () => { if (canUndo) { setPrio(undoPrio!.list); setUndoPrio(null); } };
   const setP = (patch: Partial<ActivityProfile>) => setProfile({ ...profile, ...patch });
   const [showActivity, setShowActivity] = useState(false);
-  const [addOpen, setAddOpen] = useState(false);
+  const [skillQ, setSkillQ] = useState(""); // full-text search over the permanent skill browser
+  const [skillCats, setSkillCats] = useState<Set<string>>(new Set()); // active category (role) filters
   const [rosterQ, setRosterQ] = useState("");
   const activitySummary = [
     profile.main[0].toUpperCase() + profile.main.slice(1),
@@ -189,12 +209,104 @@ export default function OfficersTab({
     ...(profile.echo ? ["ECHO"] : []), ...(profile.drone ? ["drone"] : []), ...(profile.boarding ? ["boarding"] : []),
   ].join(" · ");
 
-  if (!ships.length) return <p className="hint">No ships with officer slots found. Dock and refresh.</p>;
+  // Every hook must be declared above the early returns further down: hook identity is call order, so a
+  // conditional return before one changes that order between renders.
+  //
+  // `showAllSkills` switches the browser between the roster's learnable skills and every skill in the game.
+  // Skills nobody owns have no id in this save and are keyed by name instead (see namePrio).
+  const [showAllSkills, setShowAllSkills] = useState(false);
+  const [prioMsg, setPrioMsg] = useState<string | null>(null);
+  const [hiring, setHiring] = useState<string | null>(null);
+  const [hireMsg, setHireMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const { ask, ui: confirmUi } = useConfirm();
+  const fullCatalog = useMemo(() => buildFullCatalog(catalog), [catalog]);
+  // Metadata for ANY priority entry, including a `name:` one whose skill nobody owns — the owned catalog
+  // alone would leave those rows with no effect text and the wrong weight.
+  const metaOf = useCallback((id: string) => fullCatalog.find((c) => c.id === id), [fullCatalog]);
+
+  if (!ships.length) return <p className="hint">No ships with officer slots.</p>;
   if (!officers.length) return <p className="hint">No officers in your roster yet.</p>;
   if (!ship) return <p className="hint">No ship selected.</p>;
 
   const maxRank = Math.max(1, ...(result?.ranks.map((r) => r.rank) ?? [1]));
-  const addOptions = catalog.filter((c) => !prio.includes(c.id));
+  // Permanent skill browser: category (role) filter chips + full-text search over name / effect / role.
+  const SKILL_CATS = ["Combat", "Mining", "Salvaging", "Engineering", "Industrial", "Unique"];
+  const browseList: BrowsableSkill[] = showAllSkills ? fullCatalog : catalog.map((c) => ({ ...c, owned: true }));
+
+  const catsAvail = SKILL_CATS.filter((c) => browseList.some((s) => s.roles.includes(c)));
+  const skillListShown = browseList.filter((c) => {
+    if (skillCats.size && !c.roles.some((r) => skillCats.has(r))) return false;
+    const q = skillQ.trim().toLowerCase();
+    if (!q) return true;
+    return c.name.toLowerCase().includes(q) || (c.effect ?? "").toLowerCase().includes(q) || c.roles.some((r) => r.toLowerCase().includes(q));
+  });
+  const unownedCount = fullCatalog.filter((c) => !c.owned).length;
+
+  // ---- priority list export / import ----
+  // Portable across ships, playthroughs and players. Import matches on skill NAME first (ids don't survive
+  // a save change) and keeps unmatched names as name-only priorities rather than silently dropping them.
+  const prioFileName = `priorities-${(ship?.role ?? "crew").toLowerCase()}.json`;
+  const prioJson = () => JSON.stringify(
+    exportPriorities(prio, nameOf, { ship: ship?.name ?? null, role: ship?.role ?? null, scope }), null, 2);
+
+  const exportPrioFile = () => {
+    const url = URL.createObjectURL(new Blob([prioJson()], { type: "application/json" }));
+    const a = document.createElement("a");
+    a.href = url; a.download = prioFileName; a.style.display = "none";
+    document.body.appendChild(a); a.click(); a.remove();  // must be in the DOM or some browsers drop it
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setPrioMsg(`Saved ${prioFileName} (${prio.length} skill${prio.length === 1 ? "" : "s"}).`);
+  };
+  const copyPrio = () => navigator.clipboard?.writeText(prioJson())
+    .then(() => setPrioMsg(`Copied ${prio.length} priorities to the clipboard.`))
+    .catch(() => setPrioMsg("Copy failed — no clipboard access."));
+
+  const applyImport = (text: string) => {
+    try {
+      const r = importPriorities(JSON.parse(text), catalog);
+      if (!r.prio.length) { setPrioMsg("Nothing usable in that file."); return; }
+      snapshot();                           // same undo affordance as Suggest
+      setPrio(r.prio);
+      if (r.scope) setScope(r.scope);
+      const bits = [`${r.matched} matched`];
+      if (r.byName) bits.push(`${r.byName} kept by name (no officer has it yet)`);
+      if (r.skipped.length) bits.push(`${r.skipped.length} unusable`);
+      setPrioMsg(`Imported ${r.prio.length} priorities — ${bits.join(", ")}.`);
+    } catch (e) {
+      setPrioMsg(`Could not read that: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+  const importPrioFile = (f: File) => f.text().then(applyImport).catch(() => setPrioMsg("Could not read file."));
+  const pastePrio = () => navigator.clipboard?.readText().then(applyImport)
+    .catch(() => setPrioMsg("Paste failed — grant clipboard access."));
+  const toggleCat = (c: string) => setSkillCats((s) => { const n = new Set(s); n.has(c) ? n.delete(c) : n.add(c); return n; });
+
+  // Same courtesy block as buying: refuse in words, not with a dead button.
+  const hireBlockedBecause = (cost: number): string | null => {
+    if (!docked) return undockedMsg;
+    if (credits == null || cost <= credits) return null;
+    return brokeMsg(cost, credits);
+  };
+
+  const hire = async (guid: string, name: string, cost: number, skipConfirm = false) => {
+    if (!conn) return;
+    // Latch claimed around the confirmation: an awaited dialog does not block the event loop, so a second
+    // click would otherwise open a second question and hire twice.
+    setHiring(guid); setHireMsg(null);
+    try {
+      if (!skipConfirm && !(await ask({
+        title: `Hire ${name} for ${cost.toLocaleString()} cr?`,
+        detail: affordLine({ name, cost }, credits ?? null),
+        confirmLabel: "Hire",
+      }))) return;
+      const r = await api.hireOfficer(conn, guid);
+      if (r.hired === false) setHireMsg({ ok: false, text: `${name}: the game accepted the call but the roster didn't change (${r.method ?? "no method"}).` });
+      else setHireMsg({ ok: true, text: `Hired ${r.officer ?? name} for ${r.cost.toLocaleString()} cr.` });
+      onHired?.();
+    } catch (e) {
+      setHireMsg({ ok: false, text: e instanceof ApiError ? e.message : String(e) });
+    } finally { setHiring(null); }
+  };
 
   // Station recruits scored against the selected ship's crew — flag hires that out-rank the weakest.
   const stationView = recruits?.hasPersonnelCenter && result
@@ -261,13 +373,9 @@ export default function OfficersTab({
 
   return (
     <div className="officers">
-      {/* ship context bar */}
+      {confirmUi}
+      {/* ship context bar — always the current ship */}
       <div className="ctx-bar">
-        {ships.length > 1 && (
-          <select value={shipIdx} onChange={(e) => setShipIdx(Number(e.target.value))}>
-            {ships.map((s, i) => (<option key={s.guid} value={i}>{s.name}{s.role ? ` · ${s.role}` : ""}</option>))}
-          </select>
-        )}
         <span className="ctx-line">
           <b>{ship.name}</b> · <span className="role-hi">{ship.role ?? "—"}</span> role ·{" "}
           <b>{ship.slots}</b> officer slots ·{" "}
@@ -284,8 +392,10 @@ export default function OfficersTab({
         <span className="dim" title="Evaluate skills at each officer's current unlocked level, or full potential once maxed">Skills at</span>
         <button className={`seg ${scope === "current" ? "on" : ""}`} onClick={() => setScope("current")}>current level</button>
         <button className={`seg ${scope === "potential" ? "on" : ""}`} onClick={() => setScope("potential")}>full potential</button>
+        {apply && <ApplyBar apply={apply} section="officers" label="officer" />}
         <button className="apply sm" style={{ marginLeft: 8 }} onClick={goSummary} title="Review & apply changes in the Summary tab">Go to Summary →</button>
       </div>
+      {apply && <ApplyMsg apply={apply} />}
 
       <div className="opt-grid">
         {/* priority skills */}
@@ -356,11 +466,12 @@ export default function OfficersTab({
                   <div className="prio-main">
                     <div className="prio-name-row">
                       <span style={skillDot(id)} />
-                      <span className="prio-name" style={{ color: skillColor(id), fontWeight: catalog.find((c) => c.id === id)?.major ? 600 : 500 }} {...skillHoverProps(id)}>{nameOf(id)}</span>
+                      <span className="prio-name" style={{ color: skillColor(id), fontWeight: metaOf(id)?.major ? 600 : 500 }} {...skillHoverProps(id)}>{nameOf(id)}</span>
+                      {isNamePrio(id) && <span className="prio-wanted" title="No officer of yours has this yet — recruits who do will rank higher">wanted</span>}
                       <span className="spacer" />
                       {(() => { const rk = result?.ranks.find((r) => r.id === id)?.rank ?? 0; return <span className={`prio-rank${rk > 0 ? " on" : ""}`} title={`${rk} assigned officer${rk === 1 ? "" : "s"} carry this skill — ranks stack`}>×{rk}</span>; })()}
                     </div>
-                    <div className="prio-eff">{catalog.find((c) => c.id === id)?.effect ?? ""}</div>
+                    <div className="prio-eff">{metaOf(id)?.effect ?? ""}</div>
                   </div>
                   <div className="prio-btns">
                     <button disabled={i === 0} onClick={() => move(i, -1)} title="up">▲</button>
@@ -370,24 +481,67 @@ export default function OfficersTab({
                 </div>
               );
             })}
-            {!prio.length && <p className="hint">Add a priority skill below to start.</p>}
+            {!prio.length && <p className="hint">Add a priority skill below.</p>}
           </div>
-          <div className="add-prio-wrap">
-            <button className="add-prio-btn" onClick={() => setAddOpen((v) => !v)}>
-              + add priority skill… <span className="dim">{addOpen ? "▲" : "▼"}</span>
-            </button>
-            {addOpen && (
-              <div className="add-prio-menu">
-                {addOptions.map((c) => (
-                  <div key={c.id} className="add-prio-item" {...skillHoverProps(c.id)} onClick={() => { addPrio(c.id); setAddOpen(false); setSkillHover(null); }}>
-                    <span className={`prio-rank${rosterCount(c.id) > 0 ? " on" : ""}`} title={`${rosterCount(c.id)} officer${rosterCount(c.id) === 1 ? "" : "s"} in your roster have this skill`}>×{rosterCount(c.id)}</span>
+
+          {/* Take a priority list somewhere else — another ship, another playthrough, another player. */}
+          <div className="prio-io">
+            <span className="dim">Priority list</span>
+            <button onClick={exportPrioFile} disabled={!prio.length} title="Save the ordered priority list as JSON">Export</button>
+            <button onClick={copyPrio} disabled={!prio.length} title="Copy the list as JSON">Copy</button>
+            <label className={`import-cfg${!ship ? " off" : ""}`} title="Load a priority list from a file">
+              Import
+              <input type="file" accept="application/json" style={{ display: "none" }} disabled={!ship}
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) void importPrioFile(f); e.target.value = ""; }} />
+            </label>
+            <button onClick={pastePrio} disabled={!ship} title="Import from the clipboard">Paste</button>
+            {prioMsg && <span className="dim prio-io-msg">{prioMsg}</span>}
+          </div>
+
+          <div className="skill-browser">
+            <div className="skill-browser-head">
+              <b>Add priority skills</b>
+              {/* Owned-only by default: those are the skills that can affect today's crew. "All" is for
+                  planning ahead — prioritise something nobody has and recruits carrying it rank higher. */}
+              <div className="seg skill-scope">
+                <button className={showAllSkills ? "" : "on"} onClick={() => setShowAllSkills(false)}
+                  title="Only skills your officers can learn">My officers <span className="dim">{catalog.length}</span></button>
+                <button className={showAllSkills ? "on" : ""} onClick={() => setShowAllSkills(true)}
+                  title={`Every skill in the game — ${unownedCount} that no officer of yours has yet`}>All <span className="dim">{fullCatalog.length}</span></button>
+              </div>
+            </div>
+            {/* Its own row: sharing the header line with the title and the two scope buttons squeezed it to a few
+                characters. The clear button sits inside the field, so it costs no extra width. */}
+            <div className="skill-search-row">
+              <input className="skill-search" value={skillQ} onChange={(e) => setSkillQ(e.target.value)} placeholder="search name / effect…" />
+              {skillQ && <button className="skill-search-x" title="clear" onClick={() => setSkillQ("")}>×</button>}
+            </div>
+            <div className="skill-cats">
+              {/* No filter selected already means "all", so All simply clears — but say it plainly rather
+                  than making that inference the user's problem. */}
+              <button className="cat-chip all" disabled={!skillCats.size} onClick={() => setSkillCats(new Set())} title="No role filter — show every skill">All</button>
+              <button className="cat-chip all" onClick={() => setSkillCats(new Set(catsAvail))} title="Select every role">None</button>
+              {catsAvail.map((c) => (
+                <button key={c} className={`cat-chip${skillCats.has(c) ? " on" : ""}`} onClick={() => toggleCat(c)}>{c}</button>
+              ))}
+            </div>
+            <div className="skill-browser-list">
+              {skillListShown.map((c) => {
+                const added = prio.includes(c.id);
+                return (
+                  <div key={c.id} className={`add-prio-item${added ? " added" : ""}${c.owned ? "" : " unowned"}`} {...skillHoverProps(c.id)} onClick={() => { if (!added) addPrio(c.id); }}>
+                    <span className={`prio-rank${rosterCount(c.id) > 0 ? " on" : ""}`}
+                      title={c.owned
+                        ? `${rosterCount(c.id)} officer${rosterCount(c.id) === 1 ? "" : "s"} in your roster have this skill`
+                        : "No officer of yours has this — prioritise it and recruits who do will rank higher"}>×{rosterCount(c.id)}</span>
                     <span className="ap-name" style={{ color: skillColor(c.id), fontWeight: c.major ? 600 : 500 }}>{c.name}</span>
                     <span className="ap-eff">{c.effect}</span>
+                    <span className="ap-add">{added ? "✓ added" : "+ add"}</span>
                   </div>
-                ))}
-                {!addOptions.length && <div className="add-prio-item dim">all skills added</div>}
-              </div>
-            )}
+                );
+              })}
+              {!skillListShown.length && <div className="add-prio-item dim">no skills match</div>}
+            </div>
           </div>
         </div>
 
@@ -466,7 +620,6 @@ export default function OfficersTab({
               <span className="roster-name" style={{ color: rc, fontWeight: on ? 600 : 400 }}>{o.name}</span>
               <span className="roster-prof dim">{o.profession} · Lv{o.level}</span>
               <span className="roster-max">{o.level >= MAX_LEVEL && <span className="max">MAX</span>}</span>
-              <span className="roster-idle" title={on ? "Assigned — inactive (earns no idle income)" : "Benched — earning idle income"} style={{ color: on ? "#6a6a72" : "#c7ccd4" }}>¢ {o.idle.toLocaleString()}/hr</span>
               <div className="roster-skills">
                 {(() => {
                   // Show the officer's full kit. Split by UNLOCKED-BY-LEVEL: skills active at the officer's
@@ -485,6 +638,9 @@ export default function OfficersTab({
                   );
                 })()}
               </div>
+              {/* Money after the chips, as in the hire list below: the chips are what you scan, the figure is
+                  what you check afterwards. */}
+              <span className="roster-idle" title={on ? "Assigned — inactive (earns no idle income)" : "Benched — earning idle income"} style={{ color: on ? "#6a6a72" : "#c7ccd4" }}>¢ {o.idle.toLocaleString()}/hr</span>
               <button className={`pin${pinned ? " on" : ""}`} onClick={() => togglePin(o.guid)} title="Force this officer into an assigned slot">{pinned ? "★ forced" : "☆ force"}</button>
             </div>
           );
@@ -499,6 +655,7 @@ export default function OfficersTab({
           <div className="panel-note">
             {stationOppCount ? `${stationOppCount} would out-rank an assigned officer` : "none better than your current crew"}. Highlighted officers would out-rank one you have assigned.
           </div>
+          {hireMsg && <div className={hireMsg.ok ? "sum-msg ok" : "sum-msg err"}>{hireMsg.ok ? "✓" : "⚠"} {hireMsg.text}</div>}
           {stationView.map((o) => {
             const rc = RARITY_COLOR[o.rarity] ?? "#cfcfcf";
             // Full kit: priority-covered skills first, the rest dimmed (like the crew cards/roster).
@@ -513,23 +670,35 @@ export default function OfficersTab({
                   <span>{initials(o.name)}</span>
                   {pu && <div className="portrait-img" style={{ backgroundImage: `url("${pu}")` }} />}
                 </div>
-                <div className="recruit-id">
-                  <div className="crew-name-row">
-                    <span className="roster-name" style={{ color: rc }}>{o.name}</span>
-                    {o.level >= MAX_LEVEL && <span className="max">MAX</span>}
-                  </div>
-                  <div className="crew-sub">{o.profession} · Lv{o.level}</div>
-                </div>
+                {/* One-line identity, exactly as a crew row states it, so the two lists read alike and stand the
+                    same height. */}
+                <span className="roster-name" style={{ color: rc }}>{o.name}</span>
+                <span className="roster-prof dim">{o.profession} · Lv{o.level}</span>
+                <span className="roster-max">{o.level >= MAX_LEVEL && <span className="max">MAX</span>}</span>
                 <div className="roster-skills">
                   {priSk.map((s) => chipEl(s.id, true))}
                   {otherSk.map((s) => chipEl(s.id, false, true))}
                 </div>
                 {o.isOpp && <span className="recruit-opp">↑ replaces {o.replaces}</span>}
                 <span className="recruit-cost">¢ {o.hireCost.toLocaleString()}</span>
+                {conn && (() => {
+                    const why = hireBlockedBecause(o.hireCost);
+                    return (
+                      <button
+                        className={`recruit-hire${why ? " blocked" : ""}`}
+                        disabled={hiring === o.guid}
+                        title={why ?? `Hire ${o.name}: ${affordLine({ name: o.name, cost: o.hireCost }, credits ?? null)} — ctrl+click skips the confirmation`}
+                        onClick={(e) => {
+                          if (why) { setHireMsg({ ok: false, text: why }); return; }
+                          void hire(o.guid, o.name, o.hireCost, e.ctrlKey || e.metaKey);
+                        }}
+                      >{hiring === o.guid ? "…" : "hire"}</button>
+                    );
+                  })()}
               </div>
             );
           })}
-          {!stationView.length && <p className="hint">No recruits available at this station.</p>}
+          {!stationView.length && <p className="hint">No recruits here.</p>}
         </div>
       )}
 

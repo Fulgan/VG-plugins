@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <IsPackable>false</IsPackable>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <!-- Link the game-free shared cores so they compile + run headless, without the game assembly. -->
+  <ItemGroup>
+    <Compile Include="..\..\Shared\Purchase.cs" Link="Purchase.cs" />
+    <Compile Include="..\..\Shared\Rarity.cs" Link="Rarity.cs" />
+    <Compile Include="..\..\Shared\KeepMatch.cs" Link="KeepMatch.cs" />
+    <Compile Include="..\..\Shared\Say.cs" Link="Say.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="xunit.v3" Version="3.2.2" />
+  </ItemGroup>
+
+</Project>

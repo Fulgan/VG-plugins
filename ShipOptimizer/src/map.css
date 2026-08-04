@@ -1,0 +1,181 @@
+/* Galaxy map (proposal tab). The organising idea: ONE variable carries colour at a time, chosen by the
+   layer picker, so the map answers one question clearly instead of showing everything at equal weight.
+
+   Every colour here is a token from `designs/tokens.css` — a raw hex is unreachable by any design, and the
+   ramps a layer paints with live in `mapRamp.ts`, never inline. */
+
+.map { display: flex; flex-direction: column; gap: 10px; }
+.map-note { font-size: 11px; font-style: italic; }
+
+.map-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 8px 10px; background: var(--map-panel); border: 1px solid var(--map-line); border-radius: 8px; }
+.map-bar .spacer { flex: 1; }
+
+.map-crumb { display: flex; align-items: center; gap: 10px; font-size: 12.5px; }
+
+/* ---- quadrant overview: one card per subsector ---- */
+.map-sectors { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.map-sector { text-align: left; background: var(--map-panel); border: 1px solid var(--map-line); border-radius: 8px; padding: 9px 10px; cursor: pointer; color: inherit; font: inherit; }
+.map-sector:hover { border-color: var(--map-line-hover); }
+/* the conquest warzone is an order of magnitude bigger than any other subsector — mark it, don't inline it */
+.map-sector.warzone { border-color: var(--map-warzone-line); background: linear-gradient(var(--map-warzone-bg), var(--map-panel)); }
+.map-sector-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 12.5px; }
+.map-sector-foot { font-size: 10.5px; margin-top: 6px; }
+
+/* dot grid: a subsector's systems at a glance, coloured by the active layer */
+.map-mini { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 7px; min-height: 22px; }
+.map-dot { width: 9px; height: 9px; border-radius: 50%; box-shadow: inset 0 0 0 1px var(--map-dot-inset); }
+.map-dot.faint { opacity: .45; }                       /* known but never visited */
+.map-dot.here { box-shadow: 0 0 0 2px var(--map-you); }
+
+/* ---- subsector graph ---- */
+.map-graph { background: var(--map-void); border: 1px solid var(--map-line); border-radius: 8px; padding: 4px; }
+.map-graph svg { width: 100%; height: auto; display: block; }
+
+.map-edge { stroke: var(--map-edge); stroke-width: 1.6; opacity: .75; }   /* open route — steel blue, sits under the nodes */
+.map-edge.locked { stroke: var(--map-edge-locked); stroke-dasharray: 5 4; }  /* canUseJumpGate == false */
+.map-edge.cross { stroke: var(--map-gate); stroke-width: 1.6; stroke-dasharray: 6 4; opacity: .9; }  /* leaves the subsector */
+
+.map-node text { fill: var(--map-label); font-size: 11px; pointer-events: none; }
+/* level reads off the node itself: dark digits over the node's fill */
+.map-node .map-lvl { fill: var(--map-void); font-size: 9px; font-weight: 700; font-family: ui-monospace, "JetBrains Mono", Menlo, monospace; }
+/* NB no `.map-node circle` rule: a node is a polygon, and the only circles under a node are the reticle and
+   the special ring, which own their own stroke. A descendant selector here out-specifies theirs. */
+.map-hq { fill: none; stroke-width: 1.8; }   /* conquest headquarters — one box per faction */
+
+/* ---- recency rail: "where was I?", which the in-game map doesn't answer at all ---- */
+.map-recent { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; }
+
+/* ---- tooltip extras ---- */
+.map-tip { width: 320px; }
+.map-kinds { display: flex; flex-wrap: wrap; gap: 8px; color: var(--map-text-dim) !important; font-size: 10.5px; }
+/* System level, labelled — the bare bar read as decoration rather than a measurement. */
+.map-levelrow { display: flex; align-items: center; gap: 7px; margin-top: 6px; font-size: 11px; }
+.map-levelbar { flex: 1 1 auto; height: 4px; background: var(--map-track); border-radius: 2px; overflow: hidden; display: block; }
+.map-levelbar > span { display: block; height: 100%; background: linear-gradient(90deg, var(--map-level-lo), var(--warn)); }
+.map-levelnum { font-variant-numeric: tabular-nums; }
+
+/* ---- "where am I" ---------------------------------------------------------------------------- */
+/* Stated in words above the map AND drawn on the node: on a 79-system subsector a single ring is
+   easy to lose, so the current system gets rings, a label, and a line of text naming it. */
+.map-here { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px;
+  padding: 7px 10px; background: var(--map-here-bg); border: 1px solid var(--map-here-line); border-radius: 8px; }
+.map-here-pin { width: 9px; height: 9px; border-radius: 50%; background: var(--map-you); box-shadow: 0 0 0 3px var(--map-you-glow); }
+.map-docked { color: var(--map-ok); }
+
+.map-sector.youarehere { border-color: var(--map-you); background: linear-gradient(var(--map-here-bg-2), var(--map-panel)); }
+.map-hereflag { font-size: 9px; text-transform: uppercase; letter-spacing: .05em; color: var(--map-on-accent);
+  background: var(--map-you); border-radius: 3px; padding: 1px 5px; }
+
+.map-you-ring { fill: none; stroke: var(--map-you); stroke-width: 2; }
+.map-you-label { fill: var(--map-you); font-size: 9.5px; text-transform: uppercase; letter-spacing: .06em; }
+/* a slow pulse, so the eye finds it without the map feeling busy */
+.map-you-pulse { fill: none; stroke: var(--map-you); stroke-width: 2; opacity: .6; animation: mapyou 2.4s ease-out infinite; }
+@keyframes mapyou { from { r: 14px; opacity: .55; } to { r: 30px; opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .map-you-pulse { animation: none; opacity: 0; } }
+
+/* ---- search ---------------------------------------------------------------------------------- */
+.map-search { flex: 1 1 220px; min-width: 180px; background: var(--map-input-bg); border: 1px solid var(--map-input-line);
+  color: var(--map-text-bright); font-size: 12px; border-radius: 5px; padding: 3px 8px; }
+.map-results { display: flex; flex-direction: column; gap: 2px; max-height: 230px; overflow-y: auto;
+  background: var(--map-sunken); border: 1px solid var(--map-line); border-radius: 8px; padding: 5px; }
+.map-result { display: flex; align-items: baseline; gap: 8px; text-align: left; font: inherit; color: inherit;
+  background: none; border: 1px solid transparent; border-radius: 5px; padding: 4px 7px; cursor: pointer; font-size: 12.5px; }
+.map-result:hover { background: var(--map-row-hover); border-color: var(--map-row-hover-line); }
+.map-result .spacer { flex: 1; }
+.map-why { color: var(--map-hint); font-size: 11px; }
+
+/* ---- in-system view -------------------------------------------------------------------------- */
+.map-system { display: flex; flex-direction: column; gap: 8px; margin-top: 10px;
+  border: 1px solid var(--map-line); border-radius: 8px; padding: 9px 10px; background: var(--map-sunken); }
+.map-poi circle { fill: var(--map-poi-bg); stroke: var(--map-poi-line); stroke-width: 1.5; }
+.map-poi text { pointer-events: none; }
+.map-poi-glyph { fill: var(--map-text-bright); font-size: 13px; }
+.map-poi-name { fill: var(--map-text-dim); font-size: 9.5px; }
+/* kind carries the colour, matching the badge colours the game uses on its own map */
+.map-poi.k-SpaceStation circle, .map-poi.k-EmbassyStation circle { stroke: var(--map-poi-station); }
+.map-poi.k-ConquestStation circle, .map-poi.k-CombatStation circle { stroke: var(--map-poi-combat-station); }
+.map-poi.k-JumpGate circle, .map-poi.k-EmbassyJumpgate circle, .map-poi.k-GreatGate circle { stroke: var(--good); }
+.map-poi.k-Mining circle { stroke: var(--map-mining); }
+.map-poi.k-Salvage circle { stroke: var(--map-salvage); }
+.map-poi.k-Combat circle { stroke: var(--map-combat); }
+
+.map-poi-list { display: flex; flex-direction: column; gap: 1px; }
+.map-poi-row { display: flex; align-items: baseline; gap: 8px; font-size: 12px; padding: 3px 6px; border-radius: 4px; }
+.map-poi-row:nth-child(odd) { background: var(--map-panel); }
+.map-poi-row .spacer { flex: 1; }
+.map-poi-kind { color: var(--map-text-dim); font-size: 11px; min-width: 130px; }
+.map-shops { color: var(--map-ok); font-size: 11px; }
+.map-dyn { font-size: 9px; text-transform: uppercase; color: var(--map-on-accent); background: var(--map-dyn); border-radius: 3px; padding: 0 4px; }
+
+/* ---- special frontier systems ---------------------------------------------------------------- */
+/* Warzones / motherlodes / graveyards out-level their subsector, so they keep their mark under every
+   layer rather than being just another tint. */
+.map-special-ring { fill: none; stroke-width: 1.5; opacity: .9; }
+.map-special-glyph { font-size: 11px; }
+.map-node.muted { opacity: .18; }                 /* when a special filter is active */
+.map-node.muted text { fill: var(--map-muted-text); }
+.map-card-specials { display: inline-flex; gap: 5px; margin-left: 6px; font-size: 11px; }
+.map-tip-special { border-left: 3px solid; padding-left: 7px; margin: 5px 0; font-size: 12px; }
+
+/* ---- where is my stuff (item heat) ---- */
+.stuff-pick { border: 1px solid var(--border); border-radius: 4px; background: var(--panel); padding: 7px 9px; margin: 6px 0; }
+.stuff-pick-list { max-height: 240px; overflow-y: auto; margin-top: 6px; display: flex; flex-direction: column; }
+.stuff-pick-item {
+  display: flex; align-items: baseline; gap: 8px; width: 100%; text-align: left; cursor: pointer;
+  background: none; border: 0; border-bottom: 1px solid var(--map-hairline); color: var(--map-text); padding: 3px 4px; font-size: 12px;
+}
+.stuff-pick-item:hover { background: var(--map-pick-hover); }
+.stuff-pick-item.on { background: var(--accent-soft); color: var(--accent-text); }
+.sp-name { flex: 1 1 auto; }
+.sp-cat { font-size: 10px; }
+.sp-total { font-variant-numeric: tabular-nums; font-weight: 600; }
+.sp-places { font-size: 10px; min-width: 56px; text-align: right; }
+
+.stuff-found { border: 1px solid var(--map-found-line); border-radius: 4px; background: var(--map-found-bg); padding: 6px 9px; margin: 6px 0; }
+.sf-head { display: flex; align-items: baseline; gap: 9px; font-size: 12px; margin-bottom: 4px; }
+.sf-list { display: flex; flex-direction: column; max-height: 200px; overflow-y: auto; }
+.sf-row {
+  display: flex; align-items: baseline; gap: 9px; text-align: left; cursor: pointer;
+  background: none; border: 0; border-bottom: 1px solid var(--map-found-hairline); color: var(--map-text); padding: 2px 3px; font-size: 12px;
+}
+.sf-row:hover { background: var(--map-found-hover); }
+.sf-row.here { background: var(--map-found-here); }
+.sf-n { font-variant-numeric: tabular-nums; font-weight: 700; color: var(--warn); min-width: 62px; text-align: right; }
+.sf-sys { flex: 0 0 auto; }
+.sf-sec { flex: 1 1 auto; font-size: 11px; }
+.sf-you { color: var(--warn); font-size: 9px; text-transform: uppercase; letter-spacing: .05em; }
+
+/* faction legend — the game's own colours and badges, so territory reads the same as in-game */
+.fac-legend { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.fac-chip {
+  display: inline-flex; align-items: center; gap: 5px; font-size: 11px;
+  padding: 1px 8px 1px 4px; border-radius: 10px;
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--map-text);
+}
+.fac-icon { width: 14px; height: 14px; object-fit: contain; image-rendering: crisp-edges; }
+.fac-swatch { width: 9px; height: 9px; border-radius: 2px; border: 1px solid var(--map-swatch-edge); }
+
+/* per-station restock countdown in the system tooltip */
+.tip-restock { color: var(--map-clock); font-variant-numeric: tabular-nums; font-size: 10.5px; margin-left: auto; margin-right: 8px; }
+
+
+/* ---- map: node and edge treatment ---- */
+.map-shape { stroke: none; cursor: pointer; }   /* a near-black outline on a dark map reads as a dirty fringe */
+.map-shape.hollow { stroke-width: 1.6; }   /* never visited: outline only, no opacity tricks */
+.map-ruler line { stroke: var(--map-ruler); stroke-width: 1; }
+.map-ruler text { fill: var(--map-ruler-text); font-size: 8px; font-family: ui-monospace, "JetBrains Mono", Menlo, monospace; letter-spacing: .08em; }
+
+.map-foot {
+  display: flex; align-items: center; gap: 10px; margin-top: 6px; padding: 3px 10px;
+  border-top: 1px solid var(--map-foot-line); font-size: 10.5px; letter-spacing: .06em;
+  text-transform: uppercase; font-family: ui-monospace, "JetBrains Mono", Menlo, monospace;
+}
+/* crossing nodes are outline-only, as in the design — filled shapes read as "place", outlines as "way out" */
+/* where you are: reticle geometry from the design, pulse retained */
+.map-you-outer { fill: none; stroke: var(--map-you-fine); stroke-width: .8; opacity: .35; }
+.map-you-tick { stroke: var(--map-you-fine); stroke-width: 1.2; opacity: .7; }
+/* Jump distance in the material finder. The number is the decision — a big pile six jumps out usually loses
+   to a smaller one next door — so it is tabular and sits right of the system name. */
+.sf-hops { flex: 0 0 auto; font-size: 10.5px; font-variant-numeric: tabular-nums; color: var(--map-label); }
+.sf-hops.locked { color: var(--map-gate); }   /* reachable only through a gate you cannot pass yet */
+.sf-hops.none { color: var(--map-unreachable); }

@@ -55,7 +55,7 @@ namespace VG.ModApi
     {
         private readonly object _host;
         private readonly VGModSettingsHost _native;
-        private readonly MethodInfo _regTab, _regKey, _setKey, _open, _close, _toggle;
+        private readonly MethodInfo _regTab, _regKey, _setKey, _open, _close, _toggle, _setGate, _setUngated;
 
         private const BindingFlags Flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
 
@@ -72,6 +72,8 @@ namespace VG.ModApi
                 _open = t.GetMethod("Open", Flags);
                 _close = t.GetMethod("Close", Flags);
                 _toggle = t.GetMethod("Toggle", Flags);
+                _setGate = t.GetMethod("SetGameGate", Flags);
+                _setUngated = t.GetMethod("SetHotkeyUngated", Flags);
             }
         }
 
@@ -94,6 +96,20 @@ namespace VG.ModApi
             try { _setKey?.Invoke(_host, new object[] { key }); } catch { }
         }
 
+        // Every mod passes the same answer (`VG.Game.GameState.Loaded`), so whichever sets it last is setting
+        // it to what the others would have. An older host lacks the method and simply stays ungated.
+        internal void SetGameGate(Func<bool> gameLoaded)
+        {
+            if (_native != null) { _native.SetGameGate(gameLoaded); return; }
+            try { _setGate?.Invoke(_host, new object[] { gameLoaded }); } catch { }
+        }
+
+        internal void SetHotkeyUngated(string id)
+        {
+            if (_native != null) { _native.SetHotkeyUngated(id); return; }
+            try { _setUngated?.Invoke(_host, new object[] { id }); } catch { }
+        }
+
         internal void Open() { if (_native != null) _native.Open(); else try { _open?.Invoke(_host, null); } catch { } }
         internal void Close() { if (_native != null) _native.Close(); else try { _close?.Invoke(_host, null); } catch { } }
         internal void Toggle() { if (_native != null) _native.Toggle(); else try { _toggle?.Invoke(_host, null); } catch { } }
@@ -103,7 +119,7 @@ namespace VG.ModApi
     internal sealed class VGModSettingsHost : MonoBehaviour
     {
         private sealed class TabEntry { public string Title; public Action Draw; public int Order; public Func<bool> Visible; }
-        private sealed class HotkeyEntry { public string Id; public string Label; public Func<KeyCode> Get; public Action<KeyCode> Set; public Action OnPressed; }
+        private sealed class HotkeyEntry { public string Id; public string Label; public Func<KeyCode> Get; public Action<KeyCode> Set; public Action OnPressed; public bool Ungated; }
 
         private readonly List<TabEntry> _tabs = new List<TabEntry>();
         private readonly List<HotkeyEntry> _keys = new List<HotkeyEntry>();
@@ -116,6 +132,10 @@ namespace VG.ModApi
         private KeyCode _toggle = KeyCode.F7;
         private static string TogglePath => Path.Combine(Application.persistentDataPath, "vg-modsettings-toggle.txt");
 
+        // "Is a game loaded" — supplied by a mod, because the host is game-neutral and holds no game reference.
+        // Null until a mod sets it, and null means ungated: a host older than this feature behaves as before.
+        private Func<bool> _gameLoaded;
+
         private void Awake()
         {
             try { if (File.Exists(TogglePath) && Enum.TryParse(File.ReadAllText(TogglePath).Trim(), out KeyCode k)) _toggle = k; }
@@ -123,6 +143,9 @@ namespace VG.ModApi
 
             RegisterTab("Hotkeys", DrawHotkeysTab, int.MaxValue); // always last
             RegisterHotkey("vg.modsettings.toggle", "Open settings", () => _toggle, SetToggleKey, Toggle);
+            // The window itself is not a game action: it must open at the main menu, or a key cannot be rebound
+            // without loading a save first.
+            SetHotkeyUngated("vg.modsettings.toggle");
         }
 
         internal bool RegisterTab(string title, Action draw, int order = 0, Func<bool> visible = null)
@@ -138,6 +161,16 @@ namespace VG.ModApi
             if (string.IsNullOrEmpty(id) || get == null) return;
             _keys.RemoveAll(h => h.Id == id);
             _keys.Add(new HotkeyEntry { Id = id, Label = label ?? id, Get = get, Set = set, OnPressed = onPressed });
+        }
+
+        internal void SetGameGate(Func<bool> gameLoaded) => _gameLoaded = gameLoaded;
+
+        // Exempt one hotkey from the game gate. For a key whose whole job is to reach a state where no game is
+        // loaded — quick LOAD, or opening this window — being ignored there would remove the feature.
+        internal void SetHotkeyUngated(string id)
+        {
+            var h = _keys.Find(x => x.Id == id);
+            if (h != null) h.Ungated = true;
         }
 
         internal void SetToggleKey(KeyCode key)
@@ -165,9 +198,15 @@ namespace VG.ModApi
                 return; // don't fire actions mid-rebind
             }
 
+            // With no game loaded there is nothing for an action to act on and nothing to persist a setting
+            // into, so a press is DROPPED — silently, because the player pressing at a menu is not making a
+            // mistake worth a message. Rebinding above is unaffected: it changes no game state.
+            var gated = _gameLoaded != null && !_gameLoaded();
+
             foreach (var h in _keys)
             {
                 if (h.OnPressed == null) continue;
+                if (gated && !h.Ungated) continue;
                 var k = h.Get();
                 if (k != KeyCode.None && Input.GetKeyDown(k))
                 {

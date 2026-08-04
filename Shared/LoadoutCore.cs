@@ -17,7 +17,8 @@ using UnityEngine;
 namespace VG.Loadout
 {
     // Best-effort item fingerprint. Rolled gear has no stable id, so a slot is matched by identity
-    // invariants (type, size, level, aspect-slot count, main-stat value) + rarity/aspects/substats.
+    // invariants (type, size, level, aspect-slot count, main-stat value) + rarity/substats.
+    // Aspects travel in the fingerprint but are ⊥ matched on: a workshop can swap them at any time.
     [Serializable]
     public sealed class LoadoutSlot
     {
@@ -62,7 +63,7 @@ namespace VG.Loadout
         public string priorGuid; // officer guid previously in the slot (null/empty = was empty)
     }
 
-    // A single applied transient's touched slots + their prior occupants — the unit of undo (§V26).
+    // A single applied transient's touched slots + their prior occupants — the unit of undo.
     public sealed class AppliedTransient
     {
         public string shipGuid;
@@ -142,7 +143,7 @@ namespace VG.Loadout
                 kind = kind,
                 slot = slot,
                 identifier = item.identifier ?? "",
-                name = string.IsNullOrEmpty(item.displayName) ? (item.identifier ?? "?") : item.displayName,
+                name = VG.Game.ItemNames.Pretty(item) ?? "?",
                 rarity = item.rarity.ToString(),
                 level = item.itemLevel,
                 type = eq != null ? eq.GetType().Name : "",
@@ -189,7 +190,12 @@ namespace VG.Loadout
             if (MainStatKey(eq) != slot.mainStat) return 0;
 
             var d = Describe(item, slot.kind, slot.slot);
-            if (item.rarity.ToString() == slot.rarity && SameSet(d.aspects, slot.aspects) && SameSet(d.stats, slot.stats))
+            // Aspects are NOT part of the exact test: they are swappable at a station workshop, so fitting
+            // one to the very item a preset names must not stop that item matching itself. It would score 1
+            // (upgrade) instead of 2, and with a second candidate present the apply then refuses as
+            // ambiguous. Still recorded in the fingerprint — saved presets carry the field, and it is
+            // informational.
+            if (item.rarity.ToString() == slot.rarity && SameSet(d.stats, slot.stats))
                 return 2;
             if (RarityRank(item.rarity) >= RarityRank(slot.rarity) && LockedSubset(slot.stats, d.stats))
                 return 1;
@@ -338,7 +344,7 @@ namespace VG.Loadout
             }
         }
 
-        // ---- transient apply / undo (§V23-V28) ----
+        // ---- transient apply / undo ----
 
         // Set a slot to `item` (null clears it) and return the previous occupant. Modules go through
         // EquipModule/RemoveModuleOfType; hardpoints/boosters are array slots. Neither touches inventory
@@ -360,8 +366,7 @@ namespace VG.Loadout
         }
 
         // Apply a partial, additive transient: equip each gear slot's best match (finder plan) and assign
-        // officers by guid. Touches ONLY the pushed slots; captures each prior occupant for undo (§V23,
-        // V26). Displaced gear goes to the armory. Officers gate on `crewSupported` (§V28). Returns the
+        // officers by guid. Touches ONLY the pushed slots; captures each prior occupant for undo. Displaced gear goes to the armory. Officers gate on `crewSupported`. Returns the
         // undo record (null only if there is no ship); `changed` = # slots actually altered.
         public static AppliedTransient ApplyTransient(SpaceShipData ship, LoadoutPreset gear, List<OfficerAssign> officers, bool crewSupported, out int changed)
         {
@@ -387,7 +392,7 @@ namespace VG.Loadout
 
             // Officer assignment lives in ApplyOfficers (touches SpaceShipData.officers/OfficerData) and is
             // only invoked when crewSupported — so it never JITs on a game version without the Personnel
-            // crew API. See doc/game-version-api-diff.md.
+            // crew API.
             if (crewSupported && officers != null)
                 changed += ApplyOfficers(ship, officers, t);
 
@@ -430,7 +435,7 @@ namespace VG.Loadout
             return changed;
         }
 
-        // Restore the touched slots of the last applied transient to their prior occupants (§V26). Gear:
+        // Restore the touched slots of the last applied transient to their prior occupants. Gear:
         // re-equip the prior item (pulled back from the armory) and return the currently-equipped item to
         // the armory. Officers: reassign the prior guid. Returns # slots restored.
         public static int Undo(AppliedTransient t)

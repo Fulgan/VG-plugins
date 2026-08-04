@@ -1,6 +1,8 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Logging;
@@ -15,11 +17,13 @@ using Source.SpaceShip;
 using UnityEngine;
 using VG.ModApi;
 
+using VG.Text;
+
 namespace StationAssistant
 {
     internal enum SellTrigger { Manual, OnDock, OnUndock }
 
-    [BepInPlugin(Guid, "Station Assistant", "1.0.0")]
+    [BepInPlugin(Guid, "Station Assistant", "1.1.0")]
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "fulgan.vanguardgalaxy.stationassistant";
@@ -41,8 +45,9 @@ namespace StationAssistant
             // Fold our UI into the shared mod host (VG.ModApi): our tabs and hotkeys live in the one
             // neutral settings window alongside any other mod's — no separate window or hotkey polling.
             var host = VGModSettings.GetOrCreate();
+            host.SetGameGate(() => VG.Game.GameState.Loaded);
             host.SetToggleKey(Cfg.ToggleKey.Value.MainKey);
-            host.RegisterTab(Loc.T("tab.decoy"), Window.DrawDecoyPage, 0);
+            host.RegisterTab(Loc.T("tab.quartermaster"), Window.DrawQuartermasterPage, 0);
             host.RegisterTab(Loc.T("tab.sell"), Window.DrawSellPage, 1);
             host.RegisterTab(Loc.T("tab.ammo"), Window.DrawAmmoPage, 2);
             host.RegisterTab(Loc.T("tab.loadouts"), Window.DrawLoadoutsPage, 3);
@@ -50,10 +55,14 @@ namespace StationAssistant
                 () => Cfg.SellHotkey.Value.MainKey,
                 k => Cfg.SellHotkey.Value = new KeyboardShortcut(k),
                 () => Window.ShowLastSell(AutoSell.SellNow(Cfg)));
-            host.RegisterHotkey("stationassistant.ammo", "Station Assistant: ammo valet",
+            host.RegisterHotkey("stationassistant.ammo", "Station Assistant: gunner",
                 () => Cfg.AmmoHotkey.Value.MainKey,
                 k => Cfg.AmmoHotkey.Value = new KeyboardShortcut(k),
-                () => Window.ShowLastAmmo(AmmoValet.RunNow(Cfg)));
+                () => Window.ShowLastAmmo(Gunner.RunNow(Cfg)));
+            host.RegisterHotkey("stationassistant.decoy", "Station Assistant: toggle auto-decoy",
+                () => Cfg.DecoyHotkey.Value.MainKey,
+                k => Cfg.DecoyHotkey.Value = new KeyboardShortcut(k),
+                DecoyLogic.ToggleAuto);
 
             Log.LogInfo("Station Assistant loaded.");
         }
@@ -68,6 +77,7 @@ namespace StationAssistant
         internal readonly ConfigEntry<int> DesiredStock;
         internal readonly ConfigEntry<bool> ActivateOnUndock;
         internal readonly ConfigEntry<bool> DecoyDisableDuringEcho;
+        internal readonly ConfigEntry<KeyboardShortcut> DecoyHotkey;
         internal readonly ConfigEntry<KeyboardShortcut> ToggleKey;
 
         internal readonly ConfigEntry<bool> SellEnabled;
@@ -91,6 +101,13 @@ namespace StationAssistant
         // key = "<shipGuid><ammoIdentifier>" -> desired cargo count
         private readonly Dictionary<string, int> _ammoTargets = new Dictionary<string, int>();
 
+        internal readonly ConfigEntry<SellTrigger> QmMode;
+        internal readonly ConfigEntry<string> QmTargetsRaw;
+        // key = shipGuid + sep + itemKey -> (inventory target in cargo, reserve target in armory)
+        private readonly Dictionary<string, (int inv, int res)> _qmTargets = new Dictionary<string, (int inv, int res)>();
+        // per-item (not per-ship) "skip while ECHO drives" toggles, keyed by item key
+        private readonly Dictionary<string, ConfigEntry<bool>> _qmEchoSkip = new Dictionary<string, ConfigEntry<bool>>();
+
         // Gameplay settings that swap per playthrough (UI keybinds stay global). Filled at ctor end.
         internal readonly List<ConfigEntryBase> Gameplay = new List<ConfigEntryBase>();
 
@@ -101,6 +118,38 @@ namespace StationAssistant
         {
             ItemCategory.Turret, ItemCategory.Module, ItemCategory.Booster
         };
+
+        // Carry values over after a config SECTION is renamed. BepInEx keys a setting by section+key, so a
+        // rename leaves the old values in `OrphanedEntries` and every renamed entry silently starts at its
+        // default — losing rebinds and packed per-ship data. Only entries still at their default are adopted,
+        // so a value the player set under the new name always wins, and the orphan is dropped afterwards so
+        // the migration runs exactly once.
+        private static void AdoptLegacySection(ConfigFile file, string oldSection, string newSection, params string[] keys)
+        {
+            // `OrphanedEntries` is not public API, so it is reached reflectively — and a build that hides it
+            // costs the migration, not the load.
+            var orphans = typeof(ConfigFile)
+                .GetProperty("OrphanedEntries", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                ?.GetValue(file) as IDictionary;
+            if (orphans == null) return;
+
+            foreach (var key in keys)
+            {
+                var legacy = new ConfigDefinition(oldSection, key);
+                if (!orphans.Contains(legacy)) continue;
+                var raw = orphans[legacy] as string;
+                var moved = new ConfigDefinition(newSection, key);
+                // The untyped indexer, not TryGetEntry<T>: this walks keys of mixed value types.
+                if (raw != null && file.ContainsKey(moved))
+                {
+                    var entry = file[moved];
+                    if (Equals(entry.BoxedValue, entry.DefaultValue))
+                        try { entry.SetSerializedValue(raw); } catch { /* unparseable: keep the default */ }
+                }
+                orphans.Remove(legacy);
+            }
+            file.Save();
+        }
 
         internal Config(ConfigFile file)
         {
@@ -122,6 +171,10 @@ namespace StationAssistant
 
             DecoyDisableDuringEcho = file.Bind("DecoyTransponder", "DisableDuringEcho", true,
                 "Skip decoy buy/activate while ECHO (autopilot) is running the ship. Avoids it being an AFK cheat.");
+
+            DecoyHotkey = file.Bind("DecoyTransponder", "Hotkey", new KeyboardShortcut(KeyCode.F11),
+                "Hotkey: toggle auto-decoy (activate-one-on-undock). If it turns ON while you're undocked "
+                + "and no decoy is active, one is deployed immediately.");
 
             SellEnabled = file.Bind("AutoSell", "Enabled", true,
                 "Master switch for the cargo-hold auto-sell feature.");
@@ -147,25 +200,40 @@ namespace StationAssistant
                 "Format: cat|type|rarity|size|level|aspect, rules joined by ';', '~' = unspecified.");
             KeepRules.AddRange(KeepRule.ParseList(KeepRulesRaw.Value));
 
-            AmmoEnabled = file.Bind("AmmoValet", "Enabled", true,
-                "Master switch for the ammo valet (stow unused ammo, restock ammo for equipped guns).");
-            AmmoMode = file.Bind("AmmoValet", "Mode", SellTrigger.Manual,
+            AmmoEnabled = file.Bind("Gunner", "Enabled", true,
+                "Master switch for the gunner (stow unused ammo, restock ammo for equipped guns).");
+            AmmoMode = file.Bind("Gunner", "Mode", SellTrigger.Manual,
                 "Manual = run only via the button/hotkey. OnDock = also run each time you dock. " +
                 "OnUndock = run just before leaving (targets the ship you undock in, handy after switching ships).");
-            AmmoHotkey = file.Bind("AmmoValet", "Hotkey", new KeyboardShortcut(KeyCode.F9),
-                "Key to run the ammo valet now. Always requires being docked at a station.");
-            AmmoStowUnused = file.Bind("AmmoValet", "StowUnused", true,
+            AmmoHotkey = file.Bind("Gunner", "Hotkey", new KeyboardShortcut(KeyCode.F9),
+                "Key to run the gunner now. Always requires being docked at a station.");
+            AmmoStowUnused = file.Bind("Gunner", "StowUnused", true,
                 "Move ammo the currently equipped guns don't use from cargo to the station's material storage.");
-            AmmoAutoBuy = file.Bind("AmmoValet", "AutoBuy", true,
+            AmmoAutoBuy = file.Bind("Gunner", "AutoBuy", true,
                 "Buy missing ammo from the station shop after pulling from material storage.");
-            AmmoUseEchoMinutes = file.Bind("AmmoValet", "UseEchoMinutes", true,
+            AmmoUseEchoMinutes = file.Bind("Gunner", "UseEchoMinutes", true,
                 "Restock each equipped gun with enough ammo to fire for ECHO's configured number of minutes " +
                 "(the Autopilot ammo setting), computed the same way ECHO reloads. When on, this replaces the " +
                 "manual per-ammo targets below.");
-            AmmoTargetsRaw = file.Bind("AmmoValet", "Targets", "",
+            AmmoTargetsRaw = file.Bind("Gunner", "Targets", "",
                 "Per-ship, per-ammo desired cargo counts, packed. Edit via the in-game window rather than by hand. " +
                 "Format: shipGuid|ammoId|count, entries joined by ';'.");
+            AdoptLegacySection(file, "AmmoValet", "Gunner",
+                "Enabled", "Mode", "Hotkey", "StowUnused", "AutoBuy", "UseEchoMinutes", "Targets");
             LoadAmmoTargets();
+
+            QmMode = file.Bind("Quartermaster", "Mode", SellTrigger.OnUndock,
+                "When to auto-restock. Manual = only via the button. OnDock = each time you dock. " +
+                "OnUndock = just before leaving — targets the ship you undock in, so switching ships in a " +
+                "station still leaves stocked.");
+            QmTargetsRaw = file.Bind("Quartermaster", "Targets", "",
+                "Per-ship, per-item stock targets, packed. Edit via the in-game window rather than by hand. " +
+                "Format: shipGuid|itemKey|inventory|reserve, entries joined by ';'.");
+            LoadQmTargets();
+
+            foreach (var sup in Quartermaster.Supplies)
+                _qmEchoSkip[sup.Key] = file.Bind("Quartermaster.EchoSkip", sup.Key, true,
+                    $"Skip restocking '{sup.Key}' while ECHO (autopilot) drives the ship.");
 
             // Everything except the UI keybinds is per-playthrough.
             Gameplay.AddRange(new ConfigEntryBase[]
@@ -173,8 +241,10 @@ namespace StationAssistant
                 Enabled, AutoBuy, DesiredStock, ActivateOnUndock, DecoyDisableDuringEcho,
                 SellEnabled, SellMode, KeepRarity, KeepBoosterRarity, KeepItemLevel, KeepRulesRaw,
                 AmmoEnabled, AmmoMode, AmmoStowUnused, AmmoAutoBuy, AmmoUseEchoMinutes, AmmoTargetsRaw,
+                QmMode, QmTargetsRaw,
             });
             Gameplay.AddRange(_sellCategories.Values);
+            Gameplay.AddRange(_qmEchoSkip.Values);
         }
 
         // Re-derive cached collections after per-playthrough values are swapped in.
@@ -184,6 +254,8 @@ namespace StationAssistant
             KeepRules.AddRange(KeepRule.ParseList(KeepRulesRaw.Value));
             _ammoTargets.Clear();
             LoadAmmoTargets();
+            _qmTargets.Clear();
+            LoadQmTargets();
         }
 
         private const char AmmoKeySep = (char)1;
@@ -217,6 +289,85 @@ namespace StationAssistant
             }
         }
 
+        // Per-ship, per-item Quartermaster stock targets (same packed-string model as the ammo targets).
+        private static string QmKey(string shipGuid, string itemKey) => shipGuid + AmmoKeySep + itemKey;
+
+        internal (int inv, int res) QmTarget(string shipGuid, string itemKey)
+            => _qmTargets.TryGetValue(QmKey(shipGuid, itemKey), out var v) ? v : (0, 0);
+
+        internal bool QmEchoSkip(string itemKey)
+            => _qmEchoSkip.TryGetValue(itemKey, out var e) && e.Value;
+
+        internal ConfigEntry<bool> QmEchoSkipEntry(string itemKey)
+            => _qmEchoSkip.TryGetValue(itemKey, out var e) ? e : null;
+
+        internal void SetQmTarget(string shipGuid, string itemKey, int inv, int res)
+        {
+            Put(shipGuid, itemKey, inv, res);
+            SaveQmTargets();
+        }
+
+        private void Put(string shipGuid, string itemKey, int inv, int res)
+        {
+            var key = QmKey(shipGuid, itemKey);
+            if (inv <= 0 && res <= 0)
+                _qmTargets.Remove(key);
+            else
+                _qmTargets[key] = (Math.Max(0, inv), Math.Max(0, res));
+        }
+
+        private void SaveQmTargets()
+        {
+            QmTargetsRaw.Value = string.Join(";", _qmTargets.Select(kv =>
+            {
+                var sep = kv.Key.IndexOf(AmmoKeySep);
+                return kv.Key.Substring(0, sep) + "|" + kv.Key.Substring(sep + 1) + "|" + kv.Value.inv + "|" + kv.Value.res;
+            }));
+        }
+
+        // Copy one ship's whole Quartermaster target set onto every other owned ship, and REPLACE what those
+        // ships had — a partial merge would leave a ship half-configured from two different intents, which is
+        // harder to reason about than "they all match this one now".
+        //
+        // Serialises once at the end rather than per write: SetQmTarget rebuilds the entire packed string each
+        // call, so doing it per ship per supply would be needlessly quadratic.
+        // Returns how many other ships were written.
+        internal int CopyQmTargetsToAllShips(string fromShipGuid, IEnumerable<string> supplyKeys)
+        {
+            var p = GamePlayer.current;
+            if (p == null || string.IsNullOrEmpty(fromShipGuid)) return 0;
+
+            var keys = supplyKeys?.ToList() ?? new List<string>();
+            var source = keys.Select(k => new { k, t = QmTarget(fromShipGuid, k) }).ToList();
+
+            var targets = new List<string>();
+            if (p.currentSpaceShip?.guid != null) targets.Add(p.currentSpaceShip.guid);
+            if (p.spaceShips != null)
+                foreach (var s in p.spaceShips)
+                    if (s?.guid != null && !targets.Contains(s.guid)) targets.Add(s.guid);
+
+            var n = 0;
+            foreach (var guid in targets)
+            {
+                if (guid == fromShipGuid) continue;
+                foreach (var s in source)
+                    Put(guid, s.k, s.t.inv, s.t.res);
+                n++;
+            }
+            if (n > 0) SaveQmTargets();
+            return n;
+        }
+
+        private void LoadQmTargets()
+        {
+            foreach (var entry in (QmTargetsRaw.Value ?? "").Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var p = entry.Split('|');
+                if (p.Length >= 4 && int.TryParse(p[2], out var inv) && int.TryParse(p[3], out var res) && (inv > 0 || res > 0))
+                    _qmTargets[QmKey(p[0], p[1])] = (Math.Max(0, inv), Math.Max(0, res));
+            }
+        }
+
         internal void SaveKeepRules() => KeepRulesRaw.Value = KeepRule.SerializeList(KeepRules);
 
         internal IEnumerable<KeyValuePair<ItemCategory, ConfigEntry<bool>>> SellCategories => _sellCategories;
@@ -240,16 +391,22 @@ namespace StationAssistant
                 {
                     var player = GamePlayer.current;
                     var cargo = player?.currentSpaceShip?.cargo;
-                    var echo = cfg.DecoyDisableDuringEcho.Value && player?.currentAutopilotSessionStats != null;
+                    var echo = cfg.QmEchoSkip("decoy") && player?.currentAutopilotSessionStats != null;
                     if (cargo != null && !player.hasUmbralTransponder && !echo)
                         DecoyLogic.ActivateDecoy(cargo);
                 }
 
-                // Sell / ammo valet can run on undock too — acts on the ship you actually leave in.
+                // Quartermaster restock (after the decoy is activated, so the deployed one gets replaced).
+                // OnUndock is the default: it targets the ship you actually leave in — switching ships in a
+                // station still leaves stocked.
+                if (cfg.Enabled.Value && cfg.QmMode.Value == SellTrigger.OnUndock)
+                    Plugin.Window.ShowLastQm(Quartermaster.Restock(cfg));
+
+                // Sell / gunner can run on undock too — acts on the ship you actually leave in.
                 if (cfg.SellEnabled.Value && cfg.SellMode.Value == SellTrigger.OnUndock)
                     Plugin.Window.ShowLastSell(AutoSell.SellNow(cfg));
                 if (cfg.AmmoEnabled.Value && cfg.AmmoMode.Value == SellTrigger.OnUndock)
-                    Plugin.Window.ShowLastAmmo(AmmoValet.RunNow(cfg));
+                    Plugin.Window.ShowLastAmmo(Gunner.RunNow(cfg));
             }
             catch (Exception ex)
             {
@@ -258,44 +415,66 @@ namespace StationAssistant
         }
     }
 
+    // Decoy transponder activation on undock. Stocking the decoy (and other consumables) is the
+    // Quartermaster's job now; this keeps the "activate one when leaving a station" behaviour, plus the
+    // shared shop-purchase / cargo helpers reused by the gunner and the Quartermaster.
     internal static class DecoyLogic
     {
-        internal static void RestockOnDock(Config cfg)
-        {
-            if (!cfg.Enabled.Value || !cfg.AutoBuy.Value || cfg.DesiredStock.Value <= 0)
-                return;
-
-            var player = GamePlayer.current;
-            var cargo = player?.currentSpaceShip?.cargo;
-            if (cargo is null)
-                return;
-            if (cfg.DecoyDisableDuringEcho.Value && player.currentAutopilotSessionStats != null)
-                return;
-
-            var have = CountInCargo(cargo, IsTransponder);
-            var needed = cfg.DesiredStock.Value - have;
-            var umbralShop = SpaceStation.current?.umbralShopInventory;
-            if (needed <= 0 || umbralShop is null)
-                return;
-
-            var bought = BuyFromShop(player, umbralShop, IsTransponder, needed);
-            if (bought > 0)
-                Plugin.Log.LogInfo($"Bought {bought}x decoy transponder from the Umbral shop on docking (stock now {have + bought}).");
-        }
-
-        internal static void ActivateDecoy(Inventory cargo)
+        // Activate one decoy from cargo. Returns true when one was actually deployed (a charge consumed).
+        internal static bool ActivateDecoy(Inventory cargo)
         {
             var entry = cargo.items?.FirstOrDefault(i => IsTransponder(i?.item));
             if (entry is null)
-                return;
+                return false;
 
             var transponder = entry.item.GetComponent<UmbralTransponderItem>();
             // OnUse returns true when a charge is consumed.
             if (transponder != null && transponder.OnUse())
             {
                 cargo.Remove(entry, 1);
-                Plugin.Log.LogInfo("Decoy transponder activated on undock.");
+                Plugin.Log.LogInfo("Decoy transponder activated.");
+                return true;
             }
+            return false;
+        }
+
+        // Hotkey: the key means "I want a decoy out", so it branches on what is actually flying rather than
+        // blindly flipping the setting. In space with the setting already on and nothing active, a press
+        // DEPLOYS and leaves the setting on; the press that switches the setting off is the one made while a
+        // decoy is already running (or while docked, where there is nothing to deploy). A manual press is
+        // deliberate ∴ NOT gated by the ECHO/AFK guard, unlike the on-undock automation.
+        internal static void ToggleAuto()
+        {
+            try
+            {
+                var cfg = Plugin.Cfg;
+                var player = GamePlayer.current;
+                var undocked = SpaceStationInterior.instance == null;
+
+                if (cfg.ActivateOnUndock.Value && undocked && player != null && !player.hasUmbralTransponder)
+                {
+                    DeployNow(player);
+                    return;
+                }
+
+                cfg.ActivateOnUndock.Value = !cfg.ActivateOnUndock.Value;
+                if (!cfg.ActivateOnUndock.Value) { Util.Notify(Loc.T("decoy.off")); return; }
+
+                // Turned ON. While docked, nothing to deploy now (it fires on the next undock).
+                if (!undocked || player == null) { Util.Notify(Loc.T("decoy.on")); return; }
+                if (player.hasUmbralTransponder) { Util.Notify(Loc.T("decoy.on.active")); return; }
+                DeployNow(player);
+            }
+            catch (Exception ex) { Plugin.Log.LogWarning($"decoy hotkey failed: {ex.Message}"); }
+        }
+
+        // Both press paths that end in a deployment share this, so they cannot disagree about which hold is
+        // drawn from or what the player is told when it is empty.
+        private static void DeployNow(GamePlayer player)
+        {
+            var cargo = player.currentSpaceShip?.cargo;
+            if (cargo != null && ActivateDecoy(cargo)) Util.Notify(Loc.T("decoy.on.deployed"));
+            else Util.Notify(Loc.T("decoy.on.nostock"), warn: true);
         }
 
         private static bool IsTransponder(InventoryItemType item)
@@ -308,45 +487,16 @@ namespace StationAssistant
             if (offer is null)
                 return 0;
 
-            var available = offer.item.HasInfiniteShopSupply() ? int.MaxValue : offer.count;
-            var amount = Math.Min(needed, available);
-
-            var barter = offer.costItem != null;
-            if (barter)
-            {
-                var per = offer.costItemCount;
-                var canPay = per > 0 ? player.CountAvailableItems(offer.costItem) / per : amount;
-                amount = Math.Min(amount, canPay);
-            }
-            else
-            {
-                if (offer.cost <= 0)
-                    return 0;
-                amount = Math.Min(amount, (int)Math.Min(int.MaxValue, player.credits / offer.cost));
-            }
-
-            amount = ShrinkToCargo(cargo, offer.item, amount);
+            // Affordability (credit/barter/stock) + cargo fit decided by the shared, unit-tested planner;
+            // cargo space via ShrinkToCargo. Then the game-way mutation. One flow shared with Quartermaster.
+            var ctx = new VG.Game.BuyContext(player, offer.costItem, (_, want) => ShrinkToCargo(cargo, offer.item, want));
+            var amount = VG.Core.PurchasePlan.Affordable(VG.Game.PurchaseExec.ToOffer(offer), ctx, needed);
             if (amount <= 0)
                 return 0;
 
-            if (barter)
-                player.ConsumeAvailableItems(offer.costItem, offer.costItemCount * amount);
-            else
-                player.RemoveCredits(offer.cost * amount); // release RemoveCredits takes no spend-category
-
-            var bought = offer.item;
-            cargo.Add(bought, amount);
-            if (!bought.HasInfiniteShopSupply())
-                shop.Remove(offer, amount);
-
-            foreach (var part in bought.GetComponents<InventoryItemPart>())
-                part.OnPurchase(amount);
-
+            VG.Game.PurchaseExec.Apply(player, shop, offer, cargo, amount);
             return amount;
         }
-
-        private static int CountInCargo(Inventory cargo, Func<InventoryItemType, bool> match)
-            => cargo.items?.Where(i => i?.item != null && match(i.item)).Sum(i => i.count) ?? 0;
 
         internal static int ShrinkToCargo(Inventory cargo, InventoryItemType item, int amount)
         {
@@ -369,11 +519,12 @@ namespace StationAssistant
             try
             {
                 var cfg = Plugin.Cfg;
-                DecoyLogic.RestockOnDock(cfg);
+                if (cfg.Enabled.Value && cfg.QmMode.Value == SellTrigger.OnDock)
+                    Plugin.Window.ShowLastQm(Quartermaster.Restock(cfg));
                 if (cfg.SellEnabled.Value && cfg.SellMode.Value == SellTrigger.OnDock)
                     Plugin.Window.ShowLastSell(AutoSell.SellNow(cfg));
                 if (cfg.AmmoEnabled.Value && cfg.AmmoMode.Value == SellTrigger.OnDock)
-                    Plugin.Window.ShowLastAmmo(AmmoValet.RunNow(cfg));
+                    Plugin.Window.ShowLastAmmo(Gunner.RunNow(cfg));
             }
             catch (Exception ex)
             {
@@ -389,10 +540,15 @@ namespace StationAssistant
         private Vector2 _ruleScroll;
         private Vector2 _matchScroll;
         private Vector2 _ammoScroll;
+        private Vector2 _qmScroll;
         private List<string> _matchList;
-        private string _desiredStockBuf;
         private string _maxLevelBuf;
         private string _lastSell = "";
+        private string _lastQm = "";
+        // "Copy to all ships" is armed by the first click and performed by the second — it overwrites the
+        // other ships' targets with no undo, so a stray click shouldn't do it.
+        private bool _qmCopyArmed;
+        private string _qmCopyMsg = "";
         private string _rulesMsg = "";
         private bool _pasteArmed;
         private string _lastAmmo = "";
@@ -403,6 +559,7 @@ namespace StationAssistant
         private string _loadoutMsg = "";
         private string _loadoutShipGuid;           // detect ship change to re-prefill the name field
         private readonly Dictionary<string, string> _ammoBufs = new Dictionary<string, string>();
+        private readonly Dictionary<string, string> _qmBufs = new Dictionary<string, string>(); // key = itemKey|inv / itemKey|res
 
         // Rule builder draft; index 0 = "Any".
         private int _bCat, _bType, _bRarity, _bSize, _bAspect;
@@ -417,17 +574,22 @@ namespace StationAssistant
 
         internal void ShowLastSell(AutoSell.SellResult r)
             => _lastSell = r.Items > 0
-                ? Loc.F("sell.result.sold", r.Items, r.Credits.ToString("N0"))
+                ? Loc.F("sell.result.sold", Say.Count(r.Items, "item"), Say.Credits(r.Credits))
                 : Loc.F("sell.result.nothing", r.Reason);
 
-        internal void ShowLastAmmo(AmmoValet.AmmoResult r)
+        internal void ShowLastAmmo(Gunner.AmmoResult r)
             => _lastAmmo = r.Reason == "ok"
-                ? Loc.F("ammo.result.ok", r.Stowed, r.Pulled, r.Bought)
+                ? Loc.F("ammo.result.ok", Util.Moved(r.Moves, r.Stowed, r.Pulled, r.Bought, "round"))
                 : Loc.F("ammo.result.nothing", r.Reason);
+
+        internal void ShowLastQm(Quartermaster.QmResult r)
+            => _lastQm = r.Skipped ? Loc.T(r.SkipReason == "space" ? "qm.result.skipped.space" : "qm.result.skipped.funds")
+                : r.Short ? Loc.F("qm.result.short", r.ShortItems)
+                : r.Reason == "ok" ? Loc.F("qm.result.ok", Util.Moved(r.Moves, r.Stowed, r.Pulled, r.Bought, "item"))
+                : Loc.F("qm.result.nothing", r.Reason);
 
         private void SyncBuffers()
         {
-            _desiredStockBuf = _cfg.DesiredStock.Value.ToString();
             _maxLevelBuf = _cfg.KeepItemLevel.Value.ToString();
         }
 
@@ -437,12 +599,13 @@ namespace StationAssistant
         {
             SyncBuffers();
             _ammoBufs.Clear();
+            _qmBufs.Clear();
             _matchList = null;
         }
 
         // Tab bodies registered with the shared host (VG.ModApi). Each renders its content plus SA's
         // per-pilot profile footer; the host owns the window chrome, tab bar, hotkey and close button.
-        internal void DrawDecoyPage() { DrawDecoyTab(); GUILayout.Space(4f); DrawProfileBar(); }
+        internal void DrawQuartermasterPage() { DrawQuartermasterTab(); GUILayout.Space(4f); DrawProfileBar(); }
         internal void DrawSellPage() { DrawSellTab(); GUILayout.Space(4f); DrawProfileBar(); }
         internal void DrawAmmoPage() { DrawAmmoTab(); GUILayout.Space(4f); DrawProfileBar(); }
         internal void DrawLoadoutsPage() { DrawLoadoutsTab(); }
@@ -567,22 +730,151 @@ namespace StationAssistant
                 GUILayout.Label("<size=11>" + _profileMsg + "</size>");
         }
 
-        private void DrawDecoyTab()
+        private void DrawQuartermasterTab()
         {
-            _cfg.Enabled.Value = GUILayout.Toggle(_cfg.Enabled.Value, Loc.T("decoy.enabled"));
+            _cfg.Enabled.Value = GUILayout.Toggle(_cfg.Enabled.Value, Loc.T("qm.enabled"));
+
+            GUILayout.Space(4f);
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(Loc.T("sell.mode"), GUILayout.Width(46f));
+            if (GUILayout.Toggle(_cfg.QmMode.Value == SellTrigger.Manual, Loc.T("mode.manual"), GUI.skin.button))
+                _cfg.QmMode.Value = SellTrigger.Manual;
+            if (GUILayout.Toggle(_cfg.QmMode.Value == SellTrigger.OnDock, Loc.T("mode.onDock"), GUI.skin.button))
+                _cfg.QmMode.Value = SellTrigger.OnDock;
+            if (GUILayout.Toggle(_cfg.QmMode.Value == SellTrigger.OnUndock, Loc.T("mode.onUndock"), GUI.skin.button))
+                _cfg.QmMode.Value = SellTrigger.OnUndock;
+            GUILayout.EndHorizontal();
 
             GUILayout.Space(6f);
-            GUILayout.Label(Loc.T("decoy.flags"));
-            _cfg.AutoBuy.Value = GUILayout.Toggle(_cfg.AutoBuy.Value, Loc.T("decoy.autobuy"));
-            _cfg.ActivateOnUndock.Value = GUILayout.Toggle(_cfg.ActivateOnUndock.Value, Loc.T("decoy.activate"));
-            _cfg.DecoyDisableDuringEcho.Value = GUILayout.Toggle(_cfg.DecoyDisableDuringEcho.Value, Loc.T("decoy.disableEcho"));
+            GUILayout.Label(Loc.T("qm.flags"));
+            _cfg.AutoBuy.Value = GUILayout.Toggle(_cfg.AutoBuy.Value, Loc.T("qm.autobuy"));
 
             GUILayout.Space(6f);
-            GUILayout.Label(Loc.T("decoy.limits"));
-            IntField(Loc.T("decoy.desiredStock"), _cfg.DesiredStock, ref _desiredStockBuf);
+            var ship = GamePlayer.current?.currentSpaceShip;
+            if (ship is null)
+            {
+                GUILayout.Label(Loc.T("qm.noShip"));
+            }
+            else
+            {
+                var name = !string.IsNullOrEmpty(ship.customShipName) ? ship.customShipName
+                    : (ship.shipClass?.displayName ?? ship.guid); // type name when unrenamed, never the guid
+                GUILayout.Label(Loc.F("qm.ship", name));
+                GUILayout.Label(Loc.T("qm.header"));
+                _qmScroll = GUILayout.BeginScrollView(_qmScroll, GUILayout.Height(230f));
+                foreach (var sup in Quartermaster.Supplies)
+                    DrawQmRow(ship, sup);
+                GUILayout.EndScrollView();
 
-            GUILayout.Space(2f);
-            GUILayout.Label(Loc.F("decoy.saveHint", _cfg.ToggleKey.Value));
+                // Set one ship up properly, then give the rest of the fleet the same orders. Two-step, because
+                // it REPLACES the other ships' targets and there is no undo — the first click only arms it.
+                GUILayout.Space(4f);
+                GUILayout.BeginHorizontal();
+                if (_qmCopyArmed)
+                {
+                    if (GUILayout.Button(Loc.T("qm.copyAll.confirm"), GUILayout.Width(190f)))
+                    {
+                        var n = _cfg.CopyQmTargetsToAllShips(ship.guid, Quartermaster.Supplies.Select(s => s.Key));
+                        _qmCopyMsg = n > 0 ? Loc.F("qm.copyAll.done", Say.Count(n, "other ship")) : Loc.T("qm.copyAll.none");
+                        _qmCopyArmed = false;
+                    }
+                    if (GUILayout.Button(Loc.T("qm.copyAll.cancel"), GUILayout.Width(80f)))
+                        _qmCopyArmed = false;
+                }
+                else if (GUILayout.Button(Loc.T("qm.copyAll"), GUILayout.Width(190f)))
+                {
+                    _qmCopyArmed = true;
+                    _qmCopyMsg = "";
+                }
+                GUILayout.EndHorizontal();
+                if (_qmCopyMsg.Length > 0)
+                    GUILayout.Label("<size=11>" + _qmCopyMsg + "</size>");
+            }
+
+            GUILayout.Space(6f);
+            if (GUILayout.Button(Loc.T("qm.runNow")))
+                ShowLastQm(Quartermaster.Restock(_cfg));
+            if (_lastQm.Length > 0)
+                GUILayout.Label("<size=11>" + _lastQm + "</size>");
+            GUILayout.Label(Loc.F("qm.saveHint", _cfg.ToggleKey.Value));
+        }
+
+        private void DrawQmRow(SpaceShipData ship, Quartermaster.Supply sup)
+        {
+            var haveC = Quartermaster.CountMatching(ship.cargo, sup.Match);
+            var haveA = Quartermaster.CountMatching(GamePlayer.current?.globalInventory, sup.Match);
+
+            // Line 1: name + live cargo/armory counts (own full-width line, so it can't shove the steppers).
+            GUILayout.Label(Loc.F("qm.row", Loc.T(sup.LabelKey), haveC, haveA));
+
+            // Line 2: cargo & armory targets (0 = ignore that container). Indented, left-aligned.
+            GUILayout.BeginHorizontal();
+            GUILayout.Space(16f);
+            GUILayout.Label(Loc.T("qm.inv"), GUILayout.Width(28f));
+            QmStepper(ship, sup, reserve: false);
+            GUILayout.Space(14f);
+            GUILayout.Label(Loc.T("qm.res"), GUILayout.Width(30f));
+            QmStepper(ship, sup, reserve: true);
+            GUILayout.FlexibleSpace();
+            GUILayout.EndHorizontal();
+
+            // Line 3: per-item options — skip during ECHO, and (decoy only) activate one on undock.
+            GUILayout.BeginHorizontal();
+            GUILayout.Space(16f);
+            var echoEntry = _cfg.QmEchoSkipEntry(sup.Key);
+            if (echoEntry != null)
+                echoEntry.Value = GUILayout.Toggle(echoEntry.Value, Loc.T("qm.echoSkip"));
+            if (sup.AutoUse)
+            {
+                GUILayout.Space(14f);
+                _cfg.ActivateOnUndock.Value = GUILayout.Toggle(_cfg.ActivateOnUndock.Value, Loc.T("qm.autoActivate"));
+            }
+            GUILayout.FlexibleSpace();
+            GUILayout.EndHorizontal();
+
+            GUILayout.Space(8f); // gap between items
+        }
+
+        // "- [field] +" for one target field (inventory or reserve); persists both values together.
+        private void QmStepper(SpaceShipData ship, Quartermaster.Supply sup, bool reserve)
+        {
+            var t = _cfg.QmTarget(ship.guid, sup.Key);
+            var cur = reserve ? t.res : t.inv;
+            var bufKey = sup.Key + (reserve ? "|res" : "|inv");
+            if (!_qmBufs.TryGetValue(bufKey, out var buf) || (int.TryParse(buf, out var b) && b != cur))
+            {
+                buf = cur.ToString();
+                _qmBufs[bufKey] = buf;
+            }
+
+            if (GUILayout.Button("-", GUILayout.Width(24f)))
+            {
+                cur = Mathf.Max(0, cur - 1);
+                PersistQm(ship, sup, reserve, cur);
+                _qmBufs[bufKey] = cur.ToString();
+            }
+            var typed = GUILayout.TextField(_qmBufs[bufKey], GUILayout.Width(44f));
+            if (typed != _qmBufs[bufKey])
+            {
+                _qmBufs[bufKey] = typed;
+                if (int.TryParse(typed, out var parsed))
+                    PersistQm(ship, sup, reserve, Mathf.Max(0, parsed));
+            }
+            if (GUILayout.Button("+", GUILayout.Width(24f)))
+            {
+                cur += 1;
+                PersistQm(ship, sup, reserve, cur);
+                _qmBufs[bufKey] = cur.ToString();
+            }
+        }
+
+        private void PersistQm(SpaceShipData ship, Quartermaster.Supply sup, bool reserve, int val)
+        {
+            var t = _cfg.QmTarget(ship.guid, sup.Key);
+            if (reserve)
+                _cfg.SetQmTarget(ship.guid, sup.Key, t.inv, val);
+            else
+                _cfg.SetQmTarget(ship.guid, sup.Key, val, t.res);
         }
 
         private void DrawAmmoTab()
@@ -603,7 +895,7 @@ namespace StationAssistant
             GUILayout.Space(4f);
             _cfg.AmmoStowUnused.Value = GUILayout.Toggle(_cfg.AmmoStowUnused.Value, Loc.T("ammo.stowUnused"));
             _cfg.AmmoAutoBuy.Value = GUILayout.Toggle(_cfg.AmmoAutoBuy.Value, Loc.T("ammo.autobuy"));
-            _cfg.AmmoUseEchoMinutes.Value = GUILayout.Toggle(_cfg.AmmoUseEchoMinutes.Value, Loc.F("ammo.echoMinutes", AmmoValet.EchoMinutes()));
+            _cfg.AmmoUseEchoMinutes.Value = GUILayout.Toggle(_cfg.AmmoUseEchoMinutes.Value, Loc.F("ammo.echoMinutes", Gunner.EchoMinutes()));
 
             GUILayout.Space(6f);
             var ship = GamePlayer.current?.currentSpaceShip;
@@ -617,7 +909,7 @@ namespace StationAssistant
                     : (ship.shipClass?.displayName ?? ship.guid); // type name when unrenamed, never the guid
                 GUILayout.Label(Loc.F("ammo.ship", name));
 
-                var ammos = AmmoValet.EquippedAmmoTypes(ship);
+                var ammos = Gunner.EquippedAmmoTypes(ship);
                 if (ammos.Count == 0)
                 {
                     GUILayout.Label(Loc.T("ammo.noGuns"));
@@ -625,12 +917,12 @@ namespace StationAssistant
                 else if (_cfg.AmmoUseEchoMinutes.Value)
                 {
                     // ECHO-minutes mode: targets are computed, not edited. Show them read-only.
-                    GUILayout.Label(Loc.F("ammo.echoTargets", AmmoValet.EchoMinutes()));
+                    GUILayout.Label(Loc.F("ammo.echoTargets", Gunner.EchoMinutes()));
                     _ammoScroll = GUILayout.BeginScrollView(_ammoScroll, GUILayout.Height(160f));
                     foreach (var ammo in ammos)
                     {
-                        var label = string.IsNullOrEmpty(ammo.displayName) ? ammo.identifier : ammo.displayName;
-                        GUILayout.Label(Loc.F("ammo.echoTargetRow", label, AmmoValet.EchoTargetFor(ship, ammo)));
+                        var label = Util.ItemName(ammo);
+                        GUILayout.Label(Loc.F("ammo.echoTargetRow", label, Gunner.EchoTargetFor(ship, ammo)));
                     }
                     GUILayout.EndScrollView();
                 }
@@ -655,9 +947,9 @@ namespace StationAssistant
             GUILayout.Space(6f);
             GUILayout.BeginHorizontal();
             if (GUILayout.Button(Loc.F("ammo.runNow", _cfg.AmmoHotkey.Value)))
-                ShowLastAmmo(AmmoValet.RunNow(_cfg));
+                ShowLastAmmo(Gunner.RunNow(_cfg));
             if (GUILayout.Button(Loc.T("ammo.autoload")))
-                ShowLastAmmo(AmmoValet.Autoload(_cfg));
+                ShowLastAmmo(Gunner.Autoload(_cfg));
             GUILayout.EndHorizontal();
             GUILayout.Label(Loc.T("ammo.autoloadHint"));
             if (_lastAmmo.Length > 0)
@@ -667,7 +959,7 @@ namespace StationAssistant
         private void DrawAmmoRow(SpaceShipData ship, InventoryItemType ammo)
         {
             var id = ammo.identifier;
-            var label = string.IsNullOrEmpty(ammo.displayName) ? id : ammo.displayName;
+            var label = Util.ItemName(ammo) ?? id;
             var target = _cfg.AmmoTarget(ship.guid, id);
             if (!_ammoBufs.TryGetValue(id, out var buf) || (int.TryParse(buf, out var b) && b != target))
             {
@@ -748,7 +1040,7 @@ namespace StationAssistant
 
             if (_matchList is not null)
             {
-                GUILayout.Label(Loc.F("sell.wouldSell", _matchList.Count));
+                GUILayout.Label(Loc.F("sell.wouldSell", Say.Count(_matchList.Count, "stack")));
                 _matchScroll = GUILayout.BeginScrollView(_matchScroll, GUILayout.Height(120f));
                 if (_matchList.Count == 0)
                     GUILayout.Label(Loc.T("sell.nothingMatches"));
@@ -771,7 +1063,7 @@ namespace StationAssistant
             if (GUILayout.Button(Loc.T("btn.copyRules")))
             {
                 GUIUtility.systemCopyBuffer = KeepRule.SerializeList(_cfg.KeepRules);
-                _rulesMsg = Loc.F("rules.copied", _cfg.KeepRules.Count);
+                _rulesMsg = Loc.F("rules.copied", Say.Count(_cfg.KeepRules.Count, "rule"));
                 _pasteArmed = false;
             }
             if (GUILayout.Button(_pasteArmed ? Loc.T("btn.pasteConfirm") : Loc.T("btn.pasteRules")))
@@ -818,14 +1110,14 @@ namespace StationAssistant
             {
                 // Would overwrite existing rules — arm and wait for a confirming second click.
                 _pasteArmed = true;
-                _rulesMsg = Loc.F("rules.pasteArm", _cfg.KeepRules.Count, parsed.Count);
+                _rulesMsg = Loc.F("rules.pasteArm", Say.Count(_cfg.KeepRules.Count, "rule"), Say.Count(parsed.Count, "rule"));
                 return;
             }
 
             _cfg.KeepRules.Clear();
             _cfg.KeepRules.AddRange(parsed);
             _cfg.SaveKeepRules();
-            _rulesMsg = Loc.F("rules.imported", parsed.Count);
+            _rulesMsg = Loc.F("rules.imported", Say.Count(parsed.Count, "rule"));
             _pasteArmed = false;
         }
 
@@ -870,7 +1162,7 @@ namespace StationAssistant
             _bCat = Dropdown("cat", Loc.T("field.category"), catOpts, _bCat);
             _bType = Dropdown("type", Loc.T("field.type"), typeOpts, _bType);
             _bRarity = Dropdown("rar", Loc.T("field.minRarity"), rarityOpts, _bRarity);
-            _bSize = Dropdown("size", Loc.T("field.minSize"), sizeOpts, _bSize);
+            _bSize = Dropdown("size", Loc.T("field.size"), sizeOpts, _bSize);
 
             GUILayout.BeginHorizontal();
             GUILayout.Label(Loc.T("field.minLevel"), GUILayout.Width(80f));
@@ -885,7 +1177,7 @@ namespace StationAssistant
                 if (_bCat > 0 && _bCat - 1 < cats.Count) rule.Category = cats[_bCat - 1];
                 if (_bType > 0 && _bType - 1 < types.Count) rule.SpecificType = types[_bType - 1];
                 if (_bRarity > 0) rule.MinRarity = (Rarity)(_bRarity - 1);
-                if (_bSize > 0) rule.MinSize = (ModuleSize)(_bSize - 1);
+                if (_bSize > 0) rule.Size = (ModuleSize)(_bSize - 1);
                 if (int.TryParse(_bLevelBuf, out var lvl) && lvl > 0) rule.MinLevel = lvl;
                 if (_bAspect > 0 && _bAspect - 1 < aspects.Count) rule.Aspect = aspects[_bAspect - 1].Id;
 
@@ -905,9 +1197,9 @@ namespace StationAssistant
         }
 
         // grey, green, blue, purple, gold
-        private static readonly string[] RarityHex = { "#B0B0B0", "#5FD35F", "#5AA9E6", "#B266FF", "#F2C14E" };
         private static readonly Rarity[] RarityOrder = { Rarity.Standard, Rarity.Enhanced, Rarity.HighGrade, Rarity.Exotic, Rarity.Legendary };
-        private static string ColorRarity(Rarity r) => $"<color={RarityHex[(int)r]}>{r}</color>";
+        // Colour from the shared VG.Core.Rarity table (keyed by name) so the palette has one source.
+        private static string ColorRarity(Rarity r) => $"<color={VG.Core.Rarity.Color(r.ToString())}>{r}</color>";
 
         private int Dropdown(string id, string label, string[] opts, int idx)
         {
@@ -985,3 +1277,4 @@ namespace StationAssistant
         }
     }
 }
+

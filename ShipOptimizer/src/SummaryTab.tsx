@@ -1,27 +1,78 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from "react";
-import { ApiError, api, type Conn } from "./api";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { api, itemIcon, type Conn } from "./api";
 import { boosterId, boosterTypeColor, boosterValue } from "./booster";
 import type { OfficerBuilder } from "./OfficersTab";
+import { ApplyMsg } from "./ApplyBar";
+import PlanNotice from "./PlanNotice";
+import type { ApplyApi } from "./useApply";
 import type { BoosterBuilder } from "./BoostersTab";
-import { ItemTip, type GearBuilder } from "./GearTab";
-import type { ApplyResult, Item, LoadoutPresetInfo, Officer } from "./types";
+import { type GearBuilder } from "./GearTab";
+import { type GearFilter } from "./gearFit";
+import { ItemTip } from "./ItemCard";
+import { useConfirm } from "./Modal";
+import type { Scope } from "./officer";
+import type { ActivityProfile } from "./activityPresets";
+import type { Item, LoadoutPresetInfo, Officer } from "./types";
+import { RARITY_COLOR, fmt } from "./format";
+import { load, save } from "./storage";
+import { useCursorTip } from "./useCursorTip";
 
 // Persistent action log (localStorage) — records every apply/undo: request payload + the ship's equipped
 // state at click time + the raw response. Survives reloads so a mis-apply can be inspected after the fact.
-interface LogEntry { t: string; action: string; req: string[]; res: string; pt?: string | null }
+// `ship` is the ship the action ran against — the log persists across ship switches, so without it an
+// entry can't be told apart from the same action on another hull. Absent on entries logged before it existed.
+
+// The optimizer settings a saved loadout carries alongside its equipped gear/officers — serialized to
+// the preset's opaque `settings` blob (bridge-persisted + portable via export/import), reapplied on
+// restore. All fields optional so an older preset (no blob) or a partial one restores what it has.
+interface LoadoutSettings {
+  prio?: string[];                       // officer priority-skill order
+  forced?: string[];                     // pinned officer guids
+  scope?: Scope;                         // current vs full-potential
+  profile?: ActivityProfile;             // activity suggestion profile
+  gearFilters?: Record<number, GearFilter>; // per-hardpoint filter
+  cats?: Record<string, string[]>;       // custom turret categories
+  boosterTypes?: (string | null)[];      // booster slot types
+}
 // Short, readable form of a playthrough fingerprint (drops the "gx-" tag, keeps 6 hex chars).
 const shortPt = (pt?: string | null) => (pt ? pt.replace(/^gx-/, "").slice(0, 6) : "—");
-const LOG_KEY = "shipoptimizer.summaryLog";
-function loadLog(): LogEntry[] { try { return JSON.parse(localStorage.getItem(LOG_KEY) ?? "[]"); } catch { return []; } }
-function saveLog(l: LogEntry[]) { try { localStorage.setItem(LOG_KEY, JSON.stringify(l)); } catch { /* quota */ } }
 // Last saved/loaded preset + a fingerprint of the loadout at that time — to offer "Update" when it drifts.
+// `v` guards the fingerprint FORMAT: a baseline taken by an older build can't be compared against a
+// fingerprint built by a newer one, so bump this whenever `itemFp`/`fingerprint` changes shape. A
+// mismatched baseline is dropped (loadout reads as unmodified) instead of showing a bogus "modified".
+const FP_VERSION = 2;
+// Settle window for re-baselining after a restore (see `capture` below).
+const CAPTURE_MS = 2500;
+// Presets are per SHIP, so the "which loadout is active" baseline is stored per ship guid too —
+// otherwise switching ships kept showing the previous ship's loadout as active/modified.
 const ACTIVE_KEY = "shipoptimizer.activePreset";
-function loadActive(): { name: string; fp: string } | null { try { return JSON.parse(localStorage.getItem(ACTIVE_KEY) ?? "null"); } catch { return null; } }
-function saveActive(a: { name: string; fp: string } | null) { try { localStorage.setItem(ACTIVE_KEY, JSON.stringify(a)); } catch { /* quota */ } }
-function fmtApply(r: ApplyResult): string {
-  if (r.error) return `ERROR: ${r.error}`;
-  return `applied=${r.applied ?? "?"} changed=${r.changed} stale=${r.stale ?? 0}${r.prior !== undefined ? ` prior=${r.prior}` : ""}`;
-}
+const activeKey = (shipGuid: string | null) => `${ACTIVE_KEY}.${shipGuid ?? "none"}`;
+interface ActivePreset { name: string; fp: string; v?: number }
+const loadActive = (shipGuid: string | null): ActivePreset | null => {
+  const a = load<ActivePreset | null>(activeKey(shipGuid), null);
+  return a && a.v === FP_VERSION ? a : null;
+};
+const saveActive = (shipGuid: string | null, a: ActivePreset | null) => save(activeKey(shipGuid), a);
+
+// Identity of one equipped item for drift detection. Name alone (or name#level) is NOT unique: two
+// rolls of the same item share both, so swapping an Officer R-Booster Mk.XVI (+5.9) for a (+6.19) —
+// or a Railgun Mk.XVI for a better-rolled Railgun Mk.XVI — used to read as "no change". Include
+// everything that makes a roll distinct: quality, headline value, bonus lines. NOT aspects — those are
+// swappable at a workshop, so socketing one must not read as "the equipped item changed under me".
+const itemFp = (it: Item | null | undefined): string =>
+  !it ? "-" : [
+    it.name, it.level, it.rarity, it.bonus ?? 0, it.bonusStat ?? "", it.mainStat?.amount ?? "",
+    (it.substats ?? []).map((s) => `${s.stat}=${s.amount}:${s.multiplier}`).sort().join(","),
+  ].join("/");
+
+// Key-order-independent serialization — the settings blob is part of the loadout fingerprint, so a
+// mere reordering of object keys (round-tripping through JSON on restore) must not read as a change.
+const stableKey = (v: unknown): string => {
+  if (Array.isArray(v)) return `[${v.map(stableKey).join(",")}]`;
+  if (v && typeof v === "object")
+    return `{${Object.entries(v as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([k, x]) => `${k}:${stableKey(x)}`).join(",")}}`;
+  return JSON.stringify(v) ?? "null";
+};
 
 // Pair leaving → joining into current→new rows (extra on either side pairs with a blank).
 function pairs<T>(leave: T[], join: T[]): { cur: T | null; next: T | null }[] {
@@ -29,53 +80,34 @@ function pairs<T>(leave: T[], join: T[]): { cur: T | null; next: T | null }[] {
   return Array.from({ length: n }, (_, i) => ({ cur: leave[i] ?? null, next: join[i] ?? null }));
 }
 
-// Format an apply result into a status line (+ stale note).
-function note(r: ApplyResult, label: string): string {
-  if (r.error) return r.error;
-  let t = `Applied ${r.changed} ${label}${r.changed === 1 ? "" : "s"}.`;
-  if (r.stale) t += ` ${r.stale} moved — skipped.`;
-  return t;
-}
 
-const RARITY_COLOR: Record<string, string> = {
-  Standard: "#cfcfcf", Enhanced: "#58c26b", HighGrade: "#4aa3ff", Exotic: "#c07bff", Legendary: "#ffb020",
-};
-const fmt = (n: number) => (n >= 1000 ? n.toLocaleString(undefined, { maximumFractionDigits: 0 }) : Number(n.toFixed(2)).toString());
 
 // The apply hub: a current→new change list per category (officers, boosters), applied to the CURRENT
 // ship via POST /loadout/apply (officers by guid, boosters by exact handle). Undo reverts the last apply.
 export default function SummaryTab({
-  officer, boosters, gear, portraitUrl, conn, crewSupported, docked, currentShipGuid, playthrough, playthroughName, reloadNonce, onChanged,
+  officer, boosters, gear, portraitUrl, conn, crewSupported, currentShipGuid, playthrough, playthroughName, reloadNonce, apply,
 }: {
   officer: OfficerBuilder;
   boosters: BoosterBuilder;
   gear: GearBuilder;
+  apply: ApplyApi;   // the app's ONE apply owner — see useApply
   portraitUrl: (guid: string | null) => string | null;
   conn: Conn;
   crewSupported: boolean; // false on the release game (crew API renamed) — hide/mute all officer bits
   docked: boolean;
+  hasHangar?: boolean;   // a personal hangar at the docked station — where a refit happens
   currentShipGuid: string | null;
   playthrough?: string | null; // current playthrough fingerprint — tagged onto each action-log entry
   playthroughName?: string | null; // pretty name for the current playthrough (shown instead of the hash)
   reloadNonce?: number; // bumped by the parent (e.g. after claiming an orphan) to force a preset reload
   onChanged: () => void;
 }) {
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  // Apply state comes from the shared owner, so this tab and the per-tab buttons agree on busy/message/log.
+  const { busy, cannotApply, gate, addLog, run, log, clearLog, setMsg, shipName } = apply;
+  const { applyOfficers, applyBoosters, applyGear, applyAll, undo } = apply;
   const [tip, setTip] = useState<TipState | null>(null); // hover tooltip for change-row items/officers
-  const [log, setLog] = useState<LogEntry[]>(loadLog);
-  const addLog = useCallback((action: string, req: string[], res: string) => {
-    setLog((prev) => {
-      const next = [{ t: new Date().toLocaleTimeString(), action, req, res, pt: playthrough ?? null }, ...prev].slice(0, 80);
-      saveLog(next); return next;
-    });
-  }, [playthrough]);
-  const run = useCallback(async (fn: () => Promise<string>) => {
-    setBusy(true); setMsg(null);
-    try { setMsg({ ok: true, text: await fn() }); onChanged(); }
-    catch (e) { setMsg({ ok: false, text: e instanceof ApiError ? e.message : String(e) }); }
-    finally { setBusy(false); }
-  }, [onChanged]);
+
+
 
   // ---- officer changes: SET diff (who joins / who leaves), ignoring pure slot swaps ----
   // Slot order doesn't matter for stacking, so an officer that stays on the ship in a different
@@ -86,7 +118,6 @@ export default function SummaryTab({
   const oJoin = crewSupported ? (officer.result?.chosen ?? []).filter((o) => !oAssigned.has(o.guid)) : [];
   const oLeave = crewSupported ? officer.officers.filter((o) => oAssigned.has(o.guid) && !oChosen.has(o.guid)) : [];
   const officerPairs = pairs<Officer>(oLeave, oJoin);
-  const officerPayload = crewSupported ? (officer.result?.chosen ?? []).map((o, i) => ({ slot: i, guid: o.guid })) : [];
   const officerOnCurrent = crewSupported && !!oShip && oShip.guid === currentShipGuid;
 
   // ---- booster changes: SET diff by booster identity (equipped set → chosen set) ----
@@ -102,40 +133,11 @@ export default function SummaryTab({
 
   // Snapshot of what's equipped per booster slot right now — logged with each apply so we can see the
   // state change between clicks (the "had to apply twice" bug).
-  const equippedNow = () => `now[${boosters.equippedBySlot.map((b, i) => `${i}:${b ? b.name : "—"}`).join(" ")}]`;
-  const oName = (g: string) => officer.officers.find((o) => o.guid === g)?.name ?? g.slice(0, 8);
-  const boosterReq = () => [equippedNow(), ...boosterPayload.map((p) => `#${p.slot} ← ${p.name} L${p.level} [${p.store}:${p.key}]`)];
-  const officerReq = () => officerPayload.map((p) => `slot ${p.slot} ← ${oName(p.guid)}`);
 
   // ---- gear changes: from the shared gear builder (turret + module assignments) ----
   const gearPayload = gear.payload;
-  const gearReq = () => gear.changes.map((c) => `${c.kind} ${c.label} ← ${c.next.name} [${c.next.location}:${c.next.key}]`);
 
-  const applyOfficers = () => run(async () => {
-    const r = await api.loadoutApply(conn, { officers: officerPayload });
-    addLog("apply officers", officerReq(), fmtApply(r));
-    return note(r, "officer");
-  });
-  const applyBoosters = () => run(async () => {
-    const r = await api.loadoutApply(conn, { slots: boosterPayload });
-    addLog("apply boosters", boosterReq(), fmtApply(r));
-    return note(r, "booster");
-  });
-  const applyGear = () => run(async () => {
-    const r = await api.loadoutApply(conn, { slots: gearPayload });
-    addLog("apply gear", gearReq(), fmtApply(r));
-    return note(r, "gear change");
-  });
-  const applyAll = () => run(async () => {
-    const r = await api.loadoutApply(conn, { officers: officerOnCurrent ? officerPayload : [], slots: [...boosterPayload, ...gearPayload] });
-    addLog("apply all", [...(officerOnCurrent ? officerReq() : []), ...boosterReq(), ...gearReq()], fmtApply(r));
-    return note(r, "change");
-  });
-  const undo = () => run(async () => {
-    const r = await api.loadoutUndo(conn);
-    addLog("undo", [], `restored=${r.restored}`);
-    return `Undo restored ${r.restored} slot(s).`;
-  });
+
 
   // ---- saved loadout presets (bridge-persisted: gear fingerprints + officer guids) ----
   const [presets, setPresets] = useState<LoadoutPresetInfo[]>([]);
@@ -143,55 +145,113 @@ export default function SummaryTab({
   // client-side filtering — show what we get.
   const shownPresets = presets;
   const [presetName, setPresetName] = useState("");
-  const [active, setActive] = useState<{ name: string; fp: string } | null>(loadActive); // last saved/loaded
-  const captureNext = useRef<string | null>(null); // capture the baseline fp after a restore settles
-  // Fingerprint of the currently-EQUIPPED loadout — turrets + modules + boosters + assigned officers.
+  const { ask, ui: confirmUi } = useConfirm();
+  const [active, setActive] = useState<ActivePreset | null>(() => loadActive(currentShipGuid)); // last saved/loaded, per ship
+  // The optimizer settings a loadout carries: officer priorities/pins/scope/activity, gear filters +
+  // custom categories, booster slot types. Saved into the preset's opaque blob AND part of the
+  // fingerprint below — changing a preference is a change to the loadout, so it enables "Update".
+  const settings = useMemo<LoadoutSettings>(() => ({
+    prio: officer.prio,
+    forced: [...officer.forced].sort(), // a Set — sort so insertion order can't fake a change
+    scope: officer.scope,
+    profile: officer.profile,
+    gearFilters: gear.filters,
+    cats: gear.cats,
+    boosterTypes: boosters.slotTypes,
+  }), [officer, gear, boosters]);
+  // Snapshot the optimizer settings into the preset's opaque blob (minified JSON — no tabs/newlines,
+  // safe for the bridge's tab-delimited store).
+  const gatherSettings = (): string => JSON.stringify(settings);
+  // Fingerprint of the loadout: what's EQUIPPED (turrets + modules + boosters + officers) plus the
+  // optimizer preferences. Per-item identity is content-based (see itemFp) so a same-name, same-level
+  // swap for a different roll still registers.
   const fingerprint = useMemo(() => {
-    const t = gear.hps.map((h) => `${h.index}:${h.equipped ? `${h.equipped.name}#${h.equipped.level}` : "-"}`).join("|");
-    const m = gear.mslots.map((s) => `${s.slot}:${s.equipped ? `${s.equipped.name}#${s.equipped.level}` : "-"}`).join("|");
-    const b = boosters.equippedBySlot.map((x, i) => `${i}:${x ? x.name : "-"}`).join("|");
+    const t = gear.hps.map((h) => `${h.index}:${itemFp(h.equipped)}`).join("|");
+    const m = gear.mslots.map((s) => `${s.slot}:${itemFp(s.equipped)}`).join("|");
+    const b = boosters.equippedBySlot.map((x, i) => `${i}:${itemFp(x)}`).join("|");
     const o = (officer.ship?.assigned ?? []).map((g) => g ?? "-").join(",");
-    return `${t}##${m}##${b}##${o}`;
-  }, [gear, boosters, officer]);
-  const setActiveP = (a: { name: string; fp: string } | null) => { setActive(a); saveActive(a); };
-  useEffect(() => { // after a restore, once the loadout settles, adopt the new fingerprint as the baseline
-    if (captureNext.current) { setActiveP({ name: captureNext.current, fp: fingerprint }); captureNext.current = null; }
+    return `${t}##${m}##${b}##${o}##${stableKey(settings)}`;
+  }, [gear, boosters, officer, settings]);
+  const setActiveP = (a: ActivePreset | null) => { const n = a && { ...a, v: FP_VERSION }; setActive(n); saveActive(currentShipGuid, n); };
+  // After a restore the loadout settles in TWO waves: the settings blob applies right away (local
+  // state), the equipped gear only once the bridge refresh lands. So re-adopt the baseline on every
+  // fingerprint change inside a short settle window — the last wave wins. A one-shot capture would
+  // latch the first wave and then read the second as a user edit ("modified" straight after restore).
+  const capture = useRef<{ name: string; until: number } | null>(null);
+  useEffect(() => {
+    const c = capture.current;
+    if (!c) return;
+    if (Date.now() > c.until) { capture.current = null; return; }
+    setActiveP({ name: c.name, fp: fingerprint });
   }, [fingerprint]);
   const dirty = !!active && !!active.fp && active.fp !== fingerprint;
+  // Update is offered for the active loadout once it drifts — and for ANY loadout when no active one is
+  // tracked, since there's then nothing to detect drift against (new browser, ship switch, or a
+  // fingerprint-format bump all land here) and the button would otherwise never appear.
+  const canUpdate = (name: string) => (active ? active.name === name && dirty : true);
 
-  const loadPresets = useCallback(async () => { try { setPresets((await api.presetsList(conn)).presets); } catch { /* offline */ } }, [conn]);
+  // The bridge keys presets per ship, so the list must be refetched when the player switches ship —
+  // `currentShipGuid` is a dep, not just decoration (without it a switch kept the old ship's list).
+  const loadPresets = useCallback(async () => { try { setPresets((await api.presetsList(conn)).presets); } catch { /* offline */ } }, [conn, currentShipGuid]);
   useEffect(() => { loadPresets(); }, [loadPresets, reloadNonce]);
+  // A switch also swaps which loadout counts as active — that baseline is stored per ship guid.
+  useEffect(() => { capture.current = null; setActive(loadActive(currentShipGuid)); }, [currentShipGuid]);
+  // Reapply a restored preset's settings to the live builders (current ship). Missing fields are left
+  // untouched; a parse failure is ignored (restore of gear/officers still succeeded).
+  const applySettings = (raw?: string | null) => {
+    if (!raw) return;
+    let s: LoadoutSettings;
+    try { s = JSON.parse(raw) as LoadoutSettings; } catch { return; }
+    if (s.prio) officer.setPrio(s.prio);
+    if (s.forced) officer.setForced(s.forced);
+    if (s.scope) officer.setScope(s.scope);
+    if (s.profile) officer.setProfile(s.profile);
+    if (s.gearFilters) gear.setFilters(() => s.gearFilters!);
+    if (s.cats) gear.setCats(s.cats);
+    if (s.boosterTypes) boosters.setSlotTypes(s.boosterTypes);
+  };
+
   const doSave = (name: string) => run(async () => {
-    const r = await api.presetSave(conn, name); addLog("save preset", [name], `gear=${r.gearSlots} officers=${r.officers}`);
+    const r = await api.presetSave(conn, name, gatherSettings()); addLog("save preset", [name], `gear=${r.gearSlots} officers=${r.officers}`);
     setPresetName(""); setActiveP({ name, fp: fingerprint }); await loadPresets(); return `Saved loadout "${r.saved}".`;
   });
-  const savePreset = () => {
+  const savePreset = async () => {
     const n = presetName.trim(); if (!n) { setMsg({ ok: false, text: "name the loadout first" }); return; }
-    if (presets.some((p) => p.name === n) && !confirm(`Overwrite the saved loadout "${n}"?`)) return;
+    if (presets.some((p) => p.name === n)
+      && !(await ask({ title: `Overwrite the saved loadout "${n}"?`, detail: "The stored slots and officers are replaced by what is fitted now.", confirmLabel: "Overwrite", danger: true }))) return;
     doSave(n);
   };
-  const updatePreset = (name: string) => { if (confirm(`Update "${name}" with the current loadout?`)) doSave(name); };
+  const updatePreset = async (name: string) => {
+    if (await ask({ title: `Update "${name}" with the current loadout?`, detail: "The stored slots and officers are replaced by what is fitted now.", confirmLabel: "Update" })) doSave(name);
+  };
   const restorePreset = (name: string) => run(async () => {
     const r = await api.presetRestore(conn, name); addLog("restore preset", [name], `changed=${r.changed} prior=${r.prior}`);
-    captureNext.current = name; return `Restored "${r.restored}" — ${r.changed} slot(s). Undo reverts it.`;
+    applySettings(r.settings); // reapply the saved optimizer settings (priorities, filters, booster types, …)
+    capture.current = { name, until: Date.now() + CAPTURE_MS };
+    return `Restored "${r.restored}" — ${r.changed} slot(s). Undo reverts it.`;
   });
-  const deletePreset = (name: string) => { if (!confirm(`Delete the saved loadout "${name}"?`)) return; run(async () => { await api.presetDelete(conn, name); if (active?.name === name) setActiveP(null); await loadPresets(); return `Deleted "${name}".`; }); };
+  const deletePreset = async (name: string) => {
+    if (!(await ask({ title: `Delete the saved loadout "${name}"?`, detail: "This cannot be undone.", confirmLabel: "Delete", danger: true }))) return;
+    run(async () => { await api.presetDelete(conn, name); if (active?.name === name) setActiveP(null); await loadPresets(); return `Deleted "${name}".`; });
+  };
 
   const totalChanges = (officerOnCurrent ? officerPairs.length : 0) + boosterPairs.length + gear.changes.length;
-  const gate = busy || !docked;
+  // Refitting happens in a personal hangar, and an industry station has none — so "docked" is not enough.
+  // Defaults to true so an older bridge, which sends no such flag, is not locked out of applying.
 
   return (
     <div className="summary">
+      {confirmUi}
       <div className="sum-head">
         <div className="panel-title">Loadout summary <span className="dim">— {boosters.loadout?.name ?? "ship"} · {totalChanges} change{totalChanges === 1 ? "" : "s"}</span></div>
         <div className="sum-actions">
-          <button className="apply" disabled={gate || totalChanges === 0} title={!docked ? "Dock to apply." : "Apply every change below to the current ship."} onClick={applyAll}>Apply all</button>
+          <button className="apply" disabled={gate || totalChanges === 0} title={cannotApply ?? "Apply every change below to the current ship."} onClick={applyAll}>Apply all</button>
           <button className="undo" disabled={gate} title="Restore the last applied change" onClick={undo}>Undo last</button>
         </div>
       </div>
-      <p className="sum-note">Every proposed change vs your current loadout. Apply a section on its own or all at once — one additive transient via <code>POST /loadout/apply</code>; <code>/undo</code> reverts the last apply.</p>
-      {!docked && <div className="sum-msg err">⚠ Undocked — dock to apply.</div>}
-      {msg && <div className={msg.ok ? "sum-msg ok" : "sum-msg err"}>{msg.ok ? "✓" : "⚠"} {msg.text}</div>}
+      <ApplyMsg apply={apply} />
+
+      {/* What the ship currently IS, above the list of what you're about to change about it. */}
 
       {/* Saved loadouts */}
       <div className="sum-presets">
@@ -209,8 +269,12 @@ export default function SummaryTab({
               <span className="preset-name">{p.name}{active?.name === p.name && <span className="dim"> · active{dirty ? " · modified" : ""}</span>}</span>
               <span className="dim">{p.ship} · {p.gearSlots} gear{crewSupported ? ` · ${p.officers} officers` : ""}</span>
               <span className="spacer" />
-              {active?.name === p.name && dirty && <button className="apply sm" disabled={busy || !docked} title="Overwrite this loadout with the current gear + officers" onClick={() => updatePreset(p.name)}>Update</button>}
-              <button className="apply sm" disabled={gate} title={!docked ? "Dock to restore." : "Restore onto the current ship (undoable)."} onClick={() => restorePreset(p.name)}>Restore</button>
+              {/* Saving only records state (bridge-side) — no docking needed, unlike Restore. Offered
+                  whenever the active loadout has drifted, AND whenever there's no active loadout at all:
+                  with no baseline to compare against, hiding Update left no way to update anything (the
+                  case after a fresh browser, a ship switch, or a fingerprint-format change). */}
+              {canUpdate(p.name) && <button className="apply sm" disabled={busy} title={active ? "Overwrite this loadout with the current gear + officers + preferences" : "No active loadout tracked — overwrite this one with the current state"} onClick={() => updatePreset(p.name)}>Update</button>}
+              <button className="apply sm" disabled={gate} title={cannotApply ?? "Restore onto the current ship (undoable)."} onClick={() => restorePreset(p.name)}>Restore</button>
               <button className="rm" title="delete" onClick={() => deletePreset(p.name)}>×</button>
             </div>
           ))}
@@ -240,8 +304,8 @@ export default function SummaryTab({
           </div>
           {boosterPairs.length ? boosterPairs.map((r, i) => (
             <ChangeRow key={i} onHover={setTip}
-              cur={r.cur && { label: `${r.cur.name} (+${fmt(boosterValue(r.cur))})`, color: RARITY_COLOR[r.cur.rarity] ?? "#cfcfcf", tile: boosterTypeColor(r.cur), tip: { item: r.cur, imgUrl: api.itemImageUrl(conn, r.cur.location ?? null, r.cur.key ?? null) } }}
-              next={r.next && { label: `${r.next.name} (+${fmt(boosterValue(r.next))})`, color: RARITY_COLOR[r.next.rarity] ?? "#cfcfcf", tile: boosterTypeColor(r.next), tip: { item: r.next, imgUrl: api.itemImageUrl(conn, r.next.location ?? null, r.next.key ?? null) } }} />
+              cur={r.cur && { label: `${r.cur.name} (+${fmt(boosterValue(r.cur))})`, color: RARITY_COLOR[r.cur.rarity] ?? "#cfcfcf", img: itemIcon(conn, r.cur), tile: boosterTypeColor(r.cur), tip: { item: r.cur, imgUrl: itemIcon(conn, r.cur) } }}
+              next={r.next && { label: `${r.next.name} (+${fmt(boosterValue(r.next))})`, color: RARITY_COLOR[r.next.rarity] ?? "#cfcfcf", img: itemIcon(conn, r.next), tile: boosterTypeColor(r.next), tip: { item: r.next, imgUrl: itemIcon(conn, r.next), vs: r.cur } }} />
           )) : <div className="sum-none">No booster changes.</div>}
         </div>
 
@@ -251,10 +315,11 @@ export default function SummaryTab({
             <div><b>Turrets &amp; modules</b> <span className="dim">— {gear.changes.length} change{gear.changes.length === 1 ? "" : "s"}</span></div>
             <button className="apply sm" disabled={gate || !gearPayload.length} title={!gearPayload.length ? "Pick gear in the Ship gear tab." : "Equip the selected gear."} onClick={applyGear}>Apply gear</button>
           </div>
+          <PlanNotice regresses={gear.planRegresses} />
           {gear.changes.length ? gear.changes.map((c, i) => (
             <ChangeRow key={i} onHover={setTip}
-              cur={c.current && { label: c.current.name, color: RARITY_COLOR[c.current.rarity] ?? "#cfcfcf", img: api.itemImageBySlot(conn, c.key), tip: { item: c.current, imgUrl: api.itemImageBySlot(conn, c.key) } }}
-              next={{ label: c.next.name, color: RARITY_COLOR[c.next.rarity] ?? "#cfcfcf", img: api.itemImageUrl(conn, c.next.location ?? null, c.next.key ?? null), tip: { item: c.next, imgUrl: api.itemImageUrl(conn, c.next.location ?? null, c.next.key ?? null) } }} />
+              cur={c.current && { label: c.current.name, color: RARITY_COLOR[c.current.rarity] ?? "#cfcfcf", img: api.itemImageBySlot(conn, c.key, c.current?.name), tip: { item: c.current, imgUrl: api.itemImageBySlot(conn, c.key, c.current?.name) } }}
+              next={{ label: c.next.name, color: RARITY_COLOR[c.next.rarity] ?? "#cfcfcf", img: itemIcon(conn, c.next), tip: { item: c.next, imgUrl: itemIcon(conn, c.next), vs: c.current } }} />
           )) : <div className="sum-none">No gear changes — pick some in the Ship gear tab.</div>}
         </div>
       </div>
@@ -264,7 +329,7 @@ export default function SummaryTab({
         <div className="sum-log-head">
           <span className="panel-title">Action log <span className="dim">— {log.length}, newest first (persists)</span>
             {playthrough && <span className="pt-chip" title={`Current playthrough: ${playthroughName ? `${playthroughName} (${playthrough})` : playthrough}`}>▷ {playthroughName || shortPt(playthrough)}</span>}</span>
-          <button className="undo-suggest" disabled={!log.length} onClick={() => { setLog([]); saveLog([]); }}>Clear</button>
+          <button className="undo-suggest" disabled={!log.length} onClick={clearLog}>Clear</button>
         </div>
         {log.length === 0
           ? <div className="sum-none">No actions yet — apply something and it's recorded here.</div>
@@ -273,6 +338,8 @@ export default function SummaryTab({
               <div className="log-line">
                 <span className="log-t">{e.t}</span>
                 <span className={`pt-chip${e.pt && playthrough && e.pt !== playthrough ? " other" : ""}`} title={e.pt ? `Playthrough: ${e.pt}` : "No playthrough recorded"}>{e.pt && e.pt === playthrough && playthroughName ? playthroughName : shortPt(e.pt)}</span>
+                {/* which hull the action hit — dimmed when it wasn't the ship you're on now */}
+                <span className={`ship-chip${e.ship && shipName && e.ship !== shipName ? " other" : ""}`} title={e.ship ? `Ship: ${e.ship}` : "No ship recorded"}>{e.ship ?? "—"}</span>
                 <span className="log-act">{e.action}</span><span className="log-res">{e.res}</span>
               </div>
               {e.req.length > 0 && <ul className="log-req">{e.req.map((l, j) => <li key={j}>{l}</li>)}</ul>}
@@ -280,14 +347,14 @@ export default function SummaryTab({
           ))}
       </div>
 
-      {tip?.item && <ItemTip it={tip.item} x={tip.x} y={tip.y} conn={conn} imgUrl={tip.imgUrl} />}
+      {tip?.item && <ItemTip it={tip.item} x={tip.x} y={tip.y} conn={conn} imgUrl={tip.imgUrl} vs={tip.vs} />}
       {tip?.officer && <OfficerTip o={tip.officer} x={tip.x} y={tip.y} portraitUrl={portraitUrl} />}
     </div>
   );
 }
 
-interface TipState { item?: Item; officer?: Officer; imgUrl?: string | null; x: number; y: number }
-interface Side { label: string; color: string; img?: string | null; tile?: string; tip?: { item?: Item; officer?: Officer; imgUrl?: string | null } }
+interface TipState { item?: Item; officer?: Officer; imgUrl?: string | null; vs?: Item | null; x: number; y: number }
+interface Side { label: string; color: string; img?: string | null; tile?: string; tip?: { item?: Item; officer?: Officer; imgUrl?: string | null; vs?: Item | null } }
 function ChangeRow({ cur, next, onHover }: { cur: Side | null | false; next: Side | null | false; onHover: (t: TipState | null) => void }) {
   return (
     <div className="chg-row">
@@ -299,18 +366,24 @@ function ChangeRow({ cur, next, onHover }: { cur: Side | null | false; next: Sid
 }
 function Cell({ side, placeholder, onHover }: { side: Side | null; placeholder: string; onHover: (t: TipState | null) => void }) {
   if (!side) return <span className="chg-cell dim">{placeholder}</span>;
+  // enter/leave only — the tips follow the cursor themselves (see useCursorTip), so a move doesn't
+  // re-render the summary.
   const hov = side.tip
     ? {
       onMouseEnter: (e: MouseEvent) => onHover({ ...side.tip!, x: e.clientX, y: e.clientY }),
-      onMouseMove: (e: MouseEvent) => onHover({ ...side.tip!, x: e.clientX, y: e.clientY }),
       onMouseLeave: () => onHover(null),
     }
     : {};
   return (
     <span className="chg-cell" {...hov}>
-      {side.tile
-        ? <span className="chg-tile" style={{ background: side.tile }} />
-        : <span className="chg-portrait" style={{ borderColor: side.color }}>{side.img && <span className="portrait-img" style={{ backgroundImage: `url("${side.img}")` }} />}</span>}
+      {/* The item's own icon wins. `tile` is a flat booster-TYPE colour and used to take precedence, so booster
+          rows showed a coloured square where every other row showed art — and the type is already in the name
+          ("Combat R-Booster"). It stays as the fallback for an item whose icon is missing. */}
+      {side.img
+        ? <span className="chg-portrait" style={{ borderColor: side.color }}><span className="portrait-img" style={{ backgroundImage: `url("${side.img}")` }} /></span>
+        : side.tile
+          ? <span className="chg-tile" style={{ background: side.tile }} />
+          : <span className="chg-portrait" style={{ borderColor: side.color }} />}
       <span style={{ color: side.color }}>{side.label}</span>
     </span>
   );
@@ -318,12 +391,12 @@ function Cell({ side, placeholder, onHover }: { side: Side | null; placeholder: 
 
 // Compact officer tooltip (game-style card) for the change rows.
 function OfficerTip({ o, x, y, portraitUrl }: { o: Officer; x: number; y: number; portraitUrl: (g: string | null) => string | null }) {
-  const flip = x > window.innerWidth / 2;
-  const style: CSSProperties = { position: "fixed", top: Math.min(y + 14, window.innerHeight - 80), left: flip ? undefined : x + 16, right: flip ? window.innerWidth - x + 16 : undefined };
+  // Same cursor tracking as the item tip: measured + clamped in the DOM, no re-render per move.
+  const { ref, style } = useCursorTip(x, y);
   const pu = portraitUrl(o.guid);
   const skills = (o.potential ?? []).slice(0, 10);
   return (
-    <div className="git" style={style}>
+    <div className="git" ref={ref} style={style}>
       <div className="git-top">
         <div>
           <div className="git-cls">{o.profession}</div>
@@ -338,3 +411,4 @@ function OfficerTip({ o, x, y, portraitUrl }: { o: Officer; x: number; y: number
     </div>
   );
 }
+

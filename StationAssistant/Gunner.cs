@@ -15,7 +15,7 @@ using UnityEngine;
 
 namespace StationAssistant
 {
-    // Ammo valet. Operates on the current ship's cargo only, while docked.
+    // Gunner. Operates on the current ship's cargo only, while docked.
     //  - Stows ammo the equipped guns don't use into the armory (the player's global stash).
     //  - RunNow: brings each equipped gun's ammo to its per-ship, per-ammo target — tops up when
     //    below (armory then shop) and stows the excess back to the armory when above.
@@ -23,7 +23,7 @@ namespace StationAssistant
     //    across the equipped guns' ammo types (rounded up per ammo), never exceeding free space.
     // Both pull from the armory first, then buy the remainder from the station shop.
     // Blocked while ECHO drives (ECHO manages its own ammo).
-    internal static class AmmoValet
+    internal static class Gunner
     {
         // Fraction of total cargo capacity to fill with ammo when autoloading.
         private const float AutoloadCapacityFraction = 0.10f;
@@ -33,6 +33,7 @@ namespace StationAssistant
             internal int Stowed;   // moved cargo -> armory
             internal int Pulled;   // moved armory -> cargo
             internal int Bought;   // bought from shop -> cargo
+            internal MoveLog Moves; // which items moved, per direction (null on the failure paths)
             internal string Reason;
         }
 
@@ -63,15 +64,19 @@ namespace StationAssistant
         {
             try
             {
-                var s = Member(p, "autopilotSettings");
-                if (Member(s, "ammoMinutes") is int m && m > 0) return m;
+                var s = Util.Member(p, "autopilotSettings");
+                if (Util.Member(s, "ammoMinutes") is int m && m > 0) return m;
             }
             catch { }
             return 3;
         }
 
-        // Rounds to stock for one ammo type = sum over the equipped guns that use it of ECHO's own reload
-        // formula: (int)(defaultAttacksPerSecond * ammoSeconds / shotsPerAmmo). See doc/vanguard-galaxy-api.md.
+        // Rounds to stock for one ammo type = sum over the equipped guns that use it of the TRUE ammo
+        // consumed over `ammoSeconds` of sustained fire:
+        //     defaultAttacksPerSecond * ammoSeconds * ammoPerShot / shotsPerAmmo
+        // (`AbstractTurret.RecordShotFired`). ECHO's own reload formula
+        // omits `ammoPerShot`, which under-stocks guns that fire >1 round/shot (autocannons) — so it runs
+        // dry well before the configured minutes. We include it and round UP so the stock actually lasts.
         private static int EchoAmmoTarget(SpaceShipData ship, InventoryItemType ammo, int ammoSeconds)
         {
             var total = 0;
@@ -81,17 +86,10 @@ namespace StationAssistant
             {
                 var t = hp?.GetComponent<AbstractTurret>();
                 if (t == null || !t.HasAmmoType() || t.ammoType != ammo) continue;
-                total += (int)(t.defaultAttacksPerSecond * ammoSeconds / Math.Max(1, t.shotsPerAmmo));
+                total += (int)Math.Ceiling((double)t.defaultAttacksPerSecond * ammoSeconds
+                    * Math.Max(1, t.ammoPerShot) / Math.Max(1, t.shotsPerAmmo));
             }
             return total;
-        }
-
-        private static object Member(object o, string name)
-        {
-            if (o == null) return null;
-            var ty = o.GetType();
-            var pi = ty.GetProperty(name); if (pi != null) return pi.GetValue(o);
-            var fi = ty.GetField(name); return fi?.GetValue(o);
         }
 
         // For the settings window: ECHO's minutes + the computed per-ammo target (read-only preview).
@@ -108,9 +106,9 @@ namespace StationAssistant
                 if (ctx is null)
                     return fail;
 
-                var r = new AmmoResult { Reason = "ok" };
+                var r = new AmmoResult { Reason = "ok", Moves = new MoveLog() };
                 if (cfg.AmmoStowUnused.Value)
-                    r.Stowed += StowUnused(ctx);
+                    r.Stowed += StowUnused(ctx, r.Moves);
 
                 // ECHO-minutes mode: target each ammo type for enough rounds to fire ECHO's configured
                 // number of minutes across every gun that uses it — the same formula ECHO reloads with.
@@ -137,7 +135,7 @@ namespace StationAssistant
             }
             catch (Exception ex)
             {
-                Plugin.Log.LogWarning($"Ammo valet skipped after an error: {ex}");
+                Plugin.Log.LogWarning($"Gunner skipped after an error: {ex}");
                 return Fail("error");
             }
         }
@@ -152,8 +150,8 @@ namespace StationAssistant
                 if (ctx is null)
                     return fail;
 
-                var r = new AmmoResult { Reason = "ok" };
-                r.Stowed += StowUnused(ctx); // autoload always clears unused ammo
+                var r = new AmmoResult { Reason = "ok", Moves = new MoveLog() };
+                r.Stowed += StowUnused(ctx, r.Moves); // autoload always clears unused ammo
 
                 if (ctx.Used.Count > 0)
                 {
@@ -177,7 +175,7 @@ namespace StationAssistant
             }
             catch (Exception ex)
             {
-                Plugin.Log.LogWarning($"Ammo valet skipped after an error: {ex}");
+                Plugin.Log.LogWarning($"Gunner skipped after an error: {ex}");
                 return Fail("error");
             }
         }
@@ -241,7 +239,7 @@ namespace StationAssistant
         }
 
         // Move ammo the equipped guns don't use from cargo to the armory. Returns units stowed.
-        private static int StowUnused(Context ctx)
+        private static int StowUnused(Context ctx, MoveLog log)
         {
             if (ctx.Armory == null)
                 return 0;
@@ -264,10 +262,11 @@ namespace StationAssistant
                     ctx.Armory.Add(e.item, count);
                     ctx.Cargo.Remove(e, count);
                     stowed += count;
+                    MoveLog.Add(log?.Stowed, Util.ItemName(e.item), count);
                 }
                 catch (Exception ex)
                 {
-                    Plugin.Log.LogWarning($"Ammo valet: could not stow {e.item.identifier}: {ex.Message}");
+                    Plugin.Log.LogWarning($"Gunner: could not stow {e.item.identifier}: {ex.Message}");
                 }
             }
             return stowed;
@@ -283,10 +282,11 @@ namespace StationAssistant
                 ctx.Armory.Add(ammo, excess);
                 ctx.Cargo.Remove(ammo, excess);
                 r.Stowed += excess;
+                MoveLog.Add(r.Moves?.Stowed, Util.ItemName(ammo), excess);
             }
             catch (Exception ex)
             {
-                Plugin.Log.LogWarning($"Ammo valet: could not stow excess {ammo.identifier}: {ex.Message}");
+                Plugin.Log.LogWarning($"Gunner: could not stow excess {ammo.identifier}: {ex.Message}");
             }
         }
 
@@ -307,11 +307,12 @@ namespace StationAssistant
                         ctx.Armory.Remove(ammo, take);
                         ctx.Cargo.Add(ammo, take);
                         r.Pulled += take;
+                        MoveLog.Add(r.Moves?.Pulled, Util.ItemName(ammo), take);
                         need -= take;
                     }
                     catch (Exception ex)
                     {
-                        Plugin.Log.LogWarning($"Ammo valet: could not pull {ammo.identifier} from armory: {ex.Message}");
+                        Plugin.Log.LogWarning($"Gunner: could not pull {ammo.identifier} from armory: {ex.Message}");
                     }
                 }
             }
@@ -319,7 +320,9 @@ namespace StationAssistant
             if (need > 0 && autoBuy && ctx.Shop != null)
             {
                 var id = ammo.identifier;
-                r.Bought += DecoyLogic.BuyFromShop(ctx.Player, ctx.Shop, t => t != null && t.identifier == id, need);
+                var got = DecoyLogic.BuyFromShop(ctx.Player, ctx.Shop, t => t != null && t.identifier == id, need);
+                r.Bought += got;
+                MoveLog.Add(r.Moves?.Bought, Util.ItemName(ammo), got);
             }
         }
 
@@ -333,8 +336,8 @@ namespace StationAssistant
             if (r.Pulled > 0 || r.Bought > 0)
                 RefreshStorage(ctx.Armory);
 
-            Plugin.Log.LogInfo($"Ammo valet: stowed {r.Stowed}, pulled {r.Pulled} from armory, bought {r.Bought}.");
-            Notify(Loc.F("ammo.result.ok", r.Stowed, r.Pulled, r.Bought));
+            Plugin.Log.LogInfo($"Gunner: stowed {r.Stowed}, pulled {r.Pulled} from armory, bought {r.Bought}.");
+            Util.Notify(Loc.F("ammo.result.ok", Util.Moved(r.Moves, r.Stowed, r.Pulled, r.Bought, "round")));
         }
 
         private static void RefreshStorage(Inventory storage)
@@ -349,15 +352,5 @@ namespace StationAssistant
         }
 
         private static AmmoResult Fail(string reason) => new AmmoResult { Reason = reason };
-
-        private static void Notify(string text)
-        {
-            try
-            {
-                Singleton<NotificationManager>.Instance
-                    .CreateNotification(text).WithColor(ColorHelper.greenish).WithCustomTime(3f).Show();
-            }
-            catch { }
-        }
     }
 }

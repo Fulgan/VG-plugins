@@ -7,11 +7,23 @@
   color: #8a8a8a; padding: 7px 16px; border-radius: 6px 6px 0 0; cursor: pointer; font-size: 13px;
 }
 .tabs button.on { background: #17171b; border-color: #3a4a63; color: #e6e6e6; font-weight: 600; }
-.opp-badge { margin-left: 6px; font-size: 10px; font-weight: 700; color: #0d0d10; border-radius: 9px; padding: 1px 6px; }
-.opp-badge.inv { background: #4aa3ff; }
-.opp-badge.shop { background: #ffcf70; margin-left: 4px; }
-.opp-badge.hire { background: #4ad06a; }
-.opp-badge.apply { background: #86b0ff; }
+/* The tab badge — ONE rule, because there is ONE component (TabBadge). Every badge is `<count> <label>`, so they
+   all render as the same pill at the same height; the previous mix of "1 inv" and a bare "1" put a pill and a
+   circle side by side and they read as different kinds of thing. */
+.opp-badge {
+  display: inline-flex; align-items: center; vertical-align: middle;
+  margin-left: 6px; padding: 0 6px; height: 15px; border-radius: 999px;
+  font-size: 10px; font-weight: 700; line-height: 1; white-space: nowrap; color: #0d0d10;
+}
+/* Kind classes are namespaced `b-*` on purpose: a bare `.apply` collides with the Apply BUTTON's own rule below,
+   which is declared later at equal specificity — the badge then took a button's padding, font size and colour and
+   only its background survived. */
+.opp-badge.b-inv { background: #4aa3ff; }
+.opp-badge.b-shop { background: #ffcf70; margin-left: 4px; }
+.opp-badge.b-hire { background: #4ad06a; }
+.opp-badge.b-pending { background: #86b0ff; }
+/* A standing note, not a count: outlined rather than filled, so it does not read as work waiting. */
+.opp-badge.b-note { background: transparent; border: 1px solid #3a3a44; color: #8a8a94; font-weight: 600; }
 
 /* ---- officer optimizer ---- */
 .officers { margin-top: 12px; display: flex; flex-direction: column; gap: 16px; }
@@ -88,6 +100,30 @@
 .ap-drone { flex: 0 0 auto; font-size: 10px; color: #86efac; }
 .ap-eff { color: #7d7d86; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* permanent, searchable skill browser (replaces the add-priority dropdown) */
+.skill-browser { margin-top: 10px; border-top: 1px solid #23232a; padding-top: 10px; }
+.skill-browser-head { display: flex; align-items: center; gap: 8px; justify-content: space-between; margin-bottom: 8px; }
+.skill-browser-head b { flex: 0 0 auto; font-size: 12.5px; }
+/* Full-width on its own row, with room on the right for the clear button that sits inside it. */
+.skill-search-row { position: relative; display: flex; margin-bottom: 8px; }
+.skill-search { flex: 1; min-width: 0; background: #1b1b1f; border: 1px solid #333; color: #eee; padding: 5px 26px 5px 8px; border-radius: 4px; font-size: 12px; }
+.skill-search-x {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  background: transparent; border: none; color: #8a8a94; cursor: pointer; font-size: 15px; line-height: 1; padding: 0 4px;
+}
+.skill-search-x:hover { color: #e6e6e6; }
+.skill-cats { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; }
+.cat-chip { background: #1b1b1f; border: 1px solid #333; color: #9a9aa4; padding: 2px 9px; border-radius: 11px; font-size: 11px; cursor: pointer; }
+.cat-chip.on { background: #1e293b; border-color: #3a4a63; color: #dbeafe; font-weight: 600; }
+.cat-chip.clr { color: #b98; border-color: #4a3d33; }
+.skill-browser-list { max-height: 300px; overflow-y: auto; border: 1px solid #23232a; border-radius: 5px; background: #101014; }
+.skill-browser-list .ap-eff { flex: 1 1 auto; min-width: 0; }
+.skill-browser-list .add-prio-item { border-bottom: 1px solid #17171c; }
+.ap-add { margin-left: auto; flex: 0 0 auto; font-size: 10.5px; color: #6f6f78; }
+.add-prio-item:not(.added):hover .ap-add { color: #86efac; }
+.add-prio-item.added { opacity: 0.5; cursor: default; }
+.add-prio-item.added:hover { background: transparent; }
+
 .crew-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
 .crew-diff { font-size: 11.5px; font-weight: 600; }
 .crew-diff .up { color: #86efac; }
@@ -130,7 +166,7 @@
 
 .roster { display: flex; flex-direction: column; gap: 2px; }
 /* aligned columns: badge · avatar · name · profession · MAX · idle · skills · force */
-.roster-row { display: grid; grid-template-columns: 14px 26px 156px 104px 40px 92px 1fr auto; align-items: center; gap: 10px;
+.roster-row { display: grid; grid-template-columns: 14px 26px 156px 104px 40px 1fr 92px auto; align-items: center; gap: 10px;
   padding: 5px 8px; border-radius: 6px; border: 1px solid transparent; opacity: .72; }
 .roster-row.on { background: #12160f; border-color: #243019; opacity: 1; }
 .badge-dot { font-size: 11px; text-align: center; }
@@ -145,7 +181,7 @@
 .xp-sep { flex: 0 0 auto; width: 2px; align-self: stretch; min-height: 14px; background: #d0433f; border-radius: 1px; margin: 0 3px; }
 .pin.on { background: #2a2410; border-color: #6b5320; color: #ffcf70; }
 
-.recruit-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 6px;
+.recruit-row { display: grid; grid-template-columns: 34px 156px 104px 40px 1fr auto auto auto; align-items: center; gap: 10px; padding: 5px 10px; border-radius: 6px;
   background: #101014; border: 1px solid #23232a; opacity: 0.6; margin-bottom: 6px; }
 .recruit-row.opp { background: #12160f; border-color: #2b3a24; opacity: 1; }
 .recruit-id { min-width: 150px; }
@@ -189,6 +225,8 @@
 .sum-msg { margin: 10px 0; padding: 8px 12px; border-radius: 6px; font-size: 12.5px; }
 .sum-msg.ok { background: #12200f; border: 1px solid #2f6b3a; color: #86efac; }
 .sum-msg.err { background: #241012; border: 1px solid #6b2f2f; color: #ff9a9a; }
+/* A caution about a plan, not a failure that already happened — amber, so it doesn't read as an error. */
+.sum-msg.warn { background: #201c10; border: 1px solid #6b5320; color: #ffcf70; }
 .sum-pending { margin: 10px 0; padding: 8px 12px; border-radius: 6px; font-size: 12.5px;
   background: #201c10; border: 1px solid #6b5320; color: #ffcf70; display: flex; align-items: center; gap: 10px; }
 .sum-pending button { margin-left: auto; background: #2a2a33; border: 1px solid #444; color: #bbb;
@@ -207,7 +245,10 @@
 .bcard.best { border-color: #2b3a24; }
 .bcard.empty { border-style: dashed; border-color: #2a2a30; background: #101014; }
 .bcard-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.bicon { flex: 0 0 auto; width: 16px; height: 16px; border-radius: 3px; border: 1px solid #555; background: #0e1420; }
+/* Booster icons: the game-rendered art sits on the booster-type colour, so the colour still signals the
+   type and shows through if the render is missing. 22px in the slot cards — 16px was too small to read
+   art in, and the cards looked bare without it. */
+.bicon { flex: 0 0 auto; width: 22px; height: 22px; border-radius: 3px; border: 1px solid #555; background-color: #0e1420; background-position: center; background-size: contain; background-repeat: no-repeat; }
 .bname { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .blvl { margin-left: auto; flex: 0 0 auto; font-size: 10.5px; color: #8a8a8a; }
 .bcard-val { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
@@ -262,7 +303,7 @@
 .bsort { flex: 0 0 auto; background: transparent; border: none; padding: 0; cursor: pointer; font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: #8a8a8a; text-align: left; }
 .bsort.on { color: #e6e6e6; }
 .bh { flex: 0 0 auto; font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: #8a8a8a; }
-.bicon26 { flex: 0 0 auto; width: 26px; height: 26px; border-radius: 4px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.15); }
+.bicon26 { flex: 0 0 auto; width: 26px; height: 26px; border-radius: 4px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.15); background-position: center; background-size: contain; background-repeat: no-repeat; }
 .btype { flex: 0 0 auto; font-size: 11.5px; color: #9aa4b2; }
 .bvalc { flex: 0 0 auto; font-size: 12.5px; color: #86efac; font-variant-numeric: tabular-nums; text-align: right; }
 .blvlc { flex: 0 0 auto; font-size: 11.5px; color: #8a8a8a; }
@@ -295,25 +336,101 @@
 .sum-card.more { opacity: .5; }
 
 /* ---- ship gear editor ---- */
-.gear-ship { display: flex; justify-content: center; margin: 10px 0 14px; }
+/* Ship art with the whole-build figures to its right. `center` keeps the art centred when the panel is
+   absent (no reactor / older bridge); the panel wraps under the art on a narrow screen rather than squeezing
+   it. `align-items: flex-start` so the panel sits at the top edge of the art, not floating mid-height. */
+.gear-ship { display: flex; justify-content: center; align-items: flex-start; gap: 14px; flex-wrap: wrap; margin: 10px 0 14px; }
+
+/* ---- whole-build totals ---- */
+.gear-totals {
+  flex: 0 1 260px; min-width: 220px; box-sizing: border-box;
+  background: #101216; border: 1px solid #23252c; border-radius: 8px; padding: 10px 12px; font-size: 12px;
+}
+.gt-head { font-size: 12.5px; font-weight: 600; color: #cfcfcf; margin-bottom: 8px; }
+.gt-row { display: flex; align-items: baseline; gap: 6px; padding: 3px 0; }
+.gt-label { flex: 1 1 auto; color: #8a8a94; }
+/* Tabular figures and a fixed slot per number, so a changing projection can't jiggle the column. */
+.gt-cur, .gt-next { flex: 0 0 auto; font-variant-numeric: tabular-nums; color: #e6e6e6; }
+.gt-arrow { flex: 0 0 auto; color: #6f7683; }
+.gt-next.up { color: #86efac; font-weight: 600; }
+.gt-next.down { color: #f0a0a0; font-weight: 600; }
+.gt-sep { height: 1px; background: #1c1c22; margin: 8px 0 6px; }
+.gt-note { font-size: 10.5px; line-height: 1.45; margin-top: 5px; }
+.gt-warn { font-size: 10.5px; line-height: 1.45; margin-top: 7px; border-radius: 4px; padding: 5px 7px; }
+.gt-warn.bad { background: #2a1a1a; border: 1px solid #5a3232; color: #f0c0c0; }
+.gt-warn.good { background: #16241a; border: 1px solid #2b3a24; color: #b8e6c0; }
 .gear-ship-wrap { position: relative; display: inline-block; }
 .gear-img { display: block; max-width: 100%; image-rendering: pixelated; background: #0c0e12; border: 1px solid #23252c; border-radius: 8px; }
 .gear-mount { position: absolute; transform: translate(-50%, -50%); pointer-events: none; }
 .gear-mount-dot { display: block; width: 10px; height: 10px; border-radius: 50%; border: 2px solid #86b0ff88; background: #86b0ff33; box-shadow: 0 0 4px #0008; }
 .gear-mount.hot .gear-mount-dot { width: 18px; height: 18px; border-color: #ffcf70; background: #ffcf7066; box-shadow: 0 0 10px #ffcf70cc; }
 
+/* ---- gear tab: art + totals as a LEFT column, slots pulled up beside them ----
+   Centred above the slots, the art and the build panel cost a full screen of height and left the whole left
+   half empty. Wide enough, they become a sticky column and the hardpoints start at the top of the page.
+
+   Done by placing `.gear`'s existing children in a grid — no wrapper element — so the single-column layout
+   below the breakpoint is simply the grid not applying. 1200px is where a 300px column still leaves the slot
+   panels their two-across width; under that, one column reads better than two cramped ones. */
+@media (min-width: 1200px) {
+  .gear {
+    display: grid;
+    grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+    column-gap: 14px;
+    align-items: start;
+  }
+  /* Everything lands in the right column unless placed otherwise. `min-width: 0` because a grid item's
+     default `auto` minimum would let the slot tables push the column wider than the screen. */
+  .gear > * { grid-column: 2; min-width: 0; }
+  /* The action row spans both, so Categories / Apply / Summary stay where the eye already looks for them. */
+  .gear > .sum-head { grid-column: 1 / -1; }
+  /* Art + totals: left column, stacked, and spanning the rows the slots occupy so it can stick while they
+     scroll. The row span is a ceiling, not a count — extra rows cost nothing. */
+  .gear > .gear-ship {
+    grid-column: 1;
+    grid-row: 2 / span 20;
+    position: sticky;
+    top: 8px;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    margin: 0 0 12px;
+  }
+  .gear > .gear-ship .gear-totals { flex: 0 0 auto; min-width: 0; }
+}
+
 .gear-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
 .gear-col { background: #14161b; border: 1px solid #23252c; border-radius: 8px; padding: 10px; }
 .gear-col-head { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: #b9bec7; margin-bottom: 8px; }
-.gear-panel { border: 1px solid #23252c; border-radius: 6px; padding: 8px; margin-bottom: 8px; background: #101216; }
+.gear-panel { position: relative; border: 1px solid #23252c; border-radius: 6px; padding: 8px; margin-bottom: 8px; background: #101216; }
 .gear-panel:hover { border-color: #ffcf7066; }
 .gear-panel-head { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: #7d7d86; margin-bottom: 6px; }
 .gear-swap { display: flex; align-items: stretch; gap: 6px; }
-.gear-vig { flex: 1; min-width: 0; background: #0c0e12; border: 1px solid #23232a; border-radius: 5px; padding: 6px; }
+.gear-vig { flex: 1; min-width: 0; background: #0c0e12; border: 1px solid #23232a; border-radius: 5px; padding: 5px 6px; }
 .gear-vig.best { border-color: #2b3a24; }
 .gear-vig-tag { font-size: 9px; text-transform: uppercase; letter-spacing: .05em; color: #6a6a72; }
+/* icon beside the name/stat lines — game-rendered art, so a slot panel is recognisable without hovering */
+/* One row, never wrapping: wrapping the aspect cluster onto its own line made every card taller and left the
+   space beside the icon empty. The text truncates and the badges shrink instead — a card is a summary. */
+.gear-vig-body { display: flex; align-items: center; gap: 6px; min-width: 0; }
+/* The text wins the space it needs; the badge cluster gives way (it has a title tooltip either way). */
+.gear-vig-text { min-width: 0; flex: 1 1 auto; }
+.gear-vig-icon { flex: 0 0 auto; width: 30px; height: 30px; border-radius: 4px; background: #0e1420 center/contain no-repeat; border: 1px solid #23232a; }
 .gear-vig-name { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gear-vig-sub { font-size: 10.5px; color: #86efac; }
+.gear-vig-sub { font-size: 10.5px; color: #86efac; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A slot's "no proposal" verdict. Wraps, unlike .gear-vig-name: it is a sentence, and truncating it to an
+   ellipsis would hide exactly the part that distinguishes the four reasons from each other. */
+/* "changes nothing" — a pick identical to what is fitted. Quiet, but present: the slot would otherwise show a
+   pending swap that `changes` has already discarded. */
+.gear-vig-same { display: block; font-size: 10px; color: #8a8a94; font-style: italic; margin-top: 2px; }
+.gear-vig-verdict { font-size: 11px; font-weight: 600; color: #9aa4b2; padding: 2px 4px; }
+.gear-vig-why { display: block; font-size: 10px; font-weight: 400; color: #6b7280; margin-top: 2px; white-space: normal; }
+
+/* Aspect badges as a right-hand cluster in a slot card: pushed off the name/stat block by `auto`, wrapping
+   into a second row at two per line so a 3-aspect item grows DOWNWARD rather than squeezing the name. */
+.gear-vig-asps { flex: 0 1 auto; margin-left: auto; align-self: center; max-width: 42px; overflow: hidden; }
+/* The badge row is inline-flex and would overflow rather than stack, so it wraps explicitly here. */
+.gear-vig-asps .asp-marks { display: flex; flex-wrap: nowrap; justify-content: flex-end; gap: 3px; }
 .gear-arrow { align-self: center; color: #4ad06a; flex: 0 0 auto; }
 .gear-sel { width: 100%; margin-top: 6px; background: #1b1b1f; border: 1px solid #333; color: #eee; padding: 4px 6px; border-radius: 4px; font-size: 12px; }
 
@@ -347,15 +464,24 @@
 .gear-mod-head { display: flex; align-items: center; gap: 8px; margin: 4px 0 8px; }
 .gear-mod-head .spacer { flex: 1; }
 .setall { width: auto; flex: 0 0 auto; }
+.fsel.setall { margin-top: 0; }
+.fsel.setall .fsel-btn { padding: 4px 10px; }
+.fsel.setall .fsel-pop { left: auto; right: 0; min-width: 220px; }
 .slot-sug { float: right; background: none; border: 1px solid #2a2a30; border-radius: 4px; color: #ffcf70; cursor: pointer; font-size: 11px; line-height: 1; padding: 1px 5px; }
 .slot-sug:hover { border-color: #ffcf70; background: #ffcf7022; }
+/* Lock the slot to whatever is fitted. Sits beside the per-slot suggest because it is the answer to the same
+   question — "what goes here" — and its off state stays quiet so a row of unlocked slots does not read as busy. */
+.slot-lock { float: right; background: none; border: 1px solid #2a2a30; border-radius: 4px; color: #6b7280; cursor: pointer; font-size: 11px; line-height: 1; padding: 1px 5px; margin-right: 3px; }
+.slot-lock:hover { border-color: #9aa4b2; color: #cfcfcf; }
+.slot-lock.on { border-color: #7dd3fc; color: #7dd3fc; background: #7dd3fc1a; }
 .gear-panel { cursor: pointer; }
 .gear-panel.sel { border-color: #86b0ff; box-shadow: 0 0 0 1px #86b0ff55; }
 .gear-panel.droptgt { border-color: #ffcf70; box-shadow: 0 0 0 2px #ffcf7066; }
 .gear-panel.dim { opacity: .3; }
 .gear-vig.dim { opacity: .5; }
 .vig-x { float: right; background: none; border: none; color: #d77; cursor: pointer; font-size: 13px; line-height: 1; padding: 0 2px; }
-.gear-list-panel { flex: 0 0 300px; width: 300px; position: sticky; top: 8px; background: #101216; border: 1px solid #23252c; border-radius: 8px; padding: 10px; }
+/* Candidate rail: a bit wider when there is room (name + badges + % + level + button all live on one row). */
+.gear-list-panel { flex: 0 0 clamp(300px, 22vw, 400px); width: clamp(300px, 22vw, 400px); position: sticky; top: 8px; background: #101216; border: 1px solid #23252c; border-radius: 8px; padding: 10px; }
 .gear-list-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
 .gear-list-search { width: 100%; box-sizing: border-box; margin-bottom: 6px; background: #1b1b1f; border: 1px solid #333; color: #eee; padding: 4px 8px; border-radius: 4px; font-size: 12px; }
 .gear-asp-filter { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 6px 0; }
@@ -363,9 +489,9 @@
 .asp-chip.on { color: #86efac; border-color: #2b3a24; background: #16241a; }
 .asp-chip.clr { color: #d77; }
 .gear-list { display: flex; flex-direction: column; gap: 3px; max-height: 62vh; overflow: auto; }
-.gear-litem { display: flex; align-items: center; gap: 7px; padding: 4px 6px; border: 1px solid #1c1c22; border-radius: 5px; background: #0e1014; cursor: grab; }
+/* `user-select: none`: a press-and-drag on a row must start the DRAG, not a text selection across the list. */
+.gear-litem { display: flex; align-items: center; gap: 7px; padding: 4px 6px; border: 1px solid #1c1c22; border-radius: 5px; background: #0e1014; cursor: pointer; user-select: none; }
 .gear-litem:hover { border-color: #86b0ff66; }
-.gear-litem:active { cursor: grabbing; }
 .li-icon { flex: 0 0 auto; width: 28px; height: 28px; background: #0c0e12 center/contain no-repeat; border-radius: 4px; border: 1px solid #23232a; }
 .li-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .li-slots { flex: 0 0 auto; color: #c07bff; font-size: 10px; letter-spacing: 1px; }
@@ -381,6 +507,10 @@
 .git-q { color: #ffb020; }
 .git-img { display: block; width: 64px; height: 64px; background: center/contain no-repeat; margin: 6px 0; }
 .git-main { font-size: 15px; font-weight: 700; color: #4aa3ff; margin: 4px 0; }
+/* main-stat row hosts the power pie at its right edge (see .pow-pie in App.css) — absolute so the
+   pie never grows the row */
+.git-main-row { position: relative; }
+.git-main-row > .pow-pie { position: absolute; right: 0; top: 50%; transform: translateY(-50%); }
 .git-line { font-size: 11.5px; color: #b9bec7; }
 .git-icons { display: flex; gap: 14px; font-size: 11.5px; color: #86b0ff; margin: 4px 0; }
 .git-subs { margin: 5px 0; }
@@ -389,6 +519,24 @@
 .git-asp-name { color: #c07bff; font-size: 11.5px; font-weight: 600; }
 .git-asp-desc { font-size: 10.5px; color: #9aa4b2; }
 .git-foot { display: flex; justify-content: space-between; gap: 8px; margin-top: 6px; border-top: 1px solid #1c1c22; padding-top: 4px; font-size: 10.5px; color: #7d7d86; }
+.git-cmp { margin-top: 6px; border-top: 1px solid #1c1c22; padding-top: 5px; }
+.git-cmp-head { font-size: 10px; color: #7d7d86; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 3px; }
+.git-cmp-row { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: #b9bec7; }
+.git-cmp-row.dim { color: #6b6b73; font-style: italic; }
+.git-cmp-row .up { color: #86efac; }
+.git-cmp-row .down { color: #f87171; }
+/* two-panel comparison tooltip: fixed flex container holding static .git panels side by side */
+/* Row of comparison panels. Wraps rather than squashing: the hovered item can now be shown against
+   several equipped slots at once, and 5 panels exceed a narrow window — stacked rows stay readable,
+   shrunken 264px cards do not. */
+.gits { position: fixed; display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; z-index: 200; pointer-events: none; max-width: calc(100vw - 16px); }
+.git-static { position: static; flex: 0 0 auto; }
+.git-vs { border-color: #3a4150; }
+/* Same signalling as the inventory tooltip (.tip.hovered / .tip.better in App.css): light blue = the
+   hovered item, dark gold = a compared item that beats it on the same main stat. */
+.git.hovered { border-color: #4aa3ff; box-shadow: 0 0 0 1px #4aa3ff55, 0 0 18px #4aa3ff5c, 0 6px 24px #000a; }
+.git.better { border-color: #a87d1a; box-shadow: 0 0 0 1px #b8860b66, 0 0 16px #b8860b70, 0 6px 24px #000a; }
+.git-tag { color: #7d7d86; font-weight: 400; }
 
 /* persistent action log */
 .sum-log { margin-top: 14px; padding: 10px 12px; border: 1px solid #23252c; border-radius: 8px; background: #101216; }
@@ -428,3 +576,138 @@
 .oc-bonus { font-size: 10.5px; color: #86efac; }
 
 .preset-row.active { background: #12203a; border-radius: 6px; } /* highlight only — padding matches normal rows so content stays aligned */
+
+/* hire straight from the Personnel Center list (ctrl+click skips the confirm) */
+.recruit-hire { flex: 0 0 auto; background: #14281c; border: 1px solid #2c5238; color: #86efac;
+  border-radius: 4px; font-size: 11px; padding: 1px 8px; cursor: pointer; margin-left: 6px; }
+.recruit-hire:hover:not(:disabled) { border-color: #4ad06a; }
+.recruit-hire:disabled { opacity: .4; cursor: default; color: #7d7d86; border-color: #2a2d36; background: none; }
+
+.recruit-hire.blocked { color: #fca5a5; border-color: #4a2a2a; background: #221618; cursor: help; }
+.recruit-hire.blocked:hover { border-color: #7a3030; }
+
+/* priority list export / import — portable across ships, playthroughs and players */
+.prio-io { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 6px 0 4px; font-size: 11px; }
+.prio-io button, .prio-io .import-cfg {
+  font-size: 11px; padding: 1px 8px; cursor: pointer;
+  background: #1b1b22; color: #cfcfd8; border: 1px solid #33333e; border-radius: 3px;
+}
+.prio-io button:hover:not(:disabled), .prio-io .import-cfg:hover { border-color: #4a4a58; }
+.prio-io button:disabled { opacity: .45; cursor: default; }
+.prio-io .import-cfg.off { opacity: .45; cursor: default; }
+.prio-io-msg { flex: 1 1 100%; }
+
+/* "my officers" vs "all skills" in the browser */
+.skill-scope { display: inline-flex; border: 1px solid #33333e; border-radius: 3px; overflow: hidden; }
+.skill-scope button { font-size: 11px; padding: 1px 8px; background: #14141a; color: #a8a8b4; border: 0; cursor: pointer; }
+.skill-scope button.on { background: #24303d; color: #cfe4ff; }
+
+/* a skill no officer of yours has yet: selectable, but visibly aspirational */
+.add-prio-item.unowned .ap-name { opacity: .72; font-style: italic; }
+.prio-wanted {
+  font-size: 9px; text-transform: uppercase; letter-spacing: .05em;
+  color: #ffb020; border: 1px solid #4a3a1a; background: #241c10;
+  border-radius: 3px; padding: 0 4px; margin-left: 5px;
+}
+
+/* Aspect damage uplift beside a gear row's headline number — it explains an ordering that the headline
+   alone would contradict, so it must be visible, not tooltip-only. */
+.li-asp { margin-left: 4px; font-size: 10px; color: #58c26b; font-variant-numeric: tabular-nums; cursor: help; }
+
+/* ---- aspect badges -------------------------------------------------------------------------------- */
+/* The game's own aspect art, in place of the ◆/◇ slot glyphs that only counted slots. WHICH aspects an item
+   carries is the decision-relevant part; the count is already printed next to it. */
+.asp-marks { display: inline-flex; align-items: center; gap: 2px; }
+.asp-mark { display: inline-flex; cursor: help; }
+.asp-mark-icon { display: block; object-fit: contain; border-radius: 2px; }
+/* No sprite loaded (older bridge, or art the game hasn't registered): the initial beats a broken image. */
+.asp-mark-fallback {
+  display: grid; place-items: center; border-radius: 2px; font-size: 9px; font-weight: 700;
+  background: #2a2233; color: #c07bff; border: 1px solid #3a2f47;
+}
+/* An empty slot is information too: room for another aspect. */
+.asp-mark-empty { display: inline-block; border: 1px dashed #3a3a44; border-radius: 2px; opacity: .6; }
+
+/* Relative value in expanded mode: this candidate's resulting whole-battery DPS against the best option.
+   Fixed width, right-aligned: "100%" and "98.2%" differ in length, and letting the column size to its
+   content moves everything after it row by row. */
+.li-rel {
+  flex: 0 0 38px; margin-left: 4px; font-size: 10px; color: #9aa4b2; cursor: help;
+  font-variant-numeric: tabular-nums; text-align: right;
+}
+.li-rel.best { color: #86efac; font-weight: 700; }
+
+/* Same figure inside an item panel, where it sits under the headline stat it qualifies. */
+.git-rel {
+  margin: 2px 0 4px; font-size: 11px; color: #9aa4b2; cursor: help;
+  font-variant-numeric: tabular-nums;
+}
+.git-rel.best { color: #86efac; font-weight: 700; }
+
+.git-asp-name { display: flex; align-items: center; gap: 5px; }
+.git-asp-worth { color: #58c26b; font-size: 10px; font-variant-numeric: tabular-nums; }
+
+/* Asking price in an item card's footer. Amber, because it is money going out — the neighbouring "Value"
+   is money coming in and the two must not read as the same number. */
+.git-price { color: #e0b060; }
+
+/* Barter price: count + the currency item's own icon, so the identifier need not be spelled out. */
+.price { display: inline-flex; align-items: center; gap: 3px; font-variant-numeric: tabular-nums; }
+.price-icon { display: block; object-fit: contain; border-radius: 2px; }
+.price-name { white-space: nowrap; }
+
+/* ---- purchase/sale ledger ---- */
+.led-totals { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: #9aa4b2; margin: 6px 0 8px; }
+.led-totals b { font-variant-numeric: tabular-nums; }
+.led-list { display: flex; flex-direction: column; gap: 2px; max-height: 46vh; overflow: auto; }
+.led-row {
+  display: grid; grid-template-columns: 132px 54px minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: baseline; gap: 8px; padding: 3px 6px; border-radius: 4px; font-size: 11.5px;
+  border: 1px solid #1c1c22; background: #0e1014;
+}
+.led-when { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.led-kind.buy { color: #f0a0a0; }
+.led-kind.sell { color: #86efac; }
+.led-item { color: #e6e6e6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.led-where { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Right-aligned tabular amounts: a money column is read by scanning down it. */
+.led-amt { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+@media (max-width: 700px) {
+  .led-row { grid-template-columns: 1fr auto; }
+  .led-when, .led-where { display: none; }
+}
+
+/* Candidate list as a pop-in over the slot it belongs to: costs no width when no slot is selected and no
+   height when one is, because it floats above the slots below rather than pushing them down. */
+.gear-list-popin {
+  position: absolute; z-index: 40; left: 6px; right: 6px; top: calc(100% - 6px);
+  background: #0d0f13; border: 1px solid #3a4a63; border-radius: 6px; padding: 8px 10px 10px;
+  box-shadow: 0 10px 30px #000b;
+}
+.gear-list-popin .gear-list { max-height: 44vh; }
+.gear-list-popin .gear-list-head { margin-bottom: 6px; }
+.popin-x { background: transparent; border: none; color: #8a8a94; cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px; }
+.popin-x:hover { color: #e6e6e6; }
+/* The selected panel sits above its neighbours so the pop-in is not clipped by the next card. */
+.gear-panel.sel { z-index: 41; }
+
+/* The swap's worth, stacked under the arrow between the two cards: the one number that says whether to do it. */
+.gear-arrow { display: inline-flex; flex-direction: column; align-items: center; gap: 2px; }
+.gear-gain { font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.gear-gain.up { color: #86efac; }
+.gear-gain.down { color: #f0a0a0; }
+
+/* A pinned slot: the player chose its contents, so suggestions skip it. Says so, and clicking releases it —
+   without this a pinned slot is indistinguishable from "the optimizer decided to keep this". */
+.slot-pin {
+  margin-left: 6px; font-size: 9.5px; font-weight: 700; cursor: pointer;
+  background: #2a2418; border: 1px solid #5a4a24; color: #ffcf70; border-radius: 9px; padding: 1px 7px;
+}
+.slot-pin:hover { background: #3a3220; color: #ffe0a0; }
+
+/* An item this plan already spends in another slot. Picking it here moves it, so the row says where it is —
+   amber because it is a consequence to notice, not an error. */
+.li-elsewhere {
+  flex: 0 0 auto; font-size: 9.5px; font-weight: 700; white-space: nowrap;
+  background: #2a2418; border: 1px solid #5a4a24; color: #ffcf70; border-radius: 9px; padding: 1px 6px;
+}

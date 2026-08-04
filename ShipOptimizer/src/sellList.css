@@ -1,0 +1,175 @@
+/* Sell list. Its own sheet, like map.css and officers.css: the surface is large and shares nothing with
+   the grids. Wide, because it holds two rule columns plus the per-rule split. */
+dialog.modal-box.sell-pop { width: min(1500px, 97vw); max-height: 92vh; }
+.sl-strip { display: flex; align-items: baseline; gap: 8px; font-size: 12px; color: #8a8a96; }
+.sl-strip b { font-size: 15px; font-variant-numeric: tabular-nums; }
+.sl-cr { color: #ffb020; font-variant-numeric: tabular-nums; }
+.k-keep { color: #58c26b; }
+.k-sell { color: #fca5a5; }
+.sl-body { flex: 1; overflow: auto; min-height: 220px; }
+
+/* two columns, so the one-default constraint is visible rather than explained */
+.sl-sides { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
+@media (max-width: 1000px) { .sl-sides { grid-template-columns: 1fr; } }
+.sl-side { background: #14141a; }
+.sl-side-h { display: flex; align-items: center; padding: 7px 10px; border-bottom: 1px solid #2c2c36;
+  font-size: 12.5px; font-weight: 600; }
+.sl-side-h .n { margin-left: auto; font-weight: 400; font-size: 11.5px; color: #8a8a96; }
+.sl-side.keep .sl-side-h { color: #58c26b; border-bottom-color: #2c4030; }
+.sl-side.sell .sl-side-h { color: #fca5a5; border-bottom-color: #43292c; }
+.sl-def { display: flex; align-items: center; gap: 7px; padding: 10px; background: #101016; font-size: 12.5px; }
+.sl-empty { padding: 16px 12px; color: #8a8a96; text-align: center; font-size: 12px; }
+
+/* the operators, drawn rather than described */
+.sl-or { display: flex; align-items: center; justify-content: center; gap: 8px; color: #6a6a78;
+  font-size: 9.5px; font-weight: 700; letter-spacing: .12em; padding: 3px 0; background: #101016;
+  border-top: 1px solid #2c2c36; }
+.sl-or::before, .sl-or::after { content: ""; flex: 1; height: 1px; background: #2c2c36; }
+.sl-and { color: #6a6a78; font-size: 9px; font-weight: 700; letter-spacing: .1em; padding: 0 2px; }
+
+.sl-rule { border-top: 1px solid #2c2c36; }
+.sl-rhead { display: grid; grid-template-columns: 14px 1fr auto auto auto; gap: 6px; align-items: start;
+  padding: 8px 10px; cursor: pointer; }
+.sl-rhead:hover { background: #16161c; }
+.sl-tw { color: #6a6a78; font-size: 10px; padding-top: 3px; }
+.sl-sent .sl-cl { display: block; font-size: 12.5px; line-height: 1.5; }
+.sl-sent .lead0 { color: #e6e6ee; font-weight: 600; }
+.sl-sent .lead { color: #6a6a78; }
+.sl-sent .cw { color: #cfe4ff; }
+.sl-count { font-family: ui-monospace, monospace; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+/* sits where the rule it will make goes, instead of owning a card */
+.sl-addrule { display: block; width: 100%; border: 0; border-top: 1px dashed #33333e; border-radius: 0;
+  background: transparent; color: #8a8a96; padding: 8px 10px; font-size: 12px; text-align: center; }
+.sl-addrule:hover { color: #cfe4ff; background: #16161c; }
+
+/* the live split — what comes in, and how it divides */
+.sl-split { background: #101016; border-top: 1px solid #2c2c36; padding: 8px 10px;
+  font-family: ui-monospace, monospace; font-size: 11.5px; }
+.sl-sh { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; margin-bottom: 5px; }
+.sl-sh-in { display: flex; align-items: center; padding: 5px 9px; border: 1px solid #33333e;
+  border-radius: 3px; background: #14141a; font-variant-numeric: tabular-nums; }
+.sl-sh-box { display: flex; align-items: center; gap: 5px; padding: 5px 9px; border-radius: 3px;
+  border: 1px solid; font-variant-numeric: tabular-nums; }
+.sl-sh-box b { font-size: 14px; }
+.sl-sh-box.k-keep { border-color: #2c4030; background: #18211a; }
+.sl-sh-box.k-sell { border-color: #43292c; background: #211719; }
+.sl-note { color: #6a6a78; margin-bottom: 6px; }
+.sl-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 6px; }
+.sl-bar input { flex: 1; min-width: 130px; font-family: system-ui, sans-serif; font-size: 12px; }
+/* both levels scroll, 20 rows each, so one 239-item group cannot own the panel */
+.sl-groups { max-height: calc(20 * 1.45em); overflow-y: auto; border: 1px solid #2c2c36;
+  border-radius: 3px; background: #14141a; padding: 4px 8px; }
+.sl-group { cursor: pointer; padding: 3px 0 1px; }
+.sl-group:hover { color: #fff; }
+.sl-rows { max-height: calc(20 * 1.45em); overflow-y: auto; padding-left: 12px;
+  border-left: 1px solid #2c2c36; margin-left: 4px; }
+
+/* rows stay in the rule's ranking order: the cut between keep and sell is only legible that way, which is
+   why the boundary gets a marker instead of the columns getting sort handles. */
+.sl-grid { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 11.5px; }
+.sl-grid th { position: sticky; top: 0; z-index: 1; background: #16161c; color: #8a8a96; text-align: left;
+  font-weight: 600; font-size: 9.5px; text-transform: uppercase; letter-spacing: .07em;
+  padding: 3px 7px; border-bottom: 1px solid #2c2c36; }
+.sl-grid th.num, .sl-grid td.num { text-align: right; font-family: ui-monospace, monospace;
+  font-variant-numeric: tabular-nums; }
+.sl-grid td { padding: 2px 7px; border-bottom: 1px solid #1c1c24; white-space: nowrap; }
+.sl-grid td.nm { max-width: 250px; overflow: hidden; text-overflow: ellipsis; }
+.sl-grid tr:hover td { background: #1b1b22; }
+.sl-grid tr.f-cant td { opacity: .45; text-decoration: line-through; }
+.sl-grid tr.sl-cut td { padding: 1px 7px; text-align: center; color: #6a6a78; font-size: 9.5px;
+  letter-spacing: .05em; background: #101016; }
+.sl-grid tr.sl-cut:hover td { background: #101016; }
+/* an item's fate, named rather than implied */
+.sl-fate { font-size: 9.5px; font-weight: 700; letter-spacing: .06em; padding: 1px 4px; border-radius: 2px; }
+.sl-fate.f-keep { background: #1d2b21; color: #58c26b; }
+.sl-fate.f-sell { background: #2b1d20; color: #fca5a5; }
+.sl-fate.f-cant { background: #26262e; color: #6a6a78; }
+
+/* the editor: the sentence, with its variable parts editable in place */
+.sl-editor { margin-top: 12px; }
+.sl-sent-ed { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.sl-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; line-height: 1.9; }
+.sl-line > .lead { min-width: 112px; text-align: right; color: #6a6a78; flex: 0 0 auto; }
+.sl-line.first > .lead { color: #e6e6ee; font-weight: 600; }
+.sl-line .sl-drop { margin-left: auto; }
+@media (max-width: 640px) { .sl-line > .lead { min-width: 0; text-align: left; width: 100%; } }
+.sl-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.sl-chip { display: inline-flex; align-items: center; gap: 3px; background: #24303d; border: 1px solid #2f3d4d;
+  color: #cfe4ff; border-radius: 999px; padding: 2px 4px 2px 9px; font-size: 11.5px; }
+.sl-chip.neg { background: #3a2326; border-color: #5c3238; color: #f0b8bd; }
+.sl-chip.grp { background: #26302a; border-color: #33463a; color: #bfe0c9; }
+.sl-chip .cw { opacity: .75; }
+.sl-chip button { background: none; border: none; color: inherit; opacity: .55; padding: 0 3px;
+  cursor: pointer; font-size: 12px; line-height: 1; }
+.sl-chip button:hover { opacity: 1; }
+.sl-chip button.chipword { opacity: 1; text-decoration: underline dotted; text-underline-offset: 2px;
+  font-size: 11.5px; padding: 0; }
+.sl-chip input[type=number] { width: 52px; padding: 0 3px; font-size: 11px; background: #0f1116;
+  border-color: #2f3d4d; }
+.sl-adders { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px 8px 124px; }
+@media (max-width: 640px) { .sl-adders { padding-left: 12px; } }
+.sl-add { border: 1px dashed #33333e; background: transparent; color: #8a8a96; font-size: 11.5px;
+  padding: 2px 9px; border-radius: 3px; }
+.sl-add:hover, .sl-add.on { color: #cfe4ff; border-color: #4a4a58; border-style: solid; }
+.sl-foot { display: flex; align-items: center; gap: 8px; padding: 9px 11px; border-top: 1px solid #2c2c36;
+  background: #101016; }
+.sl-opt { font-size: 11px; }
+
+/* two panes: the field on the left, its values on the right. A dropdown for the field covered the values,
+   and the values are the reason the field was chosen. */
+.sl-popwrap { position: relative; display: inline-block; }
+.sl-pop { position: absolute; z-index: 9; top: calc(100% + 4px); left: 0; width: min(560px, 92vw);
+  background: #16161c; border: 1px solid #4a4a58; border-radius: 3px; padding: 8px;
+  box-shadow: 0 12px 34px #000c; text-align: left; }
+.sl-pop.narrow { width: 220px; }
+.sl-pk2 { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 10px; }
+.sl-fields { display: flex; flex-direction: column; gap: 1px; max-height: 300px; overflow-y: auto;
+  border-right: 1px solid #2c2c36; padding-right: 8px; }
+.sl-field { background: none; border: 1px solid transparent; text-align: left; color: #8a8a96;
+  font-size: 11.5px; padding: 3px 6px; }
+.sl-field:hover { color: #e6e6ee; background: #1b1b22; }
+.sl-field.sel { background: #24303d; border-color: #3a5470; color: #cfe4ff; }
+/* a field already constrained is marked, so the shape of the rule reads from the field list alone */
+.sl-field.used::after { content: " \25CF"; color: #58c26b; font-size: 9px; }
+.sl-vals { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.sl-vals > input { width: 100%; }
+.sl-vlist { display: flex; flex-direction: column; gap: 1px; max-height: 262px; overflow-y: auto; }
+.sl-val { background: none; border: 1px solid transparent; text-align: left; font-size: 11.5px;
+  padding: 3px 7px; color: #e6e6ee; }
+.sl-val:hover { background: #1b1b22; }
+.sl-val.on { background: #24303d; border-color: #3a5470; color: #cfe4ff; }
+.sl-sub { color: #6a6a78; font-size: 9.5px; text-transform: uppercase; letter-spacing: .08em; margin-top: 5px; }
+.sl-pkrow { display: flex; gap: 6px; align-items: center; }
+.sl-pkrow input[type=number] { width: 74px; }
+.sl-pkfoot { display: flex; gap: 10px; align-items: center; border-top: 1px solid #2c2c36; padding-top: 5px;
+  font-size: 11px; color: #8a8a96; }
+.sl-pkfoot label { display: flex; gap: 5px; align-items: center; }
+.sl-pkclose { display: flex; justify-content: flex-end; border-top: 1px solid #2c2c36; margin-top: 8px;
+  padding-top: 7px; }
+.cfg-actions button.danger { background: #3b1d1d; border-color: #7f1d1d; color: #fca5a5; }
+
+/* the review step: the rules propose, this is where the player strikes items off */
+.sl-review { margin-top: 12px; }
+.sl-review .cfg-head { gap: 8px; align-items: center; }
+.sl-review .sl-rq { width: 160px; font-size: 12px; }
+/* NO scroller of its own: the popin body already scrolls, and a box inside it that also scrolls gives the
+   same list two sliders. The sticky header sticks to the BODY's scroll, so the columns stay named. */
+.sl-rlist { overflow: visible; }
+.sl-rlist td { cursor: pointer; }
+.sl-rlist input[type=checkbox] { cursor: pointer; margin: 0; }
+/* struck off: still listed (so it can come back), plainly not part of the sale */
+.sl-grid tr.sl-off td { opacity: .4; }
+.sl-grid tr.sl-off td.nm { text-decoration: line-through; }
+
+/* saved lists: names as tags, because the set is small and picking one is one click, not two */
+.sl-lists { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 0 0 10px; font-size: 12px; }
+.sl-lists > input { width: 150px; font-size: 12px; }
+.sl-tag { display: inline-flex; align-items: center; border: 1px solid #33333e; border-radius: 999px;
+  background: #16161c; overflow: hidden; }
+.sl-tag.on { border-color: #3a5470; background: #24303d; }
+.sl-tag button { background: none; border: 0; color: #cfe4ff; font-size: 11.5px; padding: 3px 4px 3px 10px; }
+.sl-tag button + button { color: #8a8a96; padding: 3px 8px 3px 4px; }
+.sl-tag button:hover { color: #fff; background: #2b2b36; }
+/* the file input is the label; a bare one cannot be styled to match a button */
+.sl-imp { cursor: pointer; }
+.sl-imp input[type=file] { display: none; }

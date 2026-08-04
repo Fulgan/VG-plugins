@@ -1,15 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
+import ApplyBar, { ApplyMsg } from "./ApplyBar";
+import type { ApplyApi } from "./useApply";
 import {
   boosterId, boosterType, boosterTypeColor, boosterTypes, boosterValue,
   defaultSlotTypes, isBooster, optimizeBoosters, resonancePct, unlockBonusText, type BoosterPick,
 } from "./booster";
 import type { Inventories, Item, Loadout, Resonance } from "./types";
+import { itemIcon, type Conn } from "./api";
+import { RARITY_COLOR, fmt } from "./format";
 import "./officers.css";
 
-const RARITY_COLOR: Record<string, string> = {
-  Standard: "#cfcfcf", Enhanced: "#58c26b", HighGrade: "#4aa3ff", Exotic: "#c07bff", Legendary: "#ffb020",
-};
-const fmt = (n: number) => (n >= 1000 ? n.toLocaleString(undefined, { maximumFractionDigits: 0 }) : Number(n.toFixed(2)).toString());
 const locLabel = (l?: string) => (l === "equipped" ? "Ship" : l === "cargo" ? "Inventory" : l === "armory" ? "Armory" : l ?? "");
 const progText = (r: Resonance) => (r.unlocked ? "Resonance unlocked" : `${Math.round(r.progress).toLocaleString()} / ${Math.round(r.threshold).toLocaleString()} ${r.unit}`);
 
@@ -24,6 +24,7 @@ export interface BoosterBuilder {
   types: string[];
   slotTypes: (string | null)[];
   setType: (i: number, t: string) => void;
+  setSlotTypes: (types: (string | null)[]) => void; // replace all slot types (for restoring a saved loadout)
   forced: Set<string>;
   toggleForce: (id: string) => void;
   picks: BoosterPick[];
@@ -44,7 +45,8 @@ export function useBoosterBuilder(loadout: Loadout | null, inv: Inventories | nu
     () => (inv?.stores ?? []).flatMap((st) => st.items.filter(isBooster).map((it) => ({ ...it, location: st.id }))),
     [inv],
   );
-  const equipped = useMemo(() => (loadout?.boosters ?? []).map((b) => ({ ...b, location: "equipped" })), [loadout]);
+  // `slotKey` lets an equipped booster's icon resolve: "equipped" is a marker, not a real store.
+  const equipped = useMemo(() => (loadout?.boosters ?? []).map((b) => ({ ...b, location: "equipped", slotKey: `b:${b.slot ?? 0}` })), [loadout]);
   const equippedBySlot = useMemo(
     () => Array.from({ length: slotCount }, (_, i) => equipped.find((b) => b.slot === i) ?? null),
     [equipped, slotCount],
@@ -78,10 +80,10 @@ export function useBoosterBuilder(loadout: Loadout | null, inv: Inventories | nu
     .filter((p) => p.chosen && p.chosen !== equippedBySlot[p.slot] && p.chosen.location !== "equipped" && p.chosen.key != null)
     .map((p) => ({ kind: "Booster", slot: p.slot, store: p.chosen!.location, key: p.chosen!.key, name: p.chosen!.name, level: p.chosen!.level }));
 
-  return { loadout, slotCount, equippedBySlot, pool, invBoosters, types, slotTypes, setType, forced, toggleForce, picks, assigned, unplaceable, totals, changed, unfilled, applyPayload };
+  return { loadout, slotCount, equippedBySlot, pool, invBoosters, types, slotTypes, setType, setSlotTypes, forced, toggleForce, picks, assigned, unplaceable, totals, changed, unfilled, applyPayload };
 }
 
-export default function BoostersTab({ builder, docked, goSummary }: { builder: BoosterBuilder; docked: boolean; goSummary: () => void }) {
+export default function BoostersTab({ builder, docked, conn, goSummary, apply }: { builder: BoosterBuilder; docked: boolean; conn: Conn; goSummary: () => void; apply?: ApplyApi }) {
   const { loadout, slotCount, equippedBySlot, pool, types, slotTypes, setType, forced, toggleForce, picks, assigned, unplaceable, totals, changed, unfilled } = builder;
 
   // owned-list view state (local to the tab)
@@ -112,7 +114,16 @@ export default function BoostersTab({ builder, docked, goSummary }: { builder: B
     return (
       <div className={`bcard${kind === "best" ? " best" : ""}${b ? "" : " empty"}`}>
         <div className="bcard-top">
-          <span className="bicon" style={{ background: b ? boosterTypeColor(b) : "#1b1b1f", borderColor: b ? "transparent" : "#2a2a30" }} />
+          {/* the game's own icon, with the booster-type colour behind it — the colour still reads as the
+              type (and covers a missing render), the art is what makes the card recognisable at a glance */}
+          <span
+            className="bicon"
+            style={{
+              backgroundColor: b ? boosterTypeColor(b) : "#1b1b1f",
+              backgroundImage: b ? `url("${itemIcon(conn, b) ?? ""}")` : undefined,
+              borderColor: b ? "transparent" : "#2a2a30",
+            }}
+          />
           <span className="bname" style={{ color: b ? rc : "#6f6f78" }}>{b ? b.name : emptyLabel}</span>
           {r?.unlocked && <span className="bres" title="Resonance unlocked">RES</span>}
           <span className="blvl">{b ? `Lv ${b.level}` : "—"}</span>
@@ -135,8 +146,14 @@ export default function BoostersTab({ builder, docked, goSummary }: { builder: B
     <div className="boosters">
       <div className="sum-head">
         <div className="panel-title">Booster optimizer <span className="dim">— {loadout?.name ?? "ship"} · {slotCount} slots</span></div>
-        <button className="apply" onClick={goSummary} title="Review & apply changes in the Summary tab">Go to Summary →</button>
+        {/* Grouped in `.sum-actions` like every other tab head: `.sum-head` is `space-between`, so a third direct
+            child gets spread into the middle of the bar instead of sitting with the other actions. */}
+        <div className="sum-actions">
+          {apply && <ApplyBar apply={apply} section="boosters" label="booster" />}
+          <button className="apply" onClick={goSummary} title="Review & apply changes in the Summary tab">Go to Summary →</button>
+        </div>
       </div>
+      {apply && <ApplyMsg apply={apply} />}
       <p className="sum-note">
         Pick a booster <b>type</b> per slot (seeded from what's equipped; empty slots default to the ship's role).
         The optimizer drops in the highest-value owned booster of that type — none used twice — across your armory and inventory.
@@ -145,7 +162,9 @@ export default function BoostersTab({ builder, docked, goSummary }: { builder: B
         <span className="dim">TYPE PER SLOT · CURRENT → BEST</span>
         <span className="up">{changed > 0 ? `${changed} slot${changed === 1 ? "" : "s"} would change` : "matches current"}</span>
       </div>
-      {!docked && <div className="sum-msg err">⚠ Undocked — armory boosters aren't readable; dock for the full pool.</div>}
+      {/* A note, not a second warning — the app-level bar already says you are undocked. This adds only what is
+          specific to boosters: the pool is narrower, and applying needs a station. */}
+      {!docked && <p className="sum-note">Cargo only out here; applying needs a station.</p>}
 
       <div className="bslot-grid">
         {slotTypes.map((t, i) => (
@@ -207,7 +226,7 @@ export default function BoostersTab({ builder, docked, goSummary }: { builder: B
             const rc = RARITY_COLOR[b.rarity] ?? "#cfcfcf";
             return (
               <div key={id} className={`brow${isA ? " a" : isSkip ? " s" : ""}`}>
-                <span className="bicon26" style={{ background: boosterTypeColor(b) }} />
+                <span className="bicon26" style={{ backgroundColor: boosterTypeColor(b), backgroundImage: `url("${itemIcon(conn, b) ?? ""}")` }} />
                 <span className="bname" style={{ color: rc, width: 216, flex: "0 0 auto" }}>{b.name}</span>
                 <span className="btype" style={{ width: 120 }}>{boosterType(b)}</span>
                 <span className="bvalc" style={{ width: 80 }}>+{fmt(boosterValue(b))}</span>

@@ -1,0 +1,6 @@
+/* Faction mark: game badge (or a colour dot when no sprite exists) + the faction's name in its own colour.
+   Sized by the caller so a legend chip, a table row and a tooltip line can share one component. */
+.fac-mark { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
+.fac-mark-icon { flex: none; object-fit: contain; image-rendering: auto; }
+.fac-mark-dot { flex: none; border-radius: 2px; }
+.fac-mark-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

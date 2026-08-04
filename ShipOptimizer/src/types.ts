@@ -5,11 +5,18 @@ export interface StatLine {
   amount: number;
   multiplier: number;
   canReroll?: boolean; // reroll flag: fresh item all-true; after a reroll only the rerollable one is true
+  // The game's own `EquipStat.IsPercentageStat`: `amount` is a FRACTION, so 0.0141 means +1.41%. Decided by
+  // ranges over the game's enum and therefore not reproducible here — it must arrive from the bridge.
+  percent?: boolean;
 }
 
 export interface Aspect {
+  id?: string;        // EquipAspect.identifier — the handle for GET /aspects/icon
   name: string;
   description: string;
+  // Stat lines the aspect GRANTS. Absent from the item's own `stats[]`, because a stat-granting aspect is a
+  // `BoostStat` registered on the unit rather than on the item — so ranking must add these itself.
+  stats?: StatLine[];
 }
 
 // Resonant-booster unlock state (progress toward its bonus + the bonus itself).
@@ -40,10 +47,25 @@ export interface Item {
   gameplayType?: string | null; // turrets: Combat | Mining | Salvage
   targetLayer?: string | null; // mining/salvage turrets: Surface | Core | Both
   powerUsage?: number | null; // energy draw (effective; changed by aspects)
+  // Base draw (`capacityCost`), the same basis whether or not the item is fitted. `powerUsage` is effective for a
+  // FITTED item and base for a stored one, so only this field can compare the two.
+  powerUsageBase?: number | null;
   emp?: number | null; // turrets: EMP factor per second (0 = none)
   range?: number | null; // turrets: effective weapon range
   manufacturer?: string | null; // brand, e.g. "Spirit Design"
-  fireRate?: number | null; // turrets: attacks per second (sustained, incl. burst + reload)
+  fireRate?: number | null; // turrets: attacks per second (sustained, incl. burst + reload) — BASE rate:
+                            // built from raw _fireDelay/_maxMagSize/_reloadDelay, so no speed bonuses
+  // ---- turret ranking inputs (absent on a bridge older than these fields) ----
+  // RAW serialized cycle components, so a client can rebuild defaultAttacksPerSecond and re-run it with the
+  // item's OWN speed rolls. Deliberately not the boosted properties: those divide by GetStat(), which on a
+  // fitted turret includes ship/crew bonuses that are equal for every candidate and must not enter a
+  // comparison. See src/turretScore.ts.
+  fireDelayRaw?: number | null;
+  reloadDelayRaw?: number | null;
+  magSizeRaw?: number | null;
+  burstAmount?: number | null;
+  burstDelay?: number | null;
+  damageSpreadMean?: number | null; // mean of the per-hit RandomRange(0.8, 1.25) — same for all, informational
   ammo?: string | null; // turrets: required ammo
   ammoPerMin?: number | null; // turrets: sustained ammo consumed per minute (fireRate×60×ammoPerShot÷shotsPerAmmo)
   aspects: Aspect[];
@@ -54,7 +76,16 @@ export interface Item {
   bonusStat: string | null; // stat the quality affix boosts
   resonance?: Resonance | null; // resonant boosters only
   count?: number; // stores only
+  // What `POST /sell` refuses. A client that cannot see these has to attempt a sale to
+  // discover the refusal, which is backwards for `favourite` — the one a player sets deliberately.
+  // `favourite` is per STACK, so it is absent (not false) wherever there is no store entry.
+  canSell?: boolean;
+  favourite?: boolean;
+  missionItem?: boolean;
+  criticalItem?: boolean;
   // client-side / shop annotations
+  slotKey?: string; // equipped items only: "t:<i>" | "m:<EquipmentSlot>" | "b:<i>" — resolves their icon,
+                    // which has no store handle to look up (see api.itemImageBySlot)
   location?: string; // which store/shop the item is in
   cost?: number; // shop: credit price
   costItem?: string | null; // shop: barter item id (if bartered)
@@ -71,6 +102,11 @@ export interface Shop {
 
 export interface Shops {
   shops: Shop[];
+  station?: string | null;
+  // Seconds until this station's stock rolls over, null when unknowable. Offer keys are slot indices that
+  // get reused on restock, so this is the deadline after which a cached list must not be bought from.
+  refreshesIn?: number | null;
+  refreshInterval?: number | null;
 }
 
 export interface LogEntry {
@@ -110,6 +146,26 @@ export interface Ships {
   ships: Loadout[];
 }
 
+// What the running GAME build supports. The plugin is one binary that loads on both the public release and
+// the beta, and they don't carry the same API — so features are hidden rather than offered-and-broken.
+// Every flag is optional: an older bridge sends no `caps` at all, and the UI must not read that as "off".
+export interface Caps {
+  crew?: boolean;         // officers/crew (release renamed the whole namespace)
+  shopRefresh?: boolean;  // shop restock countdown
+  conquest?: boolean;     // conquest map + umbral state
+  // The release cuts each turret's share again once the battery grows (see EXTRA_TURRET_PENALTY in fleetDps.ts).
+  // Beta 0.8.1.19 deleted that formula and compensated with enemy HP, so scoring a beta build with the ladder
+  // — or a release build without it — misprices every multi-turret set.
+  extraTurretPenalty?: boolean;
+}
+
+// One spendable currency: the identifier a barter offer's `costItem` carries, its display name, and holdings.
+export interface Currency {
+  id: string;
+  name: string;
+  owned: number;
+}
+
 export interface Status {
   docked: boolean;
   station: string | null;
@@ -118,9 +174,55 @@ export interface Status {
   shipType?: string | null; // ship class, e.g. "Chisel Mk I"
   role?: string | null; // Combat | Mining | Salvaging | Cargo | Generic
   credits: number;
+  // Every currency the RUNNING build ships, not a fixed set: the release has four commendations and no
+  // `VanguardMark`, the beta the same four plus it — so the wallet is whatever the bridge enumerated out of the
+  // item registry. Counted by the same call the shop DTO uses for `costItemOwned`, so the header and an offer's
+  // "you have" agree. Absent on an older bridge — fall back to `vanguardMarks`.
+  currencies?: Currency[] | null;
+  // The beta's barter currency alone, kept for older bridges only. Prefer `currencies`.
+  vanguardMarks?: number | null;
   crewSupported?: boolean; // game >= 0.8.1.19 — gate the (future) crew optimizer
+  caps?: Caps;             // what the running game build supports; absent on an older bridge
   gameVersion?: string;
   pluginVersion?: string;
+  // Crit setup of the CURRENT ship, effective (ship + hull + crew + gear) — read off the live unit, with the
+  // class defaults as fallback. Ship-wide, so the same for every gear candidate, but not a constant that
+  // cancels: a high crit chance is what makes a turret's Critical Damage roll valuable.
+  // False when the live ship object wasn't resolvable, so the crit values below are class-level fallbacks and
+  // the pools are absent. Indistinguishable from real readings otherwise (0.03 is a plausible crit chance).
+  hasPersonalHangar?: boolean;
+  statsLive?: boolean;
+  critChance?: number | null;
+  // The multiplier half of CriticalChance. The reported chance is (base + curve + additive) * multiplier, so
+  // the product alone cannot be split back into its parts.
+  critChanceMult?: number | null;
+  // Skill-tree term the game adds to the COMBAT pool's reactor factor, in the top bracket only.
+  combatReactorOutputCP?: number | null;
+  critDamage?: number | null;
+  megaCrit?: number | null;   // how many times one hit may crit (combatMegaCrit skill points)
+  // Ship-level POOLS, for set-level turret optimisation. Every stat an item rolls registers on the UNIT, so
+  // a Precision or Combat Power roll on one gun benefits every gun — gear cannot be ranked slot by slot.
+  // These include the currently equipped turrets; subtract their own contributions to get the fixed
+  // background (hull + crew + modules).
+  poolCombatPower?: number | null;
+  poolPrecision?: number | null;
+  equivalentTurrets?: number | null;  // GetEquivalentTurretsCount(CombatPower) — shares the power pool out
+  // Mining and salvage guns feed their own pools, each with its own equivalent-turret divisor — the count is per
+  // stat, so the combat one would misprice a mixed battery. Without these a non-combat battery has no objective
+  // and every candidate ties.
+  poolMiningPower?: number | null;
+  poolSalvagePower?: number | null;
+  equivalentTurretsMining?: number | null;
+  equivalentTurretsSalvage?: number | null;
+  precisionDivisor?: number | null;   // 25 x GameMath.DamageMultiplier(level); Precision is measured against it
+  // Reactor budget, straight off the ship's reactor module. `energyUsage` (used/capacity) decides a bracketed
+  // multiplier on the Power/Combat/Mining/Salvage pools — see reactor.ts — so a build's draw changes its
+  // damage, and `reactorBonus` is the modifier currently baked into the pools above. Null with no reactor.
+  energyCapacity?: number | null;
+  energyUsed?: number | null;
+  energyUsage?: number | null;
+  reactorBonus?: number | null;
+  reactorCombatBonus?: number | null; // extra CombatPower from the skill tree, only while usage <= 50%
   playthrough?: string | null; // stable per-save id — web drops stale cache when it changes
   playthroughName?: string | null; // user-chosen pretty name for the playthrough (null = unnamed)
 }
@@ -129,7 +231,7 @@ export interface Inventories {
   stores: Store[];
 }
 
-// A candidate loadout the user assembles client-side (never sent to the game — V6).
+// A candidate loadout the user assembles client-side (never sent to the game).
 export interface Build {
   id: string;
   name: string;
@@ -200,7 +302,7 @@ export interface ApplyResult {
 export interface UndoResult {
   restored: number;
 }
-export interface LoadoutPresetInfo { name: string; ship: string; shipGuid?: string | null; rawKey?: string; gearSlots: number; officers: number; }
+export interface LoadoutPresetInfo { name: string; ship: string; shipGuid?: string | null; rawKey?: string; gearSlots: number; officers: number; settings?: string | null; }
 // GET /catalog/types — every turret type / damage type / module slot that exists in the game (for gear filters).
 export interface CatalogTypes {
   turrets: { type: string; category: string; damageType: string }[];
@@ -228,4 +330,210 @@ export interface PendingResult {
   pending: boolean | null;
   gearSlots?: number;
   officers?: number;
+}
+
+// ---- galaxy map (GET /galaxy) -------------------------------------------------------------------
+// Knowledge is subsector-scoped, enforced server-side: a subsector you've never entered isn't in the
+// payload at all, so the map can't draw what you couldn't know. `visited` systems add POI/station
+// detail; `known` ones carry what the game's own tooltip shows (level, owner, stations).
+export interface GalaxySystem {
+  guid: string; name: string; sector: string;
+  knowledge: "visited" | "known";
+  level?: number; faction?: string | null; factionId?: string | null; storyId?: string | null; pocket?: boolean;
+  x: number; y: number; sx: number; sy: number;
+  lastVisited?: number; unlocked?: boolean; jumpgateOpen?: boolean;
+  poiKinds?: Record<string, number>;
+  stations?: { name: string; faction: string | null; factionId?: string | null; kind: string; shops?: string[]; refreshTime?: number; refreshInterval?: number; due?: boolean | null; recruitsIn?: number | null; missionsIn?: number | null; missionsFresh?: boolean | null }[];
+  missions?: { name: string; description?: string; storyId?: string; complete?: boolean }[];
+  materials?: { volume: number; distinct: number; items: string[] };   // "Materials stored: 1,764m3"
+  conquest?: {
+    combatStrength: number; controlLevel: number; playerControlLevel: number; umbralControlLevel: number;
+    baseReinforcements: number; hqReinforcements: number; totalReinforcements: number;
+    headquarters: boolean; faction: string | null; station: string | null;
+  };
+}
+export interface GalaxySector {
+  guid: string; name: string; quadrant: number; conquest: boolean;
+  level?: number; levelRange?: [number, number]; x: number; y: number;
+}
+export interface GalaxyEdge {
+  from: string; to: string | null; gate: string; name: string; kind: string;
+  crossSector: boolean; open?: boolean; usable?: boolean; passGuid?: string; leadsOut?: boolean;
+}
+export interface Galaxy {
+  playthrough: string | null; currentSystem: string | null; levelCap?: number;
+  quadrants: { id: number; name: string; sectors: string[] }[];
+  sectors: GalaxySector[]; systems: GalaxySystem[]; edges: GalaxyEdge[];
+  recent: { guid: string; name: string; lastVisited: number }[];
+  counts: Record<string, number>;
+  conquest?: ConquestStatus | null;
+  // Shops roll over on one galaxy-wide boundary; per-station only the phase differs (see station.due).
+  shopRestock?: { nextIn?: number | null; interval?: number | null } | null;
+  // A mission board is NOT on a galaxy-wide cycle: each board has its own timer, advanced everywhere but reset
+  // only where you are. This is the board of the station named in `station` — the one you would fly back to —
+  // and `fresh` says it has already come due, so it rerolls the moment you dock.
+  missionRestock?: { nextIn?: number | null; interval?: number | null; station?: string | null; fresh?: boolean | null } | null;
+  // Faction identity + the GAME's own colours, so territory shading matches the in-game map.
+  factions?: GalaxyFaction[];
+}
+
+// Galaxy-wide conquest state. `tickIn` is the live countdown to the next conquest tick (seconds).
+// `umbralForShop`/`umbralForMissions` are the game's own gate thresholds as fractions (0-1).
+export interface GalaxyFaction {
+  id: string;
+  name: string | null;
+  conquestColor?: string | null;   // what the conquest map paints territory with
+  color?: string | null;           // the faction's general colour
+  relationColor?: string | null;   // tracks your standing, not identity
+}
+
+export interface ConquestStatus {
+  tickIn: number; tickDelay: number; lastTick: string; umbralContribution: number;
+  umbralForShop: number; umbralForMissions: number; maxPlayerLevel: number; reinforcementsMax: number;
+}
+
+// ---- standing (GET /reputation) -----------------------------------------------------------------
+// Two independent ladders per faction, mirroring the game's two Captain panels. Every derived field
+// (level, rank, their names, colours, perks) comes from the game's own tables, so nothing here is a
+// local reimplementation of its balance. Any of them can be null on a build that renamed a helper, and
+// `conquest` is absent entirely on a save with no conquest story.
+export interface RepPerks {
+  // Fractions, not percentages: 0.1 means 10% off.
+  shopDiscount: number | null; shipyardDiscount: number | null; repairCostDiscount: number | null;
+  repairSpeed: number | null; missionReward: number | null; bonusMissions: number | null;
+  boardRefreshTimer: number | null; shopRefreshTokens: number | null;
+  canRefreshShop: boolean | null; canRefreshBoard: boolean | null;
+}
+export interface RepStanding {
+  value: number;
+  // `level` = the ReputationLevel enum, `levelName` = the same words spaced ("Absolute Threat"). `group` is
+  // the game's coarser Negative|Neutral|Positive banding that sits above the named bands.
+  level: string | null; levelName: string | null; group: string | null; color: string | null;
+  progress: number | null;        // 0-1 across the whole ladder
+  bandProgress: number | null; bandRange: number | null;   // within the current level only
+  nextAt: number | null; toNext: number | null;
+  perks?: RepPerks;
+}
+export interface ConquestPerks {
+  creditMultiplier: number | null; reputationBonus: number | null;
+  fleetStrengthBonus: number | null; commendationsBonus: number | null;
+  destroyer: boolean | null;
+}
+export interface ConquestStanding {
+  contribution: number | null;
+  rank: string | null;            // None | Rank1..Rank6
+  rankName: string | null;        // per-faction title ("Oracle's Chosen")
+  color: string | null;
+  areaHeld: number | null; areaMax: number | null; conqueredPct: number | null;
+  rejoinCooldown: number | null;
+  perks?: ConquestPerks;
+}
+export interface FactionStanding {
+  id: string; name: string | null; color: string | null;
+  // The game's OWN war flag (`Faction.IsEnemy`), not a reputation threshold: a faction at +6,751 can be at
+  // war. It is a toggle you set at a station, forced on only while your reputation is negative.
+  atWar: boolean | null;
+  reputation?: RepStanding;
+  conquest?: ConquestStanding;
+}
+export interface Reputation {
+  factions: FactionStanding[];
+  // `Conquest.maxReputation` (30,000) — reported under its own name, NOT as the ladder's ceiling: the
+  // thresholds run to 50,000, so the two disagree and only `levels` may be used as the scale.
+  conquestRepMax: number | null;
+  foeAt: number | null;           // below this a faction is at war with you
+  levels: { tier: string; name: string | null; at: number; group: string | null }[] | null;
+  ranks: { tier: string; name: string | null; at: number }[] | null;
+  // What the TOP rank costs. Contribution keeps climbing past it (5,441 seen against 4,500) ∴ not a cap.
+  topRankAt: number | null;
+}
+
+// ---- standing changes (GET /reputation/log) ------------------------------------------------------
+// The bridge samples both ladders and records every move, one entry per faction per change. `seq` is
+// monotonic per bridge run, which is what lets a client ask for only what it hasn't seen.
+export interface StandingEntry {
+  seq: number;
+  t: string;                       // HH:mm:ss, when the change was NOTICED (sampled, up to 3s late)
+  ladder: "faction" | "conquest";
+  factionId: string; faction: string | null;
+  delta: number; value: number;
+  tierWas: string | null; tier: string | null;   // named band before/after — a crossing is the interesting case
+  at: string | null;               // system you were in
+}
+export interface StandingLog {
+  entries: StandingEntry[];
+  seq: number;                     // the newest seq the bridge holds
+  capacity: number;                // how many entries it keeps before dropping the oldest
+  playthrough: string | null;
+  // Proof of life. An empty log means "nothing changed" ONLY if the sampler is running and watching
+  // factions; `watchingFactions: 0` means it could not have recorded anything.
+  sampler?: {
+    samples: number; periodSeconds: number; lastSampleAgo: number | null;
+    watchingFactions: number; watchingConquest: number; lastError: string | null;
+  };
+}
+
+// ---- "where is my stuff" (GET /materials) -------------------------------------------------------
+// Every station keeps its OWN storage, so a long playthrough scatters materials across dozens of them
+// with no in-game way to see the whole picture. Aggregated two ways: by item and by place.
+//
+// Station storage only — cargo and the armory travel with you, so they have no system and no place on
+// the map. Every place therefore has a system, and totals are what is STORED, not what is held.
+export interface MaterialPlace {
+  kind: "station";
+  name: string; guid: string | null;
+  system: string | null; systemName: string | null;
+  volume?: number;   // m3 in use, as the game's per-system tooltip shows it
+  items: { id: string; name: string; category?: string | null; count: number }[];
+  slots: number;
+}
+export interface MaterialItem {
+  id: string; name: string; category?: string | null; total: number;
+  at: { kind: "station"; name: string; guid: string | null; system: string | null; systemName: string | null; count: number }[];
+}
+export interface Materials {
+  playthrough: string | null;
+  items: MaterialItem[];
+  places: MaterialPlace[];
+  counts: { places: number; distinctItems: number; units: number };
+}
+
+// Ship vitals for the status panel (GET /ship/vitals). A block is ABSENT when the ship has none of that
+// thing — no shield generator means no `shield` key at all, so the bar simply isn't drawn. Combat power is
+// not here: the game exposes no ship-level total, so the client derives it from the equipped turrets.
+export interface VitalPair { cur: number; max: number }
+export interface Vitals {
+  ship: string | null;
+  guid: string | null;
+  hull?: VitalPair;
+  armor?: VitalPair;
+  shield?: VitalPair;
+  cargo?: VitalPair;
+}
+
+
+// A persisted purchase/sale, from GET /ledger. `credits` is signed from the player's side (negative =
+// bought), so a running total is a plain sum. A barter purchase moves no credits and names the goods instead.
+export interface LedgerEntry {
+  at: string;              // ISO-8601 UTC
+  kind: "buy" | "sell";
+  item: string;
+  itemId?: string | null;
+  count: number;
+  credits: number;
+  costItem?: string | null;
+  costItemCount?: number | null;
+  shop?: string | null;
+  station?: string | null;
+  ship?: string | null;
+  playthrough?: string | null;
+}
+
+export interface LedgerDto {
+  entries: LedgerEntry[];  // newest first
+  count: number;           // rows in scope, before the limit
+  spent: number;
+  earned: number;
+  net: number;
+  barters: number;         // purchases paid in goods — a real cost that no credit total can show
 }

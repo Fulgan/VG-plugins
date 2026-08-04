@@ -39,4 +39,12 @@ describe("booster optimizer", () => {
     const types = defaultSlotTypes([booster("Combat Power", "900"), null], 2, "Mining", pool);
     expect(types[0]).toBe("Combat Power"); // kept from equipped
   });
+
+  it("keeps an equipped booster over an equal-value armory one (no phantom swap)", () => {
+    // Same type, same value. The equipped one must stay put rather than being displaced for a tiebreak.
+    const eq = { ...booster("Combat Power", "1000"), location: "equipped", slot: 0 };
+    const armory = { ...booster("Combat Power", "1000"), location: "armory", key: 5 };
+    const { picks } = optimizeBoosters([armory, eq], ["Combat Power"]); // armory listed first on purpose
+    expect(picks[0].chosen).toBe(eq);
+  });
 });

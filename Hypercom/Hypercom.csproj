@@ -4,7 +4,7 @@
     <TargetFramework>netstandard2.1</TargetFramework>
     <AssemblyName>Hypercom</AssemblyName>
     <Product>Hypercom</Product>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
@@ -13,14 +13,17 @@
     <!-- Plugin sources live at the repo root; the client/ and tests/ subprojects are separate. -->
     <DefaultItemExcludes>$(DefaultItemExcludes);client\**;tests\**</DefaultItemExcludes>
 
-    <!-- Game locations. Override GameDir on the command line if Steam is elsewhere:
-         dotnet build -c Release -p:GameDir="D:\SteamLibrary\steamapps\common\Vanguard Galaxy" -->
-    <GameDir Condition="'$(GameDir)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Vanguard Galaxy</GameDir>
-    <ManagedDir>$(GameDir)\VanguardGalaxy_Data\Managed</ManagedDir>
-    <BepInExCore>$(GameDir)\BepInEx\core</BepInExCore>
+    <!-- GameDir / PinnedRefs / ManagedDir / BepInExCore all resolve in Directory.Build.props, which
+         MSBuild imports automatically. They were duplicated here in every plugin, pinned version
+         included, which is why the pin was never bumped when the game updated. -->
 
     <!-- Web UI (sibling repo) bundled into the plugin on Release builds only. -->
     <WebUiDir>$(MSBuildProjectDirectory)\..\ShipOptimizer</WebUiDir>
+
+    <!-- Reflect.cs (the live object browser) is wrapped in `#if DEBUG`, so it exists ONLY in Debug builds
+         and cannot reach the Nexus release. The SDK already defines DEBUG for that configuration; stated
+         here so the dependency is obvious to anyone reading the csproj. -->
+    <DefineConstants Condition="'$(Configuration)' == 'Debug'">$(DefineConstants);DEBUG</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
@@ -63,8 +66,20 @@
        self-contained assembly. One source of truth in the workspace; cross-mod calls reflect. -->
   <ItemGroup>
     <Compile Include="..\Shared\ModHost.cs" Link="ModHost.cs" />
+    <!-- Name-based game access + the on-screen notification: needed by every plugin, so one owner each. -->
+    <Compile Include="..\Shared\GameMembers.cs" Link="GameMembers.cs" />
+    <Compile Include="..\Shared\Wallet.cs" Link="Wallet.cs" />
+    <Compile Include="..\Shared\ItemFlags.cs" Link="ItemFlags.cs" />
+    <Compile Include="..\Shared\GameToast.cs" Link="GameToast.cs" />
     <Compile Include="..\Shared\LoadoutCore.cs" Link="LoadoutCore.cs" />
     <Compile Include="..\Shared\LoadoutStore.cs" Link="LoadoutStore.cs" />
+    <!-- Game-free purchase core (unit-tested) + its game-bound adapter, shared with StationAssistant. -->
+    <Compile Include="..\Shared\Purchase.cs" Link="Purchase.cs" />
+    <Compile Include="..\Shared\PurchaseExec.cs" Link="PurchaseExec.cs" />
+    <Compile Include="..\Shared\GameShops.cs" Link="GameShops.cs" />
+    <Compile Include="..\Shared\ItemNames.cs" Link="ItemNames.cs" />
+    <!-- QR encoder for phone pairing. Game-free, so the test project links the same file. -->
+    <Compile Include="..\Shared\QrCode.cs" Link="QrCode.cs" />
   </ItemGroup>
 
   <!-- Drop the built DLL straight into the game's plugin folder on every build. -->
@@ -75,23 +90,47 @@
     <Message Importance="high" Text="Deployed $(AssemblyName).dll -> $(GameDir)\BepInEx\plugins\$(AssemblyName)" />
   </Target>
 
-  <!-- Release only: build the ShipOptimizer web UI (Vite) and bundle it into the plugin's ui/ folder,
-       so the bridge serves it at http://127.0.0.1:<port>/. Debug builds skip this entirely — run the
-       UI with `npm run dev` (Vite) for hot-reload against the running bridge. Set -p:SkipWebUi=true to
-       cut a Release without Node installed. -->
-  <Target Name="BundleWebUi" AfterTargets="Build"
+  <!-- Release only: build the ShipOptimizer web UI (Vite) and EMBED it in the assembly, so the bridge serves
+       it at http://127.0.0.1:<port>/ out of one file. Debug builds skip this entirely — run the UI with
+       `npm run dev` (Vite) for hot-reload against the running bridge. Set -p:SkipWebUi=true to cut a Release
+       without Node installed.
+
+       Embedded, not deployed beside the DLL: Vite content-hashes every asset, so a folder that is merged into
+       rather than mirrored only ever grows (it had reached 131 files and 39 MB across four days), and the
+       server would happily serve any of them — a browser holding a stale index.html could load a bundle from
+       an arbitrary earlier build. One assembly cannot disagree with itself about which build it is.
+
+       BEFORE AssignTargetPaths, because that is when resource items are given their manifest names; an
+       EmbeddedResource added after it is silently not embedded. -->
+  <Target Name="EmbedWebUi" BeforeTargets="AssignTargetPaths"
           Condition="'$(Configuration)' == 'Release' and '$(SkipWebUi)' != 'true' and Exists('$(WebUiDir)\package.json')">
     <Message Importance="high" Text="Building ShipOptimizer web UI in $(WebUiDir)..." />
     <Exec Command="npm ci" WorkingDirectory="$(WebUiDir)" Condition="!Exists('$(WebUiDir)\node_modules')" />
     <Exec Command="npm run build" WorkingDirectory="$(WebUiDir)" />
     <ItemGroup>
-      <WebUiFiles Include="$(WebUiDir)\dist\**\*" />
+      <!-- LogicalName is the request path the server looks up ("ui/index.html", "ui/assets/<hashed>.js"), so the
+           include stays a wildcard and no hashed filename is ever written down. RecursiveDir carries the
+           platform separator; WebUi normalises it.
+
+           Two steps, and the split is required: %(RecursiveDir) inside a target batches over an EXISTING item
+           list, so writing it into the metadata of the item being created yields empty strings and every
+           resource is named plain "ui/" — which csc rejects as a duplicate identifier. Qualifying it against
+           WebUiFile gives it something to batch over. -->
+      <WebUiFile Include="$(WebUiDir)\dist\**\*" />
+      <EmbeddedResource Include="@(WebUiFile)"
+                        LogicalName="ui/%(WebUiFile.RecursiveDir)%(WebUiFile.Filename)%(WebUiFile.Extension)" />
     </ItemGroup>
-    <Copy SourceFiles="@(WebUiFiles)"
-          DestinationFiles="@(WebUiFiles->'$(GameDir)\BepInEx\plugins\$(AssemblyName)\ui\%(RecursiveDir)%(Filename)%(Extension)')"
-          SkipUnchangedFiles="true"
-          Condition="Exists('$(GameDir)\BepInEx\plugins')" />
-    <Message Importance="high" Text="Bundled web UI -> $(GameDir)\BepInEx\plugins\$(AssemblyName)\ui" />
+    <Message Importance="high" Text="Embedding web UI into $(AssemblyName).dll" />
   </Target>
 
+
+  <!-- Duplication check on every build. It is the only detector for a shared surface implemented twice: that
+       raises no compiler error, no failing test and no lint warning, so before this the signal was a user
+       noticing a feature missing from the second copy. Manifest violations FAIL the build; the generic
+       repeated-block scan only warns, because a heuristic must not block one. -->
+  <Target Name="CheckDupes" BeforeTargets="Build" Condition="Exists('$(MSBuildThisFileDirectory)../tools/check-dupes.ps1')">
+    <Exec Command="pwsh -NoProfile -File &quot;$(MSBuildThisFileDirectory)../tools/check-dupes.ps1&quot; -Quiet"
+          ContinueOnError="false" />
+  </Target>
 </Project>
+

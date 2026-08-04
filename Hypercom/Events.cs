@@ -6,7 +6,7 @@ namespace Hypercom
 {
     // Fan-out of game events to connected SSE clients. Emit() runs on the Unity main thread (from the
     // Update watcher) and must never block on socket I/O — it only enqueues to per-client bounded
-    // queues (V9). Each SSE connection drains its own queue on its own thread.
+    // queues. Each SSE connection drains its own queue on its own thread.
     internal static class EventBus
     {
         internal sealed class Client
