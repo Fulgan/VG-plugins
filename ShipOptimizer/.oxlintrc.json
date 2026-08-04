@@ -1,8 +1,12 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
+  "plugins": ["react", "react-hooks", "typescript", "oxc"],
   "rules": {
-    "react/rules-of-hooks": "error",
+    // NOTE the plugin prefix: this rule lives in `react-hooks`, not `react`. It was configured as
+    // "react/rules-of-hooks" and therefore matched NOTHING and never ran — which is how a conditional
+    // hook (a `useState` below an early return) reached the browser as "Rendered more hooks than during
+    // the previous render". Keep `react-hooks` in `plugins` above or the rule is silently inert again.
+    "react-hooks/rules-of-hooks": "error",
     "react/only-export-components": ["warn", { "allowConstantExport": true }]
   }
 }

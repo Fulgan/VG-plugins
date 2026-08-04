@@ -1,0 +1,127 @@
+/* Design tokens — the vocabulary a design overrides.
+ *
+ * Values here are the CURRENT look, lifted from the existing stylesheets, so defining them changes nothing
+ * on its own. A design overrides the ones it cares about under `:root[data-design="<id>"]` and inherits the
+ * rest, which keeps a design file short instead of a full restyle.
+ *
+ * As hardcoded colours in App.css / officers.css / map.css / stuff.css get migrated to `var(--…)`, they
+ * start responding to every design automatically. New CSS should use tokens from the start.
+ */
+:root {
+  /* surfaces, back to front */
+  --bg: #0f0f12;
+  --panel: #14141a;
+  --panel-2: #16161c;
+  --raised: #1b1b22;
+  --sunken: #101016;
+
+  /* lines */
+  --border: #2c2c36;
+  --border-strong: #33333e;
+  --border-hover: #4a4a58;
+
+  /* text */
+  --text: #e6e6ee;
+  --text-dim: #8a8a96;
+  --text-faint: #6a6a78;
+
+  /* accents */
+  --accent: #4a7fb5;
+  --accent-soft: #24303d;
+  --accent-text: #cfe4ff;
+  --good: #58c26b;
+  --warn: #ffb020;
+  --bad: #fca5a5;
+
+  /* shape + type */
+  --radius: 3px;
+  --radius-lg: 4px;
+  --row-pad-y: 2px;
+  --row-pad-x: 6px;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-size: 13px;
+
+  /* ---- galaxy map ------------------------------------------------------------------------------ */
+  /* One grey for every layer's zero. "No reading here" is one fact, so it has one colour whatever the
+     active layer is; that a system was never visited is carried by SHAPE (a hollow node, a faint dot). */
+  --map-empty: #23252c;
+
+  /* surfaces */
+  --map-panel: #14161b;
+  --map-sunken: #101216;
+  --map-void: #0b0e14;             /* the graph's backdrop, and the level digits that sit on a filled node */
+  --map-track: #1c1c22;
+  --map-line: #23252c;
+  --map-line-hover: #3a4f6b;
+  --map-hairline: #1a1a20;
+  --map-row-hover: #161a22;
+  --map-row-hover-line: #2a3345;
+  --map-pick-hover: #1c1e26;
+  --map-foot-line: #212a38;
+  --map-input-bg: #0c0e12;
+  --map-input-line: #2a2d36;
+
+  /* text */
+  --map-text: #cfcfd8;
+  --map-text-bright: #cfe3ff;
+  --map-text-dim: #7d8796;
+  --map-label: #9aa4b2;
+  --map-muted-text: #4a4a55;
+  --map-hint: #86b0ff;
+  --map-on-accent: #0d0d10;        /* text ON a filled accent chip */
+  --map-clock: #8ab4d8;
+  --map-ok: #86efac;
+
+  /* where you are */
+  --map-you: #4aa3ff;
+  --map-you-fine: #6fd6ff;         /* the reticle's hairline ring and crosshair ticks */
+  --map-you-glow: #4aa3ff33;
+  --map-here-bg: #12203a;
+  --map-here-bg-2: #121a28;
+  --map-here-line: #2f5a80;
+
+  /* edges and gates */
+  --map-edge: #6d80a6;
+  --map-edge-locked: #7a3030;
+  --map-gate: #e8b04f;             /* gate business: an edge leaving the subsector, a hop behind a lock */
+  --map-unreachable: #7a6060;
+  --map-ruler: #2a3546;
+  --map-ruler-text: #55627a;
+
+  /* activities — the hues the game badges Combat / Mining / Salvage with, so a special system and a POI
+     of the same activity read as the same thing */
+  --map-combat: #fca5a5;
+  --map-mining: #ffb020;
+  --map-salvage: #c07bff;
+  --map-anomaly: #86b0ff;
+  --map-poi-station: #4aa3ff;
+  --map-poi-combat-station: #e0704a;
+  --map-poi-bg: #131a26;
+  --map-poi-line: #2f3a4d;
+  --map-dyn: #c07bff;
+
+  /* item finder */
+  --map-found-bg: #17150f;
+  --map-found-line: #3d3524;
+  --map-found-hairline: #201d16;
+  --map-found-hover: #211d14;
+  --map-found-here: #1a2430;
+
+  /* the warzone subsector card, an order of magnitude bigger than any other */
+  --map-warzone-line: #5a3a2a;
+  --map-warzone-bg: #191519;
+
+  --map-level-lo: #4ad06a;         /* level bar's low end; its high end is --warn */
+
+  /* inks laid over a colour rather than beside it */
+  --map-dot-inset: #0006;
+  --map-swatch-edge: #0008;
+}
+
+/* The base surface is a token, so a design changing --bg is enough to reskin the page background. */
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+}

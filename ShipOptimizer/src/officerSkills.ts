@@ -1,4 +1,4 @@
-// Editable skill↔role table for the officer optimizer, transcribed from doc/officer-skills.md.
+// Editable skill↔role table for the officer optimizer.
 // Keyed by the skill's DISPLAY NAME (matches the `name` field the bridge returns per skill node).
 // `roles` = the professions/roles the skill belongs to (used for the optimizer's role-relevance
 // tiebreak). `drone` = the skill only counts when the ship has a drone bay. `major` = the powerful

@@ -1,0 +1,99 @@
+/* Faction standing — one row per faction carrying BOTH ladders, so the two in-game panels can be compared
+   side by side. Bar colours come from the payload (the game's own faction/level/rank colours), not from here;
+   this file only sizes and tokenises. */
+/* Two panels side by side where there's room, stacked when there isn't. Each is self-contained: rows on top,
+   that ladder's change log at the bottom. */
+.std-wrap { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+
+.std-panel {
+  flex: 1 1 460px; min-width: 0;
+  border: 1px solid var(--border, #2c2c36); border-radius: var(--radius-lg, 4px);
+  background: var(--panel, #14141a); padding: 8px 10px 9px;
+}
+.std-panel-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-bottom: 7px; }
+.std-panel-head h3 {
+  margin: 0; font-size: 12px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--text, #e6e6ee); font-weight: 700;
+}
+.std-panel-head .muted { font-size: 10px; }
+
+.std-rows { display: flex; flex-direction: column; gap: 2px; }
+
+.std-row { border-radius: var(--radius, 3px); }
+.std-row.open { background: var(--sunken, #101016); }
+/* At war: the one state that changes how you should act, so it reads without hunting for a number. */
+.std-row.war { box-shadow: inset 2px 0 0 #ff7b7b; }
+
+/* faction (badge+name) | bar | value | band-or-rank. One grid for both panels so the two line up when side
+   by side. The faction cell is a single mark: a colour dot beside a badge would say the same thing twice. */
+.std-main {
+  display: grid; grid-template-columns: minmax(112px, 1fr) minmax(60px, 1.6fr) auto minmax(88px, auto);
+  align-items: center; gap: 9px; width: 100%; padding: 4px 6px;
+  background: none; border: 0; text-align: left; color: inherit; cursor: pointer;
+}
+.std-main:hover { background: var(--hover, #1a1a22); }
+
+/* The faction's name carries its own colour (set inline by FactionMark) — weight is this file's business. */
+.std-main .fac-mark-name { font-weight: 600; font-size: 12px; }
+
+.std-lvl, .std-title, .std-war { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.std-title { color: var(--text-dim, #8a8a96); }
+.std-war { color: #ff7b7b; font-weight: 600; cursor: help; }
+
+.std-bar { height: 6px; border-radius: 3px; overflow: hidden; background: var(--sunken, #101016); }
+.std-bar i { display: block; height: 100%; border-radius: 3px; }
+.std-val { font-size: 11px; font-variant-numeric: tabular-nums; text-align: right; }
+/* The scale sits with the value, the way the game prints it (30000 / 50000) — dimmer, since it never moves. */
+.std-val em { font-style: normal; color: var(--text-faint, #6a6a78); }
+
+.std-rankcell { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.std-rank {
+  flex: none; width: 15px; height: 15px; border-radius: 50%; display: grid; place-items: center;
+  font-size: 9px; font-weight: 700; color: #10101a;
+}
+
+.std-detail {
+  display: flex; flex-wrap: wrap; gap: 6px 26px;
+  padding: 2px 8px 8px 25px; border-top: 1px solid var(--border-faint, #1e1e26);
+}
+.std-facts { display: flex; flex-direction: column; gap: 1px; font-size: 11px; color: var(--text-dim, #8a8a96); }
+.std-perks { margin: 4px 0 0; padding-left: 15px; font-size: 11px; }
+.std-perks li { margin: 1px 0; }
+
+/* ---- change history ---------------------------------------------------------------------------- */
+/* Each ladder's log sits at the foot of its own panel, separated from the rows rather than boxed again. */
+.std-log { margin-top: 9px; padding-top: 7px; border-top: 1px solid var(--border, #2c2c36); }
+.std-log-head { display: flex; align-items: baseline; gap: 8px; }
+.std-log-head h4 {
+  margin: 0; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-dim, #8a8a96);
+}
+.std-net { font-size: 10px; font-variant-numeric: tabular-nums; color: var(--text-faint, #6a6a78); }
+.std-net.good { color: #58c26b; }
+.std-net.bad { color: #ff7b7b; }
+.std-clear {
+  margin-left: auto; font-size: 10px; padding: 1px 6px; border-radius: var(--radius, 3px);
+  border: 1px solid var(--border, #2c2c36); background: none; color: var(--text-faint, #6a6a78);
+}
+.std-log-empty { font-size: 11px; padding: 6px 0 2px; }
+
+.std-log-rows { margin: 6px 0 0; padding: 0; list-style: none; max-height: 260px; overflow-y: auto; }
+.std-log-rows li {
+  display: grid; grid-template-columns: 52px minmax(80px, 1fr) 56px 62px auto;
+  align-items: baseline; gap: 6px; padding: 2px 0; font-size: 11px;
+  border-bottom: 1px solid var(--border-faint, #1e1e26);
+}
+.std-log-t { color: var(--text-faint, #6a6a78); font-variant-numeric: tabular-nums; }
+.std-log-f { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.std-log-d { font-variant-numeric: tabular-nums; text-align: right; font-weight: 600; }
+.std-log-rows li.up .std-log-d { color: #58c26b; }
+.std-log-rows li.down .std-log-d { color: #ff7b7b; }
+.std-log-v { font-variant-numeric: tabular-nums; text-align: right; color: var(--text-dim, #8a8a96); }
+.std-log-tier { grid-column: 5; color: #e8b04f; }
+.std-log-at { grid-column: 5; color: var(--text-faint, #6a6a78); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 620px) {
+  /* Two rows per faction rather than four cramped columns: identity above, the numbers below. */
+  .std-main { grid-template-columns: 1fr auto; }
+  .fac-mark { grid-column: 1 / span 2; }
+  .std-lvl, .std-war, .std-rankcell { grid-column: 1 / span 2; }
+}

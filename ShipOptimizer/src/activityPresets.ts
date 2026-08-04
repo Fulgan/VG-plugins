@@ -1,5 +1,5 @@
 // Global "activity profile" → suggested officer-skill priority list. EDITABLE first-pass curation from
-// doc/officer-skills.md — tweak the name lists freely (unknown names are simply skipped when composed
+// The skill<->role table — tweak the name lists freely (unknown names are simply skipped when composed
 // against the live skill catalog). The profile is shared across ALL optimizers (officer now; boosters/
 // gear later). Skill names must match the game's display names exactly (composed → matched by name).
 
@@ -51,14 +51,20 @@ export function composeActivity(p: ActivityProfile): string[] {
   return [...new Set(out)];
 }
 
-const KEY = "shipoptimizer.activityProfile";
-export function loadProfile(): ActivityProfile {
-  try {
-    const r = localStorage.getItem(KEY);
-    if (r) return { ...DEFAULT_PROFILE, ...JSON.parse(r) };
-  } catch { /* ignore */ }
-  return { ...DEFAULT_PROFILE };
+// Map a ship's role (Combat | Mining | Salvaging | Cargo | Generic) to a suggestion main activity.
+export function roleToActivity(role: string | null | undefined): MainActivity {
+  switch (role) {
+    case "Combat": return "combat";
+    case "Mining": return "mining";
+    case "Salvaging": return "salvage";
+    default: return "combat"; // Cargo / Generic / unknown → combat (the neutral default)
+  }
 }
-export function saveProfile(p: ActivityProfile) {
-  try { localStorage.setItem(KEY, JSON.stringify(p)); } catch { /* quota */ }
+
+// Per-ship default suggestion profile: main activity from the ship role, combat layer from the ship's
+// defensive module slot (armor preferred if it somehow carries both). Other flags off. Used until the
+// user edits the profile for that ship.
+export function defaultProfileForShip(role: string | null | undefined, defenseLayer: "shield" | "armor" | null): ActivityProfile {
+  return { ...DEFAULT_PROFILE, main: roleToActivity(role), combatLayer: defenseLayer ?? DEFAULT_PROFILE.combatLayer };
 }
+

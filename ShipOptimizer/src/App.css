@@ -3,10 +3,13 @@
   font-family: system-ui, sans-serif;
 }
 
+/* Use the window. The gear tab lays two slot columns side by side, each holding a current -> new pair of
+   cards, so a fixed 1600px cap left module cards too narrow for a name and its stats on a wide monitor while
+   the page had empty margins. Capped only so text lines don't become unreadably long on an ultrawide. */
 .app {
-  max-width: 1600px;
+  max-width: min(2400px, 100vw);
   margin: 0 auto;
-  padding: 12px 16px 40px;
+  padding: 12px 20px 40px;
   color: #e6e6e6;
 }
 
@@ -29,6 +32,18 @@ header h1 {
   color: #bbb;
   font-size: 13px;
 }
+/* Credits on hand. Deliberately the loudest thing in the header after the app name: it is what the player checks
+   before every purchase, and it used to be the grey tail of a run-on status line. `tabular-nums` keeps the digits
+   from shifting sideways as the balance changes. */
+.wallet {
+  margin-left: 10px; padding: 2px 9px; border-radius: 999px;
+  background: #1f2a14; border: 1px solid #3d5a24; color: #b7e07a;
+  font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.wallet b { color: #d7f59e; font-size: 15px; font-weight: 700; }
+/* The barter currency, in the amber the app already uses for money going OUT at a barter price. */
+.wallet.marks { margin-left: 6px; background: #2a2410; border-color: #5a4a1e; color: #e8c877; }
+.wallet.marks b { color: #ffe08a; }
 .echo {
   color: #ffb020;
   font-weight: 600;
@@ -41,7 +56,6 @@ header h1 {
 table.grid th.role, table.grid td.role { color: #ffcf70; }
 table.grid th.role { background: #2a2410; }
 .tip-sub.role { color: #ffcf70; font-weight: 600; }
-.tip-main.role { color: #ffe08a; }
 .badge {
   font-size: 11px;
   padding: 2px 8px;
@@ -236,8 +250,70 @@ table.grid thead th.c-name {
 }
 td.num, th.c-stat { text-align: right; font-variant-numeric: tabular-nums; }
 td.dim { color: #8a8a8a; }
-td.c-asp, th.c-asp { white-space: normal; max-width: 200px; color: #c9b8e6; font-size: 11.5px; }
-td.c-sub, th.c-sub { white-space: normal; max-width: 280px; color: #9fd3a0; font-size: 11.5px; }
+/* The two TEXT columns in a table of numbers: CLIPPED to one line, never wrapped.
+   Wrapping was tried and reverted — a sentence of rolls makes a 3-line row, row heights stop matching and the
+   table becomes hard to read across. So: one line, ellipsis, and a draggable width for when more is wanted.
+   The full text is in the row's hover card, which lists every substat.
+
+   These selectors must out-specify `table.grid td` (`.grid` + 2 types), which is why a bare `td.c-sub` lost:
+   its `max-width` could never bind against that rule's `nowrap`, so the cell expanded to its content and
+   painted over the columns beside it. `width` as well as `max-width`, because the auto table algorithm treats
+   a lone `max-width` as a hint. */
+table.grid td.c-asp, table.grid th.c-asp,
+table.grid td.c-sub, table.grid th.c-sub {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11.5px;
+}
+table.grid td.c-asp, table.grid th.c-asp { width: var(--asp-w, 200px); max-width: var(--asp-w, 200px); color: #c9b8e6; }
+table.grid td.c-sub, table.grid th.c-sub { width: var(--sub-w, 280px); max-width: var(--sub-w, 280px); color: #9fd3a0; }
+
+/* ---- refresh cycles: one slim strip above the tabs, on every page ----
+   Was three stacked cards inside the Map tab. Above the tab bar it has to cost one row of height, so each
+   cycle is a single line: name, the COUNTDOWN, the elapsed figure in parentheses, then a track that takes
+   whatever width is left. One accent per cycle so a glance tells them apart. */
+.cyc-row { display: flex; gap: 8px; margin: 6px 0 4px; flex-wrap: wrap; }
+.cyc {
+  flex: 1 1 260px; min-width: 240px; display: flex; align-items: center; gap: 8px;
+  padding: 3px 10px; border: 1px solid var(--cyc-edge); border-radius: 4px; background: var(--cyc-bg);
+}
+.cyc-label { color: var(--cyc-accent); font-weight: 600; font-size: 11.5px; white-space: nowrap; }
+.cyc-time {
+  font-variant-numeric: tabular-nums; font-size: 14px; font-weight: 700; color: var(--cyc-strong);
+  font-family: ui-monospace, "JetBrains Mono", Menlo, monospace;
+}
+.cyc-time.soon { color: #ffb020; }
+/* Secondary to the countdown by design: it answers "did I just miss one", which nobody asks first. */
+.cyc-since { font-size: 10px; color: #6b7688; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cyc-track { flex: 1 1 40px; height: 4px; min-width: 30px; border-radius: 3px; background: var(--cyc-track); overflow: hidden; }
+.cyc-fill { display: block; height: 100%; background: linear-gradient(90deg, var(--cyc-fill-a), var(--cyc-accent)); }
+
+.cyc-shop {
+  --cyc-accent: #8fd0d8; --cyc-strong: #dff2f5; --cyc-edge: #2b4a4f;
+  --cyc-bg: #101a1c; --cyc-track: #16262a; --cyc-fill-a: #2b6f78;
+}
+/* missions run on the shortest cycle and are the amber signal of the three */
+.cyc-mission {
+  --cyc-accent: #e8b04f; --cyc-strong: #ffd98a; --cyc-edge: #4a3a1a;
+  --cyc-bg: #1a1508; --cyc-track: #2a2210; --cyc-fill-a: #8a5a12;
+}
+.cyc-conquest {
+  --cyc-accent: #c9a7e0; --cyc-strong: #e6d6f2; --cyc-edge: #3a2c42;
+  --cyc-bg: #16121a; --cyc-track: #241c2b; --cyc-fill-a: #7a4fa0;
+}
+
+/* Drag handle at the header's right edge. Sits inside the sticky header cell, spans its full height, and is
+   wider than it looks (8px) because a 1px target is a game of skill. */
+table.grid thead th.resizable { position: sticky; overflow: visible; }
+.th-grip {
+  position: absolute; top: 0; right: -4px; width: 8px; height: 100%;
+  cursor: col-resize; z-index: 5; touch-action: none;
+}
+.th-grip::after {
+  content: ""; position: absolute; top: 4px; bottom: 4px; left: 3px; width: 2px; background: #3a3f4a;
+}
+.th-grip:hover::after, .th-grip.dragging::after { background: #6c8cff; }
 @keyframes flashrow {
   from { background: #3a5a2a; }
   to { background: transparent; }
@@ -289,19 +365,11 @@ button.x { padding: 0 5px; border: none; background: transparent; color: #fca5a5
 .logsrc.s-event { color: #86efac; }
 .logtext { color: #ddd; }
 
-.wlink { color: #567; text-decoration: none; font-size: 11px; }
-.wlink:hover { color: #4aa3ff; }
 
-/* game-style hover comparison popup: a row of item panels */
-.tips {
-  position: fixed;
-  z-index: 50;
-  pointer-events: none;
-  display: flex;
-  gap: 8px;
-  align-items: flex-start;
-  max-width: 96vw;
-}
+/* The item tooltip's own classes went with T31: one ItemCard owns that card now and brings its own styles.
+   What is left under .tip* belongs to the MAP and OFFICER tooltips — a different widget with a different shape.
+   Kept rather than renamed: renaming 14 live classes across two tabs risks silently unstyling a tooltip for no
+   behavioural gain, and a dead rule is the thing that actually misleads. */
 .tip {
   width: 300px;
   flex: 0 0 auto;
@@ -313,19 +381,18 @@ button.x { padding: 0 5px; border: none; background: transparent; color: #fca5a5
   box-shadow: 0 6px 24px #000a;
 }
 .tip.cmp { border-color: #4a5f3a; }
-.tip-tag { color: #7d8796; font-size: 11px; }
+/* Card identity at a glance: the hovered item glows light blue; any compared item that BEATS it on the
+   same main stat glows dark gold. Both sit on top of the panel's normal drop shadow. */
+.tip.hovered { border-color: #4aa3ff; box-shadow: 0 0 0 1px #4aa3ff55, 0 0 18px #4aa3ff5c, 0 6px 24px #000a; }
+.tip.better { border-color: #a87d1a; box-shadow: 0 0 0 1px #b8860b66, 0 0 16px #b8860b70, 0 6px 24px #000a; }
 .tip-head { text-align: center; color: #9aa4b2; font-size: 11px; border-bottom: 1px solid #24304a; padding-bottom: 3px; margin-bottom: 4px; }
 .tip-name-row { display: flex; justify-content: space-between; align-items: baseline; }
 .tip-name { font-size: 15px; font-weight: 600; }
 .tip-lvl { color: #9aa4b2; font-size: 11px; }
-.tip-img { max-width: 64px; float: right; margin: 2px 0 2px 6px; }
-.tip-main { color: #4ad06a; font-size: 15px; margin: 5px 0 2px; }
 .tip-line { color: #c7ccd4; }
 .tip-line.dim { color: #8a93a0; margin-top: 4px; }
 .tip-subs { margin: 5px 0; }
 .tip-sub { color: #58c2b8; }
-.tip-aspect { margin-top: 6px; border-top: 1px solid #24304a; padding-top: 4px; }
-.tip-asp-name { color: #c07bff; font-weight: 600; }
 .tip-asp-desc { color: #aab; font-size: 11.5px; }
 .tip-cmp { margin-top: 6px; border-top: 1px solid #24304a; padding-top: 4px; }
 .tip-cmp-head { color: #9aa4b2; font-size: 11px; margin-bottom: 2px; }
@@ -333,6 +400,13 @@ button.x { padding: 0 5px; border: none; background: transparent; color: #fca5a5
 .tip-cmp-row .up { color: #86efac; }
 .tip-cmp-row .down { color: #fca5a5; }
 .tip-foot { display: flex; justify-content: space-between; color: #ffb020; margin-top: 6px; font-size: 11px; }
+
+/* power pie — main stat as a share of the strongest item in the same comparison tooltip.
+   Shared by both tooltip flavours (.tip cards here, .git cards in officers.css). */
+.pow-pie { display: inline-flex; line-height: 0; }
+.pow-pie-bg { fill: #ffb0201f; }
+.pow-pie-fill { fill: #ffb020; }
+.pow-pie-ring { fill: none; stroke: #ffb020; stroke-width: 1.5; }
 
 .r-Standard { color: #cfcfcf; }
 .r-Enhanced { color: #58c26b; }
@@ -352,9 +426,29 @@ button:active:not(:disabled) { transform: scale(.94); filter: brightness(1.3); }
 .import-cfg { cursor: pointer; padding: 4px 8px; border: 1px solid #333; border-radius: 4px; background: #1b1b1f; color: #eee; font-size: 12px; }
 .import-cfg:hover { border-color: #4aa3ff; }
 
-/* config popin */
-.cfg-back { position: fixed; inset: 0; background: #000a; z-index: 300; display: flex; align-items: center; justify-content: center; }
-.cfg-pop { width: min(680px, 92vw); max-height: 86vh; display: flex; flex-direction: column; background: #14161b; border: 1px solid #2a2d36; border-radius: 10px; box-shadow: 0 12px 40px #000b; padding: 14px; }
+/* Modal — ONE owner, two shells. `dialog` is closed (display:none) by the UA stylesheet until it is opened,
+   so nothing here needs an open/closed switch. The box is positioned identically whichever shell is in play:
+   the top layer ignores z-index, and the fallback needs one, so both are stated. */
+dialog.modal-box {
+  position: fixed; inset: 0; margin: auto; z-index: 301;
+  width: min(680px, 92vw); max-height: 86vh;
+  display: flex; flex-direction: column;
+  background: #14161b; color: #eee;
+  border: 1px solid #2a2d36; border-radius: 10px; box-shadow: 0 12px 40px #000b; padding: 14px;
+}
+dialog.modal-box:not([open]) { display: none; }
+/* Native shell's scrim. */
+dialog.modal-box::backdrop { background: #000a; }
+/* Fallback shell's scrim — same colour, so the two shells are indistinguishable on screen. */
+.modal-scrim { position: fixed; inset: 0; background: #000a; z-index: 300; }
+.modal-confirm { width: min(420px, 92vw); }
+.modal-title { font-size: 14px; margin-bottom: 6px; }
+.modal-detail { font-size: 12px; color: #9aa4b2; margin-bottom: 12px; }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.modal-actions button { height: 30px; padding: 0 12px; font-size: 12px; }
+.modal-actions button.danger { background: #3b1d1d; border-color: #7f1d1d; color: #fca5a5; }
+
+.cfg-actions button.danger { background: #3b1d1d; border-color: #7f1d1d; color: #fca5a5; }
 .cfg-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .cfg-head button { background: none; border: none; color: #aaa; font-size: 18px; cursor: pointer; }
 .cfg-ta { flex: 1; min-height: 300px; width: 100%; box-sizing: border-box; background: #0c0e12; border: 1px solid #333; color: #cfe3ff; font-family: ui-monospace, monospace; font-size: 12px; padding: 8px; border-radius: 6px; resize: vertical; }
@@ -388,4 +482,61 @@ button:active:not(:disabled) { transform: scale(.94); filter: brightness(1.3); }
 .log-line .pt-chip { margin-left: 0; }
 .pt-chip.other { color: #b58a6a; background: #2a1f16; border-color: #453121; } /* from another playthrough */
 
+/* ship the logged action ran against — same chip shape as the playthrough tag */
+.ship-chip { flex: 0 0 auto; font-size: 10px; color: #9fd; background: #12212a; border: 1px solid #243a45; border-radius: 4px; padding: 0 5px; white-space: nowrap; }
+.ship-chip.other { color: #b58a6a; background: #2a1f16; border-color: #453121; } /* a different ship than the current one */
+
 .opp-d.switch { color: #86b0ff; }
+
+/* buy straight from a shop opportunity — disabled (with a reason) when undocked or unaffordable */
+.opp-buy { flex: 0 0 auto; background: #14281c; border: 1px solid #2c5238; color: #86efac;
+  border-radius: 4px; font-size: 10.5px; padding: 0 7px; cursor: pointer; }
+.opp-buy:hover:not(:disabled) { border-color: #4ad06a; }
+.opp-buy:disabled { opacity: .4; cursor: default; color: #7d7d86; border-color: #2a2d36; background: none; }
+
+/* blocked (can't afford / undocked): still clickable so the reason gets said out loud */
+.opp-buy.blocked { color: #fca5a5; border-color: #4a2a2a; background: #221618; cursor: help; }
+.opp-buy.blocked:hover { border-color: #7a3030; }
+
+/* shop table's buy column */
+th.c-buy, td.c-buy { width: 1%; padding: 2px 6px; text-align: center; }
+.grid-wrap-outer { display: flex; flex-direction: column; gap: 6px; }
+
+/* shop restock countdown — turns amber when a purchase from the current list is about to go stale */
+small.restock { color: #8ab4d8; }
+small.restock.soon { color: #ffb020; font-weight: 600; }
+
+/* ALL / NONE on filter panels — set the whole set at once instead of toggling a dozen chips */
+button.pill-all, .cat-chip.all, .chip.all {
+  font-size: 11px; padding: 1px 8px; cursor: pointer; font-weight: 600;
+  background: var(--accent-soft, #24303d); color: var(--accent-text, #cfe4ff);
+  border: 1px solid var(--border-strong, #33333e); border-radius: 10px;
+}
+button.pill-all:disabled, .cat-chip.all:disabled, .chip.all:disabled { opacity: .4; cursor: default; }
+
+/* The error-boundary fallback. Deliberately plain: it renders when the app's own tree could not, so it must
+   not depend on anything the app sets up. */
+.crash {
+  max-width: 46rem;
+  margin: 3rem auto;
+  padding: 1.5rem;
+  border: 1px solid var(--line, #444);
+  border-radius: 6px;
+  background: var(--panel, #1a1a1e);
+  color: var(--fg, #ddd);
+}
+.crash h2 { margin: 0 0 .75rem; font-size: 1.1rem; }
+.crash p { margin: 0 0 1rem; color: var(--dim, #999); line-height: 1.5; }
+.crash-msg {
+  margin: 0 0 1rem;
+  padding: .75rem;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg, #111);
+  border-radius: 4px;
+  font-size: .85rem;
+}
+.crash button { padding: .5rem 1rem; cursor: pointer; }
+/* Where it threw. Smaller and dimmer than the message: useful when reporting, noise when reading. */
+.crash-where { font-size: .78rem; color: var(--dim, #8a8a96); max-height: 9rem; overflow: auto; }

@@ -105,7 +105,11 @@ export function optimizeBoosters(pool: Item[], slotTypes: (string | null)[], for
     const slotsOfType = openPicks.filter((p) => p.type === t);
     const winners = pool
       .filter((b) => !used.has(b) && boosterType(b) === t)
-      .sort((a, z) => boosterValue(z) - boosterValue(a))
+      // Value desc, then prefer the EQUIPPED booster on a tie (so an equal-value armory/cargo one can't
+      // displace it and read as a change), then a stable id tiebreak for determinism across reloads.
+      .sort((a, z) => boosterValue(z) - boosterValue(a)
+        || (Number(z.location === "equipped") - Number(a.location === "equipped"))
+        || boosterId(a).localeCompare(boosterId(z)))
       .slice(0, slotsOfType.length);
     const bySlot = new Map(slotsOfType.map((p) => [p.slot, p]));
     const free = new Set(slotsOfType);

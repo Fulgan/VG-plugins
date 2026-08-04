@@ -2,9 +2,36 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Ship Optimizer</title>
+    <!-- Boot guard. Deliberately a CLASSIC inline script, not part of the module bundle: if the bundle fails
+         to parse (an older phone browser meeting newer syntax) nothing inside it can report that, and the page
+         is simply blank. A blank page says nothing at all, which is worse than any error text. -->
+    <script>
+      (function () {
+        function show(what, detail) {
+          var root = document.getElementById('root');
+          if (!root || root.childElementCount > 0) return;   // the app rendered; leave it alone
+          root.innerHTML =
+            '<div style="font:14px/1.5 system-ui,sans-serif;padding:16px;color:#e6e6ee;background:#14141a;' +
+            'border:1px solid #ff7b7b;border-radius:4px;margin:12px">' +
+            '<b style="color:#ff7b7b">Ship Optimizer could not start</b><div style="margin-top:6px">' + what +
+            '</div><pre style="white-space:pre-wrap;word-break:break-word;margin:8px 0 0;color:#8a8a96;' +
+            'font-size:12px">' + (detail || '') + '</pre></div>';
+        }
+        window.addEventListener('error', function (e) {
+          show('The page failed to load its code. If this is an older phone or tablet, its browser may be too old for this build.',
+               (e.message || '') + (e.filename ? '
+' + e.filename + ':' + e.lineno : ''));
+        });
+        window.addEventListener('unhandledrejection', function (e) {
+          show('Something failed while starting up.', (e.reason && (e.reason.message || e.reason)) + '');
+        });
+        // Nothing threw, nothing rendered: the usual cause is the bundle never arriving at all.
+        setTimeout(function () { show('The app did not start. Reloading usually fixes it; if not, the bundle may be missing or blocked.', ''); }, 6000);
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

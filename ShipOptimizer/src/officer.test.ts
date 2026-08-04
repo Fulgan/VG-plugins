@@ -12,7 +12,7 @@ function officer(guid: string, skills: string[], rarity = "Standard", level = 1)
 }
 const base = { role: null, hasDroneBay: true, scope: "potential" as const, forced: new Set<string>() };
 
-describe("officer optimizer (§V30 — top-N lexicographic)", () => {
+describe("officer optimizer — top-N lexicographic", () => {
   it("picks the top-N officers by priority coverage and stacks ranks", () => {
     const officers = [officer("X", ["A"]), officer("Y", ["B"]), officer("Z", [])];
     const r = optimize({ ...base, officers, slots: 2, priorities: ["A", "B"] });
@@ -39,6 +39,21 @@ describe("officer optimizer (§V30 — top-N lexicographic)", () => {
     const r = optimize({ ...base, officers, slots: 2, priorities: ["A", "B"], forced: new Set(["Z"]) });
     expect(r.chosen.map((o) => o.guid)).toContain("Z");
     expect(r.chosen.length).toBe(2);
+  });
+
+  it("keeps an assigned officer over a benched sidegrade that only ties on coverage", () => {
+    // Both cover only A; Y is a higher rarity. Without incumbency the comparator swaps to Y for the
+    // rarity tiebreak → a pointless "change". Incumbency keeps the assigned X.
+    const officers = [officer("X", ["A"], "Standard"), officer("Y", ["A"], "Legendary")];
+    const r = optimize({ ...base, officers, slots: 1, priorities: ["A"], assigned: new Set(["X"]) });
+    expect(r.chosen.map((o) => o.guid)).toEqual(["X"]);
+  });
+
+  it("still displaces an incumbent when a benched officer covers a higher priority", () => {
+    // X (assigned) covers only B; Y covers A (higher). Incumbency must NOT protect X here.
+    const officers = [officer("X", ["B"], "Legendary"), officer("Y", ["A"], "Standard")];
+    const r = optimize({ ...base, officers, slots: 1, priorities: ["A", "B"], assigned: new Set(["X"]) });
+    expect(r.chosen.map((o) => o.guid)).toEqual(["Y"]);
   });
 
   it("idle income counts only benched officers", () => {

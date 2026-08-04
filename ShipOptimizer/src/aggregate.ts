@@ -10,7 +10,7 @@ export interface StatTotal {
 export type Totals = Record<string, StatTotal>;
 
 // Aggregate the effective stats of a set of items into per-stat totals.
-// Values come straight from the bridge's baked GetStats() — no scaling is re-derived here (V2).
+// Values come straight from the bridge's baked GetStats() — no scaling is re-derived here.
 export function aggregate(items: Item[]): Totals {
   const totals: Totals = {};
   for (const item of items) {

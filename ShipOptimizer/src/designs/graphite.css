@@ -1,0 +1,66 @@
+/* Graphite — a worked EXAMPLE of the design contract, and the template to copy for a real design.
+ *
+ * Every rule is scoped to `:root[data-design="graphite"]`, which is what keeps designs from leaking into
+ * each other. Two halves, matching the two levels a design can work at:
+ *   1. token overrides — reach everything already using var(--…)
+ *   2. selector overrides — for what tokens can't say
+ *
+ * Not meant as a finished look; it exists so the picker demonstrably does something and so a designer can
+ * see exactly where their CSS goes.
+ */
+
+/* ---- 1. tokens ---------------------------------------------------------------------------------- */
+:root[data-design="graphite"] {
+  --bg: #101113;
+  --panel: #17181b;
+  --panel-2: #1b1c20;
+  --raised: #212328;
+  --sunken: #0c0d0f;
+
+  --border: #2f3238;
+  --border-strong: #3a3e45;
+  --border-hover: #565c66;
+
+  --text: #f0f1f3;
+  --text-dim: #9aa0a8;
+  --text-faint: #6f757d;
+
+  --accent: #5b9dd9;
+  --accent-soft: #22303c;
+  --accent-text: #d8ebff;
+
+  /* flatter and tighter than Classic */
+  --radius: 2px;
+  --radius-lg: 2px;
+  --row-pad-y: 1px;
+}
+
+/* ---- 2. selectors ------------------------------------------------------------------------------- */
+/* Reaching the parts of the existing CSS that still hardcode their colours. As those migrate to tokens,
+   rules like these can be deleted rather than maintained. */
+:root[data-design="graphite"] table.grid th,
+:root[data-design="graphite"] table.stuff-tbl th,
+:root[data-design="graphite"] table.keys th {
+  background: var(--panel-2);
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border-strong);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: .06em;
+}
+
+:root[data-design="graphite"] table.grid td,
+:root[data-design="graphite"] table.stuff-tbl td {
+  padding: var(--row-pad-y) var(--row-pad-x);
+  border-bottom: 1px solid var(--border);
+}
+
+:root[data-design="graphite"] nav button {
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text-dim);
+}
+:root[data-design="graphite"] nav button.on {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}

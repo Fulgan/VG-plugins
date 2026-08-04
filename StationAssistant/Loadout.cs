@@ -31,7 +31,7 @@ namespace StationAssistant
             if (!_migrated.Add(key)) return;
             try
             {
-                var f = Path.Combine(Dir, Sanitize(key) + ".loadouts");
+                var f = Path.Combine(Dir, Util.Sanitize(key) + ".loadouts");
                 if (!File.Exists(f)) return;
                 var pt = Pt(); // assume the active pilot == the current playthrough
                 var entries = new List<LoadoutEntry>();
@@ -65,11 +65,6 @@ namespace StationAssistant
         }
         private static string _shipGuidForMigration;
         private static List<string> SplitList(string s) => string.IsNullOrEmpty(s) ? new List<string>() : new List<string>(s.Split('|'));
-        private static string Sanitize(string s)
-        {
-            foreach (var c in Path.GetInvalidFileNameChars()) s = s.Replace(c, '_');
-            return string.IsNullOrEmpty(s) ? "default" : s;
-        }
 
         // Stable-ordered loadouts for the current ship.
         private static List<LoadoutEntry> Entries()
@@ -90,8 +85,7 @@ namespace StationAssistant
                 var ship = TargetShip();
                 if (ship == null) return new List<LoadoutPreset>();
                 shipGuid = ship.guid;
-                shipLabel = !string.IsNullOrEmpty(ship.customShipName) ? ship.customShipName
-                    : (ship.shipClass?.displayName ?? ship.guid);
+                shipLabel = Util.ShipName(ship);
                 return Entries().Select(e => e.gear).ToList();
             }
             catch (Exception ex) { Plugin.Log.LogWarning($"loadouts read failed: {ex.Message}"); return new List<LoadoutPreset>(); }
@@ -105,7 +99,7 @@ namespace StationAssistant
                 if (ship == null) return false;
                 name = string.IsNullOrEmpty(name) ? "Loadout" : name.Trim();
                 var gear = LoadoutCore.Snapshot(ship, name);
-                var label = !string.IsNullOrEmpty(ship.customShipName) ? ship.customShipName : (ship.shipClass?.displayName ?? ship.guid);
+                var label = Util.ShipName(ship);
                 VG.Loadout.LoadoutStore.Put(new LoadoutEntry { playthrough = Pt(), shipGuid = ship.guid, shipLabel = label, name = name, gear = gear });
                 _lastName[ship.guid] = name;
                 return true;
@@ -153,7 +147,7 @@ namespace StationAssistant
                 switch (e.status)
                 {
                     case "equip": lines.Add(Loc.F("loadout.pv.equip", e.slot.kind, e.slot.slot,
-                        string.IsNullOrEmpty(e.chosen.displayName) ? e.slot.name : e.chosen.displayName, where)); break;
+                        Util.ItemName(e.chosen) ?? e.slot.name, where)); break;
                     case "none": lines.Add(Loc.F("loadout.pv.none", e.slot.kind, e.slot.slot, e.slot.name)); break;
                 }
             }
@@ -173,7 +167,7 @@ namespace StationAssistant
                 case ApplyStatus.Echo: return Loc.T("loadout.echo");
             }
             if (ship != null) _lastName[ship.guid] = p.name;
-            return Loc.F("loadout.applied", r.changed);
+            return Loc.F("loadout.applied", VG.Text.Say.Count(r.changed, "slot"));
         }
     }
 }

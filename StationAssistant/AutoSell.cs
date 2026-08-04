@@ -47,7 +47,7 @@ namespace StationAssistant
                     return Fail("not docked");
 
                 // snapshot: selling mutates cargo
-                var toSell = cargo.items?.Where(i => i?.item != null && ShouldSell(i.item, cfg)).ToList();
+                var toSell = cargo.items?.Where(i => i?.item != null && ShouldSell(i, cfg)).ToList();
                 if (toSell is null or { Count: 0 })
                     return Fail("no matching items");
 
@@ -61,7 +61,10 @@ namespace StationAssistant
                     var count = entry.count;
                     var value = (long)entry.item.sellValue * count;
 
-                    player.credits = AddClamped(player.credits, value);
+                    // Stop before removing the goods if the balance cannot be written: an unpaid sale is worse
+                    // than an abandoned one.
+                    if (!VG.Game.Wallet.SetBalance(player, AddClamped(VG.Game.Wallet.Balance(player), value)))
+                        break;
 
                     // Buyback-eligible gear returns to the station shop so it can be re-bought.
                     if (shop != null && entry.item.buyBack)
@@ -82,7 +85,7 @@ namespace StationAssistant
                 }
 
                 Plugin.Log.LogInfo($"Auto-sell: sold {items} item(s) from cargo for {credits:N0} credits.");
-                Notify(Loc.F("sell.result.sold", items, credits.ToString("N0")));
+                Util.Notify(Loc.F("sell.result.sold", VG.Text.Say.Count(items, "item"), VG.Text.Say.Credits(credits)));
                 return new SellResult { Items = items, Credits = credits, Reason = "ok" };
             }
             catch (Exception ex)
@@ -104,7 +107,7 @@ namespace StationAssistant
                 var count = 0;
                 foreach (var entry in cargo.items)
                 {
-                    if (entry?.item == null || !ShouldSell(entry.item, cfg))
+                    if (entry?.item == null || !ShouldSell(entry, cfg))
                         continue;
                     count += entry.count;
                     estCredits = AddClamped(estCredits, (long)entry.item.sellValue * entry.count);
@@ -128,9 +131,9 @@ namespace StationAssistant
 
                 foreach (var e in cargo.items)
                 {
-                    if (e?.item == null || !ShouldSell(e.item, cfg))
+                    if (e?.item == null || !ShouldSell(e, cfg))
                         continue;
-                    var name = string.IsNullOrEmpty(e.item.displayName) ? e.item.identifier : e.item.displayName;
+                    var name = Util.ItemName(e.item);
                     var val = (long)e.item.sellValue * e.count;
                     lines.Add($"{e.count}x {name} — {val:N0} cr");
                 }
@@ -142,9 +145,11 @@ namespace StationAssistant
             return lines;
         }
 
-        private static bool ShouldSell(InventoryItemType item, Config cfg)
+        private static bool ShouldSell(Inventory.InventoryItem entry, Config cfg)
         {
-            if (!item.canSell || item.missionItem || item.criticalItem || item.favouriteItem || item.sellValue == 0)
+            var item = entry.item;
+            if (!item.canSell || item.missionItem || item.criticalItem
+                || VG.Game.ItemFlags.IsFavourited(entry, item) || item.sellValue == 0)
                 return false;
 
             if (!cfg.IsCategoryEnabled(item.itemCategory))
@@ -297,73 +302,51 @@ namespace StationAssistant
         }
 
         private static SellResult Fail(string reason) => new SellResult { Items = 0, Credits = 0, Reason = reason };
-
-        private static void Notify(string text)
-        {
-            try
-            {
-                Singleton<NotificationManager>.Instance
-                    .CreateNotification(text).WithColor(ColorHelper.greenish).WithCustomTime(3f).Show();
-            }
-            catch { }
-        }
     }
 
-    // Keep exception. Unset field = any; rarity/size/level are minimums (>=). Matches -> item is spared.
+    // Keep exception. Unset field = any; rarity and level are minimums (>=), SIZE is exact — a Large module is
+    // not a better Small one, so a minimum would spare items the player did not pick. Matches -> item is spared.
     internal sealed class KeepRule
     {
         // Sentinel Aspect value: match ANY boss aspect (identifier starts with "boss") instead of one exact id.
-        internal const string AllBossAspects = "*boss*";
+        internal const string AllBossAspects = VG.Core.KeepMatch.AllBossAspects;
 
         internal ItemCategory? Category;
         internal string SpecificType;   // equipment class name, null = any
         internal Rarity? MinRarity;
-        internal ModuleSize? MinSize;
+        internal ModuleSize? Size;
         internal int MinLevel;          // 0 = any
         internal string Aspect;         // aspect identifier, AllBossAspects sentinel, or null = any
 
         internal bool IsEmpty => !Category.HasValue && SpecificType == null && !MinRarity.HasValue
-                                 && !MinSize.HasValue && MinLevel <= 0 && Aspect == null;
+                                 && !Size.HasValue && MinLevel <= 0 && Aspect == null;
 
+        // Adapter: build the game-free ItemFacts + KeepCriteria POCOs and let VG.Core.KeepMatch decide.
+        // The matching logic (rank minimums, boss-aspect sentinel) lives there so it can be unit-tested.
         internal bool Matches(InventoryItemType item)
         {
-            if (Category.HasValue && item.itemCategory != Category.Value)
-                return false;
-
-            AbstractEquipment eq = null;
-            var fetched = false;
-            AbstractEquipment Eq()
+            var eq = item.GetComponent<AbstractEquipment>();
+            var facts = new VG.Core.ItemFacts
             {
-                if (!fetched) { eq = item.GetComponent<AbstractEquipment>(); fetched = true; }
-                return eq;
-            }
-
-            if (SpecificType != null)
+                Category = item.itemCategory.ToString(),
+                Type = eq != null ? eq.GetType().Name : null,
+                RarityRank = (int)item.rarity,
+                SizeRank = eq != null ? (int)eq.size : -1,
+                Level = item.itemLevel,
+                AspectIds = eq != null
+                    ? eq.aspectSlots.Select(s => s?.equipAspect?.identifier).Where(id => id != null).ToArray()
+                    : Array.Empty<string>(),
+            };
+            var crit = new VG.Core.KeepCriteria
             {
-                var e = Eq();
-                if (e == null || e.GetType().Name != SpecificType) return false;
-            }
-            if (MinRarity.HasValue && (int)item.rarity < (int)MinRarity.Value)
-                return false;
-            if (MinSize.HasValue)
-            {
-                var e = Eq();
-                if (e == null || (int)e.size < (int)MinSize.Value) return false;
-            }
-            if (MinLevel > 0 && item.itemLevel < MinLevel)
-                return false;
-            if (Aspect != null)
-            {
-                var e = Eq();
-                if (e == null)
-                    return false;
-                bool AspectMatch(EquipAspect a) => a != null && (Aspect == AllBossAspects
-                    ? a.identifier.StartsWith("boss", StringComparison.OrdinalIgnoreCase)
-                    : a.identifier == Aspect);
-                if (!e.aspectSlots.Any(s => AspectMatch(s.equipAspect)))
-                    return false;
-            }
-            return true;
+                Category = Category?.ToString(),
+                Type = SpecificType,
+                MinRarityRank = MinRarity.HasValue ? (int)MinRarity.Value : -1,
+                SizeRank = Size.HasValue ? (int)Size.Value : -1,
+                MinLevel = MinLevel,
+                Aspect = Aspect,
+            };
+            return VG.Core.KeepMatch.Matches(crit, facts);
         }
 
         internal string Describe(Func<Rarity, string> colorRarity, Func<string, string> prettifyType = null)
@@ -372,7 +355,7 @@ namespace StationAssistant
             if (Category.HasValue) parts.Add(Category.Value.ToString());
             if (SpecificType != null) parts.Add(prettifyType != null ? prettifyType(SpecificType) : SpecificType);
             if (MinRarity.HasValue) parts.Add("≥" + colorRarity(MinRarity.Value));
-            if (MinSize.HasValue) parts.Add("≥" + MinSize.Value);
+            if (Size.HasValue) parts.Add(Size.Value.ToString());
             if (MinLevel > 0) parts.Add("lvl≥" + MinLevel);
             if (Aspect != null) parts.Add("aspect:" + AutoSell.AspectName(Aspect));
             return parts.Count == 0 ? "(empty)" : string.Join(", ", parts);
@@ -384,7 +367,7 @@ namespace StationAssistant
             Category?.ToString() ?? "~",
             SpecificType ?? "~",
             MinRarity?.ToString() ?? "~",
-            MinSize?.ToString() ?? "~",
+            Size?.ToString() ?? "~",
             MinLevel.ToString(),
             Aspect ?? "~"
         });
@@ -397,7 +380,7 @@ namespace StationAssistant
             if (p[0] != "~" && Enum.TryParse(p[0], out ItemCategory c)) r.Category = c;
             if (p[1] != "~") r.SpecificType = p[1];
             if (p[2] != "~" && Enum.TryParse(p[2], out Rarity ra)) r.MinRarity = ra;
-            if (p[3] != "~" && Enum.TryParse(p[3], out ModuleSize sz)) r.MinSize = sz;
+            if (p[3] != "~" && Enum.TryParse(p[3], out ModuleSize sz)) r.Size = sz;
             int.TryParse(p[4], out r.MinLevel);
             if (p[5] != "~") r.Aspect = p[5];
             return r.IsEmpty ? null : r;

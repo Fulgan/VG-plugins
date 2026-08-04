@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using BepInEx;
 using VG.Loadout;
+using static Hypercom.Body;
 
 namespace Hypercom
 {
@@ -17,6 +18,7 @@ namespace Hypercom
             internal string ShipGuid;          // ship this loadout was taken from
             internal LoadoutPreset Gear;       // hardpoints + modules + boosters (fingerprints)
             internal List<string> Officers;    // officer guid per slot (null = empty)
+            internal string Settings;          // opaque UI-settings blob (JSON owned by the web client)
         }
 
         // One-time migration of the pre-shared-store file (hypercom-loadouts.json) into the shared store.
@@ -60,10 +62,11 @@ namespace Hypercom
         {
             playthrough = pt, shipGuid = shipGuid, shipLabel = p.Ship, name = name,
             gear = p.Gear ?? new LoadoutPreset { name = name }, officers = p.Officers ?? new List<string>(),
+            settings = p.Settings,
         };
         private static Preset ToPreset(LoadoutEntry e) => e == null ? null : new Preset
         {
-            Ship = e.shipLabel, ShipGuid = e.shipGuid, Gear = e.gear, Officers = e.officers,
+            Ship = e.shipLabel, ShipGuid = e.shipGuid, Gear = e.gear, Officers = e.officers, Settings = e.settings,
         };
 
         // ---- API used by Api.cs ----
@@ -138,6 +141,7 @@ namespace Hypercom
                     name = name,
                     gear = GearFromDict(d),
                     officers = OfficersFromDict(d),
+                    settings = Str(d, "settings"),
                 });
             }
             return LoadoutStore.Import(playthrough, list);
@@ -152,6 +156,7 @@ namespace Hypercom
             ["shipGuid"] = e.shipGuid,
             ["gearSlots"] = e.gear?.slots.Count ?? 0,
             ["officers"] = e.officers?.Count(g => !string.IsNullOrEmpty(g)) ?? 0,
+            ["settings"] = e.settings,
         };
 
         private static Dictionary<string, object> ToDict(LoadoutEntry e) => new Dictionary<string, object>
@@ -161,6 +166,7 @@ namespace Hypercom
             ["shipGuid"] = e.shipGuid,
             ["gear"] = e.gear?.slots.Select(SlotToDict).ToList<object>() ?? new List<object>(),
             ["officers"] = e.officers?.Cast<object>().ToList() ?? new List<object>(),
+            ["settings"] = e.settings,
         };
 
         private static LoadoutPreset GearFromDict(Dictionary<string, object> d)
@@ -200,7 +206,5 @@ namespace Hypercom
             return s;
         }
 
-        private static string Str(Dictionary<string, object> d, string k) => d.TryGetValue(k, out var v) ? v?.ToString() : null;
-        private static double Dbl(Dictionary<string, object> d, string k) { try { return d.TryGetValue(k, out var v) && v != null ? System.Convert.ToDouble(v, System.Globalization.CultureInfo.InvariantCulture) : 0; } catch { return 0; } }
     }
 }

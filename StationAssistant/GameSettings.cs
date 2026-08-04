@@ -44,19 +44,12 @@ namespace StationAssistant
         // there's no compile-time crew typeref: the crew type is named differently across game versions
         // (Commander vs Captain), and a hard reference makes this method fail to JIT on the version that
         // lacks it — which runs every frame from Poll().
-        private static object Member(object o, string name)
-        {
-            if (o == null) return null;
-            var t = o.GetType();
-            var p = t.GetProperty(name); if (p != null) return p.GetValue(o);
-            var f = t.GetField(name); return f?.GetValue(o);
-        }
         internal static string KeyFor(GamePlayer p)
         {
             if (p == null) return null;
-            var c = Member(p, "commander") ?? Member(p, "captain");
+            var c = Util.Member(p, "commander") ?? Util.Member(p, "captain");
             if (c == null) return null;
-            return Sanitize($"{Member(c, "firstName")}_{Member(c, "lastName")}_{Member(c, "callsign")}_{Member(p, "starterSpaceshipName")}_{Member(p, "starterSpecialization")}");
+            return Util.Sanitize($"{Util.Member(c, "firstName")}_{Util.Member(c, "lastName")}_{Util.Member(c, "callsign")}_{Util.Member(p, "starterSpaceshipName")}_{Util.Member(p, "starterSpecialization")}");
         }
 
         // Called every frame from Plugin.Update. Switches profile when the playthrough changes.
@@ -133,10 +126,21 @@ namespace StationAssistant
             foreach (var e in Plugin.Cfg.Gameplay)
             {
                 var k = e.Definition.Section + "/" + e.Definition.Key;
-                if (map.TryGetValue(k, out var v))
+                if (!map.TryGetValue(k, out var v) && RenamedSections.TryGetValue(e.Definition.Section, out var was))
+                    map.TryGetValue(was + "/" + e.Definition.Key, out v);
+                if (v != null)
                     try { e.SetSerializedValue(v); } catch { /* keep current on parse error */ }
             }
         }
+
+        // A profile line is keyed `Section/Key`, so renaming a config section orphans every line an existing
+        // pilot already saved — silently resetting those settings on load. New name → the name it was written
+        // under; a line under the current name always wins. Entries stay listed until profiles written before
+        // the rename can be assumed gone.
+        private static readonly Dictionary<string, string> RenamedSections = new Dictionary<string, string>
+        {
+            ["Gunner"] = "AmmoValet",
+        };
 
         private static void ResetToDefaults()
         {
@@ -213,13 +217,6 @@ namespace StationAssistant
                 Plugin.Log.LogInfo($"Station Assistant: copied profile '{sourceKey}' -> '{_active}'");
             }
             catch (Exception ex) { Plugin.Log.LogWarning($"settings copy failed: {ex.Message}"); }
-        }
-
-        private static string Sanitize(string s)
-        {
-            foreach (var c in Path.GetInvalidFileNameChars())
-                s = s.Replace(c, '_');
-            return string.IsNullOrEmpty(s) ? "default" : s;
         }
     }
 }

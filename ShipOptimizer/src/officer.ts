@@ -1,14 +1,14 @@
 // Officer optimizer — pure logic (no React). Ports the "why top-N is exact" algorithm from the spec
-// (§V30) and doc/officer-skills.md: the objective is separable (rank(Sᵢ) = # chosen officers with Sᵢ),
+//: the objective is separable (rank(Sᵢ) = # chosen officers with Sᵢ),
 // so the optimum is the top-N officers under a lexicographic priority-coverage comparator.
 import { OFFICER_SKILLS, type SkillMeta } from "./officerSkills";
+import { RARITY_RANK } from "./format";
 import type { Officer, OfficerSkill } from "./types";
 
 export type Scope = "current" | "potential";
 
-// Rarity ordering for the tiebreak + the real idle-income multiplier (game: HourlyIdleIncome =
-// level × 40 × mult). Mirrors OfficerData in Assembly-CSharp.
-const RARITY_RANK: Record<string, number> = { Standard: 0, Enhanced: 1, HighGrade: 2, Exotic: 3, Legendary: 4 };
+// Idle-income multiplier by rarity (game: HourlyIdleIncome = level × 40 × mult). Mirrors OfficerData
+// in Assembly-CSharp. (Rarity ordering for the comparator tiebreak lives in ./format as RARITY_RANK.)
 const IDLE_MULT: Record<string, number> = { Standard: 1, Enhanced: 2, HighGrade: 5, Exotic: 10, Legendary: 20 };
 export const MAX_LEVEL = 60;
 
@@ -37,11 +37,31 @@ export function buildCatalog(officers: Officer[]): CatalogSkill[] {
   return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
+// Every skill the game HAS, not just the ones your officers happen to carry — from the curated
+// name-keyed table. Skills your roster lacks get a `name:` id (see namePrio) since no real id exists for
+// them in this save; they are marked `owned: false` so the browser can show them as aspirational, which is
+// the point: prioritise a skill you don't have and recruits offering it start ranking higher.
+export interface BrowsableSkill extends CatalogSkill { owned: boolean }
+
+export function buildFullCatalog(owned: CatalogSkill[]): BrowsableSkill[] {
+  const byName = new Map(owned.map((c) => [c.name.toLowerCase(), c]));
+  const out: BrowsableSkill[] = owned.map((c) => ({ ...c, owned: true }));
+  for (const [name, m] of Object.entries(OFFICER_SKILLS)) {
+    if (byName.has(name.toLowerCase())) continue;
+    out.push({
+      id: namePrio(name), name, major: !!m.major,
+      roles: m.roles ?? [], drone: !!m.drone, effect: m.effect, owned: false,
+    });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export interface ScoredOfficer extends Officer {
   scopeSkills: OfficerSkill[]; // in-scope skills (drone-filtered) at the chosen scope
   cov: boolean[]; // per-priority coverage (aligned to the priority list)
   covCount: number;
   roleRel: number; // # in-scope skills relevant to the ship role
+  assigned: boolean; // currently assigned to this ship (incumbent)
   idle: number;
 }
 
@@ -53,6 +73,7 @@ export interface OptimizeInput {
   priorities: string[]; // skill ids, highest priority first
   scope: Scope;
   forced: Set<string>; // officer guids pinned into a slot
+  assigned?: Set<string>; // officer guids currently assigned to this ship (incumbents — kept on ties)
 }
 
 export interface RankLine {
@@ -75,24 +96,52 @@ function inScope(o: Officer, scope: Scope, hasDroneBay: boolean): OfficerSkill[]
   return src.filter((s) => hasDroneBay || !skillMeta(s.name).drone);
 }
 
+// A priority entry that carries no skill id, only a name. Two things need this: prioritising a skill
+// NOBODY on the roster has yet (the whole point — a recruit offering it should then rank higher, but there
+// is no id to key on until someone has it), and importing a priority list from another playthrough or a
+// hand-edited file, where ids may not resolve.
+export const NAME_PRIO_PREFIX = "name:";
+export const namePrio = (name: string) => NAME_PRIO_PREFIX + name.toLowerCase();
+export const isNamePrio = (p: string) => p.startsWith(NAME_PRIO_PREFIX);
+
+// Two accessors, not interchangeable: `namePrioKey` is the lowercased key and the only thing to compare
+// against; `namePrioLabel` is the properly-cased name, for display only.
+const PROPER_NAME = new Map(Object.keys(OFFICER_SKILLS).map((n) => [n.toLowerCase(), n]));
+export const namePrioKey = (p: string) => p.slice(NAME_PRIO_PREFIX.length);
+export const namePrioLabel = (p: string) => {
+  const lower = namePrioKey(p);
+  return PROPER_NAME.get(lower) ?? lower;
+};
+
 // Score one officer against the ship + priorities: coverage vector, role relevance, idle income.
-export function scoreOfficer(o: Officer, ctx: Pick<OptimizeInput, "role" | "hasDroneBay" | "priorities" | "scope">): ScoredOfficer {
+export function scoreOfficer(o: Officer, ctx: Pick<OptimizeInput, "role" | "hasDroneBay" | "priorities" | "scope" | "assigned">): ScoredOfficer {
   const scopeSkills = inScope(o, ctx.scope, ctx.hasDroneBay);
   const ids = new Set(scopeSkills.map((s) => s.id));
-  const cov = ctx.priorities.map((id) => ids.has(id));
+  // Names too, so a `name:`-keyed priority still matches the officers who do have the skill.
+  const names = new Set(scopeSkills.map((s) => s.name.toLowerCase()));
+  const cov = ctx.priorities.map((p) => (isNamePrio(p) ? names.has(namePrioKey(p)) : ids.has(p)));
   const roleRel = ctx.role ? scopeSkills.filter((s) => skillMeta(s.name).roles.includes(ctx.role!)).length : 0;
-  return { ...o, scopeSkills, cov, covCount: cov.filter(Boolean).length, roleRel, idle: idleIncomeOf(o) };
+  const assigned = ctx.assigned?.has(o.guid) ?? false;
+  return { ...o, scopeSkills, cov, covCount: cov.filter(Boolean).length, roleRel, assigned, idle: idleIncomeOf(o) };
 }
 
-// Lexicographic comparator: cover the highest-priority skill the other misses → rank higher; ties →
-// ship-role relevance, then rarity, then level. Negative ⇒ `a` ranks above `b`.
+// Lexicographic comparator: cover the highest-priority skill the other misses → rank higher; then
+// INCUMBENCY (a currently-assigned officer outranks a benched one that only ties on coverage) → ship-
+// role relevance → rarity → level → guid. Negative ⇒ `a` ranks above `b`.
+// Incumbency comes right after coverage so the optimizer never proposes a swap that doesn't change
+// priority coverage — an assigned officer is displaced only by someone covering a higher priority they
+// miss, not for a cosmetic rarity/level tiebreak (that churn read as "changes I didn't ask for").
+// The final guid tiebreak keeps the order deterministic: without it two fully-tied officers fall back
+// to input-array order, which the game reloads differently each restart.
 export function comparator(priorityCount: number) {
   return (a: ScoredOfficer, b: ScoredOfficer): number => {
     for (let i = 0; i < priorityCount; i++) if (a.cov[i] !== b.cov[i]) return a.cov[i] ? -1 : 1;
+    if (a.assigned !== b.assigned) return a.assigned ? -1 : 1;
     if (a.roleRel !== b.roleRel) return b.roleRel - a.roleRel;
     const ra = RARITY_RANK[a.rarity] ?? 0, rb = RARITY_RANK[b.rarity] ?? 0;
     if (ra !== rb) return rb - ra;
-    return b.level - a.level;
+    if (a.level !== b.level) return b.level - a.level;
+    return (a.guid ?? "").localeCompare(b.guid ?? "");
   };
 }
 
@@ -118,8 +167,104 @@ export function optimize(input: OptimizeInput): OptimizeResult {
   return { chosen, sorted, ranks, idleTotal, benchedCount: benched.length };
 }
 
+// ---- priority list export / import --------------------------------------------------------------
+// A priority list is portable: the same "what I care about" applies to another ship, another playthrough,
+// or a friend's game. Skill IDs are the internal key but are NOT trustworthy across saves, so every entry
+// carries its display NAME too and import prefers the name — that also makes the file hand-editable.
+
+export const PRIO_FILE_KIND = "shipoptimizer.priorities";
+
+export interface PriorityFile {
+  kind: typeof PRIO_FILE_KIND;
+  v: 1;
+  ship?: string | null;      // context only, never used on import
+  role?: string | null;
+  scope?: Scope;
+  skills: { id?: string; name: string }[];   // ORDER IS THE PRIORITY
+}
+
+// Build the portable form. `nameOf` resolves an id to its display name (catalog or roster).
+export function exportPriorities(
+  prio: string[],
+  nameOf: (id: string) => string,
+  ctx?: { ship?: string | null; role?: string | null; scope?: Scope },
+): PriorityFile {
+  return {
+    kind: PRIO_FILE_KIND,
+    v: 1,
+    ship: ctx?.ship ?? null,
+    role: ctx?.role ?? null,
+    scope: ctx?.scope,
+    skills: prio.map((p) => (isNamePrio(p)
+      ? { name: namePrioLabel(p) }                 // no id to give — it was never resolved
+      : { id: p, name: nameOf(p) })),
+  };
+}
+
+export interface PriorityImport {
+  prio: string[];
+  matched: number;     // resolved to a real catalog id
+  byName: number;      // kept as a name-only priority (no id in this save)
+  skipped: string[];   // entries with nothing usable
+  scope?: Scope;
+}
+
+// Parse anything reasonable into a priority list: the exported object, a bare array of entries, or a bare
+// array of names/ids (so a hand-written list of names works). Unresolvable names are KEPT as name-only
+// priorities rather than dropped — a skill your roster lacks today is exactly the kind you want to
+// prioritise for recruiting.
+export function importPriorities(raw: unknown, catalog: CatalogSkill[]): PriorityImport {
+  const byId = new Map(catalog.map((c) => [c.id, c]));
+  const byName = new Map(catalog.map((c) => [c.name.toLowerCase(), c]));
+
+  const entries: { id?: string; name?: string }[] = [];
+  const push = (v: unknown) => {
+    if (typeof v === "string") entries.push({ name: v });
+    else if (v && typeof v === "object") {
+      const o = v as { id?: unknown; name?: unknown };
+      entries.push({
+        id: typeof o.id === "string" ? o.id : undefined,
+        name: typeof o.name === "string" ? o.name : undefined,
+      });
+    }
+  };
+
+  let scope: Scope | undefined;
+  if (Array.isArray(raw)) raw.forEach(push);
+  else if (raw && typeof raw === "object") {
+    const o = raw as { skills?: unknown; prio?: unknown; scope?: unknown };
+    if (o.scope === "current" || o.scope === "potential") scope = o.scope;
+    const list = Array.isArray(o.skills) ? o.skills : Array.isArray(o.prio) ? o.prio : null;
+    if (!list) throw new Error("no `skills` array in this file");
+    list.forEach(push);
+  } else throw new Error("expected a priority list or an exported priorities file");
+
+  const prio: string[] = [];
+  const seen = new Set<string>();
+  const skipped: string[] = [];
+  let matched = 0;
+  let named = 0;
+
+  for (const e of entries) {
+    // Name first: it survives a playthrough change, an id does not.
+    const hit = (e.name && byName.get(e.name.toLowerCase())) || (e.id && byId.get(e.id)) || null;
+    if (hit) {
+      if (!seen.has(hit.id)) { seen.add(hit.id); prio.push(hit.id); matched++; }
+      continue;
+    }
+    if (e.name) {
+      const key = namePrio(e.name);
+      if (!seen.has(key)) { seen.add(key); prio.push(key); named++; }
+      continue;
+    }
+    if (e.id) skipped.push(e.id);
+  }
+  return { prio, matched, byName: named, skipped, scope };
+}
+
 // Resolve a priority skill id back to its display name (from any officer that has it).
 function catalogName(officers: Officer[], id: string): string {
+  if (isNamePrio(id)) return namePrioLabel(id);   // no officer has it — the key carries the name
   for (const o of officers) {
     const s = o.potential.find((x) => x.id === id) ?? o.current.find((x) => x.id === id);
     if (s) return s.name;

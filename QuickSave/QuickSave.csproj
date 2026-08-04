@@ -1,0 +1,75 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <AssemblyName>QuickSave</AssemblyName>
+    <Product>QuickSave</Product>
+    <Version>1.0.0</Version>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+
+    <!-- The test project is a separate build with its own generated AssemblyInfo; without this the plugin globs
+         tests/ and the two collide on every assembly attribute. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);tests\**</DefaultItemExcludes>
+
+    <!-- GameDir / PinnedRefs / ManagedDir / BepInExCore all resolve in Directory.Build.props, which
+         MSBuild imports automatically. They were duplicated here in every plugin, pinned version
+         included, which is why the pin was never bumped when the game updated. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="BepInEx">
+      <HintPath>$(BepInExCore)\BepInEx.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(ManagedDir)\Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(ManagedDir)\UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(ManagedDir)\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- The shared settings host draws with IMGUI and reads legacy Input; both are needed to compile it. -->
+    <Reference Include="UnityEngine.IMGUIModule">
+      <HintPath>$(ManagedDir)\UnityEngine.IMGUIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.InputLegacyModule">
+      <HintPath>$(ManagedDir)\UnityEngine.InputLegacyModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- Shared SOURCE, compiled in — no shared DLL, so this stays one self-contained assembly with nothing extra
+       to deploy. ModHost gives the neutral settings window + rebindable, collision-checked hotkeys; GameMembers and
+       GameToast are the name-based game access and the on-screen notification every plugin needs. -->
+  <ItemGroup>
+    <Compile Include="..\Shared\ModHost.cs" Link="ModHost.cs" />
+    <Compile Include="..\Shared\GameMembers.cs" Link="GameMembers.cs" />
+    <Compile Include="..\Shared\GameState.cs" Link="GameState.cs" />
+    <Compile Include="..\Shared\GameToast.cs" Link="GameToast.cs" />
+    <Compile Include="..\Shared\Cooldown.cs" Link="Cooldown.cs" />
+  </ItemGroup>
+
+  <!-- Drop the built DLL straight into the game's plugin folder on every build. -->
+  <Target Name="DeployToBepInEx" AfterTargets="Build" Condition="Exists('$(GameDir)\BepInEx\plugins') and '$(SkipDeploy)' != 'true'">
+    <Copy SourceFiles="$(TargetPath)"
+          DestinationFolder="$(GameDir)\BepInEx\plugins\$(AssemblyName)"
+          SkipUnchangedFiles="false" />
+    <Message Importance="high" Text="Deployed $(AssemblyName).dll -> $(GameDir)\BepInEx\plugins\$(AssemblyName)" />
+  </Target>
+
+  <!-- Duplication check on every build, same as the other plugins: a shared surface implemented twice raises no
+       compiler error, no failing test and no lint warning, so this is the only detector. -->
+  <Target Name="CheckDupes" BeforeTargets="Build" Condition="Exists('$(MSBuildThisFileDirectory)../tools/check-dupes.ps1')">
+    <Exec Command="pwsh -NoProfile -File &quot;$(MSBuildThisFileDirectory)../tools/check-dupes.ps1&quot; -Quiet"
+          ContinueOnError="false" />
+  </Target>
+</Project>
