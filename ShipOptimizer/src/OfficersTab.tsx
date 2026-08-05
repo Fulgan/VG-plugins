@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type MouseEvent } from "react";
 import ApplyBar, { ApplyMsg } from "./ApplyBar";
+import { Notice } from "./Notice";
 import type { ApplyApi } from "./useApply";
 import { buildCatalog, buildFullCatalog, defaultPriorities, evaluateRecruits, exportPriorities, importPriorities, isNamePrio, MAX_LEVEL, namePrioLabel, optimize, prioritiesFromCrew, type BrowsableSkill, type CatalogSkill, type OptimizeResult, type RecruitOfficer, type Scope } from "./officer";
 import { composeActivity, defaultProfileForShip, DEFAULT_PROFILE, type ActivityProfile, type MainActivity } from "./activityPresets";
@@ -655,7 +656,7 @@ export default function OfficersTab({
           <div className="panel-note">
             {stationOppCount ? `${stationOppCount} would out-rank an assigned officer` : "none better than your current crew"}. Highlighted officers would out-rank one you have assigned.
           </div>
-          {hireMsg && <div className={hireMsg.ok ? "sum-msg ok" : "sum-msg err"}>{hireMsg.ok ? "✓" : "⚠"} {hireMsg.text}</div>}
+          <Notice msg={hireMsg} onClose={() => setHireMsg(null)} />
           {stationView.map((o) => {
             const rc = RARITY_COLOR[o.rarity] ?? "#cfcfcf";
             // Full kit: priority-covered skills first, the rest dimmed (like the crew cards/roster).

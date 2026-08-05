@@ -86,6 +86,86 @@ export const FIELDS: Record<string, FieldDef> = {
           get: (it) => Math.max(0, (it.aspectSlots ?? 0) - aspectNames(it).length) },
 };
 
+/**
+ * One bound of a `level vs mine` clause said in words — "at least 10 below", "at most 2 above" — which is how
+ * the clause is read, edited AND written into the rule's sentence. ONE vocabulary: the editor and the sentence
+ * disagreeing about what a clause means is the same defect as two implementations of it.
+ *
+ * The stored form is a signed OFFSET (`level - myLevel`), and which BOUND a term writes follows from the pair:
+ * further below me is a SMALLER offset ∴ "at least 10 below" is `max: -10`, while "at most 10 below" is the
+ * near side, `min: -10`. Getting that backwards inverts the rule, which is why it is derived and not typed out.
+ */
+export interface RelTerm { q: "at least" | "at most"; n: number; dir: "below" | "above" }
+
+export const relSide = (t: RelTerm): "min" | "max" => ((t.q === "at least") === (t.dir === "above") ? "min" : "max");
+
+/** The bound a term writes, as `{side, value}` — the caller decides what happens to the other bound. */
+export function relBound(t: RelTerm): { side: "min" | "max"; value: number } {
+  const n = Math.abs(t.n);
+  // At MY level the distance says nothing and the direction says everything: "below mine" is `max: 0`, "above
+  // mine" is `min: 0`. Reading the side off the sign instead collapses both onto one bound.
+  // `-0` is a real value in JS and survives into stored JSON, where it compares unequal to the 0 every other
+  // path writes — so a distance of nothing is normalised here rather than everywhere it is read.
+  return { side: n === 0 ? (t.dir === "below" ? "max" : "min") : relSide(t), value: n === 0 ? 0 : t.dir === "below" ? -n : n };
+}
+
+/** MY OWN LEVEL, exactly — a distance of zero in BOTH directions, which no single bound can say. */
+export const REL_EXACT: RangeCond = { min: 0, max: 0 };
+export const isRelExact = (c: RangeCond) => c.min === 0 && c.max === 0;
+
+/**
+ * Every reading a `level vs mine` clause has, as the ONE list its quantifier offers.
+ *
+ * Three of the five carry no distance, and they are the common ones: "everything at or below my level" is what
+ * a player means far more often than any offset, and making them type a 0 to say it — then working out which
+ * bound a 0 lands on — is arithmetic the sentence exists to remove. INCLUSIVE on purpose: `max: 0` is my own
+ * level and everything under it, and "at or below" says that where "below" would leave a reader guessing
+ * whether their own level is in or out.
+ */
+export type RelQ = RelTerm["q"] | "at or below" | "at or above" | "exactly";
+export const REL_QS: RelQ[] = ["at least", "at most", "at or below", "at or above", "exactly"];
+export const relNeedsNumber = (q: RelQ) => q === "at least" || q === "at most";
+
+/** The whole clause a distance-free quantifier writes, or null for the two that need a number. */
+export const relFixed = (q: RelQ): RangeCond | null =>
+  q === "at or below" ? { min: null, max: 0 }
+  : q === "at or above" ? { min: 0, max: null }
+  : q === "exactly" ? { ...REL_EXACT }
+  : null;
+
+/** Which distance-free reading a clause IS, or null when it carries a distance. */
+export function relFixedQ(c: RangeCond): RelQ | null {
+  if (isRelExact(c)) return "exactly";
+  if (c.max === 0 && c.min == null) return "at or below";
+  if (c.min === 0 && c.max == null) return "at or above";
+  return null;
+}
+
+/** The words for one bound of a clause, or null when that bound is open. */
+export function relTermOf(c: RangeCond, side: "min" | "max"): RelTerm | null {
+  const v = side === "min" ? c.min : c.max;
+  if (v == null) return null;
+  if (v === 0) return { q: "at least", n: 0, dir: side === "min" ? "above" : "below" };
+  const dir = v < 0 ? "below" : "above";
+  return { q: (side === "min") === (dir === "above") ? "at least" : "at most", n: Math.abs(v), dir };
+}
+
+/**
+ * What a `level vs mine` clause selects, in ABSOLUTE levels — the only form of it a player can check against
+ * the level column. The stored number is a signed offset (`-10` = ten levels below), which reads as a level
+ * itself and is the one part of the clause the editor cannot show any other way.
+ *
+ * Clamped at 1 because that is where levels start: `-70 or less` on a level-60 player selects everything, and
+ * "Lv 1 or less" says that where "Lv -10 or less" reads as an error.
+ */
+export function relAbs(c: RangeCond, myLevel: number): string {
+  const at = (n: number) => Math.max(1, myLevel + n);
+  if (c.min != null && c.max != null) return c.min === c.max ? `= Lv ${at(c.min)}` : `= Lv ${at(c.min)}–${at(c.max)}`;
+  if (c.max != null) return `= Lv ${at(c.max)} or less`;
+  if (c.min != null) return `= Lv ${at(c.min)} or more`;
+  return "";
+}
+
 /** Fields a count can be partitioned by. */
 export const GROUP_FIELDS = ["t", "s", "st", "ms", "a", "cat", "c", "r", "dt", "aspN"] as const;
 
@@ -171,8 +251,36 @@ export function cantSell(it: Item): string | null {
 // ---------------------------------------------------------------------------------------------------
 // Matching
 // ---------------------------------------------------------------------------------------------------
-const asList = (v: string | number | string[] | null | undefined): string[] =>
-  v == null ? [] : Array.isArray(v) ? v.map(String) : [String(v)];
+/**
+ * What a `set` or `multi` field is worth on an item that has NONE of it — a module has no activity, a booster
+ * no damage type — as a VALUE rather than as an absence.
+ *
+ * An absence matches nothing, and a rule of exceptions turns that into its opposite: "keep everything whose
+ * activity is Combat" cannot match a module, so the default stance sells every module and booster the player
+ * owns and the rule never mentioned them. Naming the case makes it tickable in the picker, visible in the
+ * split, and sayable in the sentence — the fix is that the player can SEE it, not that the matcher guesses.
+ */
+export const NO_VALUE = "none";
+
+/**
+ * How a stored value READS. Only where the two differ: a value is a key first — a saved rule holds it, an
+ * exported list carries it between playthroughs — so it is never renamed to make a sentence nicer.
+ *
+ * `activity: Other` is the one that costs something. `catOf` answers Combat|Mining|Salvage|Other, and Other is
+ * every reactor, engine, scanner and hull kit the player owns — so "keep everything whose activity is Combat,
+ * Mining or Salvage" sells all of them, and the value that would have said so is a word the player reads as
+ * "some other activity" rather than as "no activity at all".
+ */
+export const valueLabel = (field: string, v: string): string =>
+  v === NO_VALUE ? "none"
+  : field === "a" && v === "Other" ? "no activity (modules, boosters)"
+  : v;
+
+const asList = (v: string | number | string[] | null | undefined): string[] => {
+  if (v == null) return [NO_VALUE];
+  const xs = Array.isArray(v) ? v.map(String) : [String(v)];
+  return xs.length ? xs : [NO_VALUE];
+};
 
 export function matchesWhere(it: Item, where: Where, ctx: FieldCtx): boolean {
   for (const [k, cond] of Object.entries(where)) {
@@ -221,6 +329,8 @@ export const orderOptions = (rule: Rule, items: Item[], _ctx?: FieldCtx) =>
 export interface Row { it: Item; in: boolean }
 export interface Group {
   key: string;
+  /** The key split by the rule's GROUP BY fields, in that order — a tree, before it is flattened for display. */
+  parts: string[];
   held: number;
   sitsOut: boolean;
   rows: Row[];
@@ -249,10 +359,13 @@ export function explain(rule: Rule, items: Item[], ctx: FieldCtx): Explain {
   });
 
   const buckets = new Map<string, { it: Item; i: number }[]>();
+  const partsOf = new Map<string, string[]>();
   for (const x of cand) {
-    const key = rule.take && rule.group.length
-      ? rule.group.map((f) => String(FIELDS[f]?.get(x.it, ctx) ?? "—")).join(" · ")
-      : "everything";
+    const parts = rule.take && rule.group.length
+      ? rule.group.map((f) => asList(FIELDS[f]?.get(x.it, ctx)).join("+"))
+      : ["everything"];
+    const key = parts.join(" · ");
+    partsOf.set(key, parts);
     const arr = buckets.get(key);
     if (arr) arr.push(x); else buckets.set(key, [x]);
   }
@@ -278,7 +391,7 @@ export function explain(rule: Rule, items: Item[], ctx: FieldCtx): Explain {
       if (isIn) inSet.add(x.i);
       return { it: x.it, in: isIn };
     });
-    groups.push({ key, held, sitsOut, rows, nIn: rows.filter((r) => r.in).length, nOut: rows.filter((r) => !r.in).length });
+    groups.push({ key, parts: partsOf.get(key) ?? [key], held, sitsOut, rows, nIn: rows.filter((r) => r.in).length, nOut: rows.filter((r) => !r.in).length });
   }
   groups.sort((a, b) => b.nIn - a.nIn || b.held - a.held);
   return { groups, excluded, protected: prot, inSet };
@@ -328,10 +441,18 @@ export function subjectPhrase(where: Where): string {
     if (!F) continue;
     if (k === "lrel") {
       const c = cond as RangeCond, p: string[] = [];
-      if (c.min != null) p.push(c.min === 0 ? "at or above my own level"
-        : c.min < 0 ? `no more than ${-c.min} below my level` : `at least ${c.min} above my level`);
-      if (c.max != null) p.push(c.max === 0 ? "no higher than my level"
-        : c.max > 0 ? `no more than ${c.max} above my level` : `at least ${-c.max} below my level`);
+      // The editor's own words (`relTermOf`), so a rule reads the same in the chip that wrote it. Zero is the
+      // one bound no offset phrasing fits — "0 above my level" is my level — so it keeps its own wording.
+      // The distance-free readings are said whole, in the editor's own words.
+      const fixed = relFixedQ(c);
+      if (fixed) p.push(fixed === "exactly" ? "exactly my own level" : `${fixed} my own level`);
+      for (const side of fixed ? [] : (["min", "max"] as const)) {
+        const v = side === "min" ? c.min : c.max;
+        if (v == null) continue;
+        if (v === 0) { p.push(side === "min" ? "at or above my own level" : "at or below my own level"); continue; }
+        const t = relTermOf(c, side)!;
+        p.push(`${t.q} ${t.n} ${t.dir} my level`);
+      }
       // No "whose level is" when the absolute clause has already said it, and one when it has not.
       if (p.length) rel.push(("l" in where ? "" : "whose level is ") + p.join(" and "));
     } else if (F.kind === "range") {
@@ -346,7 +467,7 @@ export function subjectPhrase(where: Where): string {
       else if (k === "sub") rel.push(`${c.not ? "without" : "with"} ${listWords(c.values)}`);
       else if (k === "cat") rel.push(`${c.not ? "outside" : "in"} ${listWords(c.values)}`);
       else if (F.counting) rel.push(`${c.not ? "without" : "with"} ${listWords(c.values)} ${F.label}`);
-      else adj.push(`${c.not ? "not " : ""}${listWords(c.values)}`);
+      else adj.push(`${c.not ? "not " : ""}${listWords(c.values.map((v) => valueLabel(k, v)))}`);
     }
   }
   let out = adj.length ? "everything " + adj.join(", ") : "everything I own";

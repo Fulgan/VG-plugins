@@ -3,7 +3,8 @@
 import { describe, it, expect } from "vitest";
 import {
   cantSell, clauses, defaultDir, evaluate, explain, exportList, listProblems, mergeCats, newRule,
-  orderOptions, parseList, pinsUnit, proceeds, rankVal, sentence, subjectPhrase, typeOf,
+  NO_VALUE, REL_EXACT, isRelExact, orderOptions, parseList, pinsUnit, proceeds, rankVal, relAbs, relBound, relFixed,
+  relFixedQ, relTermOf, sentence, subjectPhrase, typeOf, valueLabel,
   type FieldCtx, type Kind, type Rule, type RuleSet,
 } from "./sellRules";
 import type { Item } from "./types";
@@ -139,6 +140,38 @@ describe("power is comparable only inside one unit (V35)", () => {
   });
 });
 
+describe("an item that serves no activity", () => {
+  // The trap the user hit: "keep everything whose activity is Combat, Mining or Salvage" cannot match a
+  // reactor, so the default stance sells every module and booster and the rule never mentioned them.
+  const mod = gun({ name: "reactor", category: "Module", type: "Reactor", gameplayType: null, mainStatName: "Power" });
+  const cannon = gun({ name: "cannon", category: "Turret", type: "Railgun", gameplayType: "Combat" });
+
+  it("falls outside a rule that names the activities — the matcher does not guess", () => {
+    const keepCombat = rule({ where: { a: { values: ["Combat"], not: false } } });
+    expect(evaluate([cannon, mod], set("sell", [keepCombat]))).toEqual(["keep", "sell"]);
+  });
+
+  it("is a value the rule CAN name, and it reads as what it is", () => {
+    const keepBoth = rule({ where: { a: { values: ["Combat", "Other"], not: false } } });
+    expect(evaluate([cannon, mod], set("sell", [keepBoth]))).toEqual(["keep", "keep"]);
+    // "Other" is a stored key and stays one; what the player reads says which items it means.
+    expect(valueLabel("a", "Other")).toBe("no activity (modules, boosters)");
+    expect(subjectPhrase({ a: { values: ["Other"], not: false } })).toContain("no activity");
+    expect(valueLabel("t", "Other")).toBe("Other");     // only the activity field means it this way
+  });
+});
+
+describe("a field an item has NONE of", () => {
+  it("is `none`, so a rule can name it instead of sweeping those items silently", () => {
+    const kinetic = gun({ name: "k", damageType: "Kinetic" });
+    const noDamage = gun({ name: "mod", category: "Module", type: "Reactor", damageType: null });
+    const keepKinetic = rule({ where: { dt: { values: ["Kinetic"], not: false } } });
+    expect(evaluate([kinetic, noDamage], set("sell", [keepKinetic]))).toEqual(["keep", "sell"]);
+    const keepBoth = rule({ where: { dt: { values: ["Kinetic", NO_VALUE], not: false } } });
+    expect(evaluate([kinetic, noDamage], set("sell", [keepBoth]))).toEqual(["keep", "keep"]);
+  });
+});
+
 describe("a booster's type is its main stat", () => {
   // Every booster reports type "Booster", so grouping by type alone pooled all of them.
   it("typeOf reports the main stat for boosters and the type for everything else", () => {
@@ -193,10 +226,62 @@ describe("reading it back", () => {
   });
 
   it("the relative level clause borrows its noun only when the absolute one is absent", () => {
-    expect(subjectPhrase({ lrel: { min: -10, max: null } })).toContain("whose level is no more than 10 below my level");
+    expect(subjectPhrase({ lrel: { min: -10, max: null } })).toContain("whose level is at most 10 below my level");
     const both = subjectPhrase({ l: { min: 50, max: null }, lrel: { min: -10, max: null } });
-    expect(both).toContain("whose level is at least 50 and no more than 10 below my level");
+    expect(both).toContain("whose level is at least 50 and at most 10 below my level");
     expect(both.match(/whose level is/g)).toHaveLength(1);
+  });
+
+  it("says a relative bound the way the editor writes it, and round trips", () => {
+    // "at least 10 below" is the FAR side of me, `max: -10`; "at most 10 below" is the near one, `min: -10`.
+    expect(relBound({ q: "at least", n: 10, dir: "below" })).toEqual({ side: "max", value: -10 });
+    expect(relBound({ q: "at most", n: 10, dir: "below" })).toEqual({ side: "min", value: -10 });
+    expect(relBound({ q: "at least", n: 2, dir: "above" })).toEqual({ side: "min", value: 2 });
+    expect(relBound({ q: "at most", n: 2, dir: "above" })).toEqual({ side: "max", value: 2 });
+    expect(relTermOf({ min: null, max: -10 }, "max")).toEqual({ q: "at least", n: 10, dir: "below" });
+    expect(relTermOf({ min: -10, max: null }, "min")).toEqual({ q: "at most", n: 10, dir: "below" });
+    expect(relTermOf({ min: null, max: null }, "min")).toBeNull();
+  });
+
+  it("reads a distance of ZERO off the bound, since the sign cannot carry it", () => {
+    // `min: 0` is "my level or above", `max: 0` is "or below" — both store the same number.
+    expect(relBound({ q: "at least", n: 0, dir: "above" })).toEqual({ side: "min", value: 0 });
+    expect(relBound({ q: "at least", n: 0, dir: "below" })).toEqual({ side: "max", value: 0 });
+    expect(relTermOf({ min: 0, max: null }, "min")).toEqual({ q: "at least", n: 0, dir: "above" });
+    expect(relTermOf({ min: null, max: 0 }, "max")).toEqual({ q: "at least", n: 0, dir: "below" });
+    expect(subjectPhrase({ lrel: { min: 0, max: null } })).toContain("at or above my own level");
+  });
+
+  it("the distance-free readings are the quantifier's own, and inclusive of my level", () => {
+    expect(relFixed("at or below")).toEqual({ min: null, max: 0 });
+    expect(relFixed("at or above")).toEqual({ min: 0, max: null });
+    expect(relFixed("at least")).toBeNull();                    // this one needs a distance
+    expect(relFixedQ({ min: null, max: 0 })).toBe("at or below");
+    expect(relFixedQ({ min: null, max: -10 })).toBeNull();
+    expect(subjectPhrase({ lrel: { min: null, max: 0 } })).toContain("at or below my own level");
+    // inclusive: my own level is in, one above is not
+    const mine = gun({ level: 74 }), over = gun({ level: 75 });
+    expect(evaluate([mine, over], set("keep", [rule({ where: { lrel: { min: null, max: 0 } } })])))
+      .toEqual(["sell", "keep"]);
+  });
+
+  it("MY OWN LEVEL is one reading, not two bounds that happen to agree", () => {
+    expect(isRelExact({ min: 0, max: 0 })).toBe(true);
+    expect(isRelExact({ min: 0, max: null })).toBe(false);
+    expect(subjectPhrase({ lrel: { ...REL_EXACT } })).toContain("exactly my own level");
+    expect(relAbs({ ...REL_EXACT }, 60)).toBe("= Lv 60");
+    // and it still selects what it says
+    const mine = gun({ level: 74 }), under = gun({ level: 73 });
+    expect(evaluate([mine, under], set("keep", [rule({ where: { lrel: { ...REL_EXACT } } })])))
+      .toEqual(["sell", "keep"]);
+  });
+
+  it("resolves a relative clause into the levels a player can read off the column", () => {
+    expect(relAbs({ min: null, max: -10 }, 60)).toBe("= Lv 50 or less");
+    expect(relAbs({ min: -10, max: null }, 60)).toBe("= Lv 50 or more");
+    expect(relAbs({ min: -5, max: 5 }, 60)).toBe("= Lv 55–65");
+    expect(relAbs({ min: null, max: -70 }, 60)).toBe("= Lv 1 or less");   // levels start at 1
+    expect(relAbs({ min: null, max: null }, 60)).toBe("");
   });
 
   it("counts read most/fewest, magnitudes highest/lowest", () => {

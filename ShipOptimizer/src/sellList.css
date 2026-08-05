@@ -1,12 +1,30 @@
 /* Sell list. Its own sheet, like map.css and officers.css: the surface is large and shares nothing with
    the grids. Wide, because it holds two rule columns plus the per-rule split. */
-dialog.modal-box.sell-pop { width: min(1500px, 97vw); max-height: 92vh; }
+/* A FIXED height, not a max: the popin grows and shrinks as rules are written, opened and reviewed, and a
+   box that resizes under the cursor is its own distraction. It takes the viewport less a margin. */
+dialog.modal-box.sell-pop { width: min(1500px, 97vw); height: 92vh; max-height: 92vh; }
 .sl-strip { display: flex; align-items: baseline; gap: 8px; font-size: 12px; color: #8a8a96; }
 .sl-strip b { font-size: 15px; font-variant-numeric: tabular-nums; }
 .sl-cr { color: #ffb020; font-variant-numeric: tabular-nums; }
 .k-keep { color: #58c26b; }
 .k-sell { color: #fca5a5; }
-.sl-body { flex: 1; overflow: auto; min-height: 220px; }
+/* The popin does NOT scroll as a whole: the stance, the rules and the review header stay put and only the ROWS
+   move, because scrolling the list should not push the controls that act on it off screen. So the body is a
+   column that never scrolls, and exactly one child inside it does (`.sl-rlist`). */
+.sl-body { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.sl-body > * { flex: 0 0 auto; }
+/* The rule editor is the work while it is open, so it is NOT boxed and scrolled inside itself: a sentence with
+   a menu hanging off it cannot live in a 45vh window — the menu is clipped and the panel grows a scrollbar
+   around the control that opened it. It takes its natural height and the BODY scrolls instead (`.editing`),
+   which pushes the review list down rather than squeezing the editor. */
+.sl-editor { overflow: visible; }
+.sl-body.editing { overflow: auto; overflow-anchor: none; }
+/* The review keeps its own window while the body scrolls: it is a separate list, not the same one twice. */
+.sl-body.editing .sl-review { flex: 0 0 auto; }
+.sl-body.editing .sl-rlist { max-height: 42vh; }
+/* The review takes what is left, and hands it to the rows. */
+.sl-review { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.sl-review .cfg-head { flex: 0 0 auto; }
 
 /* two columns, so the one-default constraint is visible rather than explained */
 .sl-sides { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
@@ -28,6 +46,9 @@ dialog.modal-box.sell-pop { width: min(1500px, 97vw); max-height: 92vh; }
 .sl-and { color: #6a6a78; font-size: 9px; font-weight: 700; letter-spacing: .1em; padding: 0 2px; }
 
 .sl-rule { border-top: 1px solid #2c2c36; }
+/* Open in the editor, and STILL IN EFFECT: the draft below is a proposal, this is the rule the sale
+   obeys until it is added. Marked rather than hidden — removing it is how a sale ran without it. */
+.sl-rule.editing { background: #14161d; box-shadow: inset 2px 0 0 #4f7fbf; }
 .sl-rhead { display: grid; grid-template-columns: 14px 1fr auto auto auto; gap: 6px; align-items: start;
   padding: 8px 10px; cursor: pointer; }
 .sl-rhead:hover { background: #16161c; }
@@ -87,8 +108,30 @@ dialog.modal-box.sell-pop { width: min(1500px, 97vw); max-height: 92vh; }
 
 /* the editor: the sentence, with its variable parts editable in place */
 .sl-editor { margin-top: 12px; }
+.sl-editor .cfg-head { gap: 8px; }
 .sl-sent-ed { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+/* An untouched draft is the one screen where nothing said what to do next: it matches everything, and the
+   three adders looked equally optional. The accent edge puts the eye in the editor, the line says what the
+   rule currently means, and `.sl-add.start` marks the one control that begins the work. All three go as soon
+   as a clause exists, so a rule being refined is not shouted at. */
+.sl-sent-ed.fresh { border-left: 2px solid #4f7fbf; background: #14161d; }
+.sl-startline {
+  margin: 0 0 2px; padding: 6px 8px; font-size: 12px; line-height: 1.5;
+  color: #b9c6d8; background: #172030; border: 1px solid #26364d; border-radius: 4px;
+}
+.sl-startline b { color: #dce7f5; font-weight: 600; }
+.sl-add.start { color: #eaf2ff; background: #24446e; border-color: #3d6fa8; }
+.sl-add.start:hover { background: #2c5487; }
 .sl-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; line-height: 1.9; }
+/* The count line is the same sentence the chips are, so its menus are words too — a boxed dropdown beside a
+   dotted-underlined one reads as two different kinds of control for the same job. */
+.sl-line select { background: none; border: none; color: #cfe4ff; font: inherit; padding: 0 1px;
+  text-decoration: underline dotted; text-underline-offset: 2px; cursor: pointer; }
+.sl-line select:focus-visible { outline: 1px solid #4a6fa5; }
+.sl-line select option { background: #16161c; color: #cfe4ff; }
+.sl-line select.lead { color: #6a6a78; }
+.sl-line input { width: 54px; padding: 0 3px; font-size: 12px; background: #0f1116; text-align: right;
+  border: 1px solid #2f3d4d; border-radius: 2px; }
 .sl-line > .lead { min-width: 112px; text-align: right; color: #6a6a78; flex: 0 0 auto; }
 .sl-line.first > .lead { color: #e6e6ee; font-weight: 600; }
 .sl-line .sl-drop { margin-left: auto; }
@@ -104,8 +147,18 @@ dialog.modal-box.sell-pop { width: min(1500px, 97vw); max-height: 92vh; }
 .sl-chip button:hover { opacity: 1; }
 .sl-chip button.chipword { opacity: 1; text-decoration: underline dotted; text-underline-offset: 2px;
   font-size: 11.5px; padding: 0; }
-.sl-chip input[type=number] { width: 52px; padding: 0 3px; font-size: 11px; background: #0f1116;
-  border-color: #2f3d4d; }
+/* A word of the sentence that happens to be a menu. Styled like the other clickable words (dotted underline)
+   so the chip still reads as a sentence rather than as a row of form controls. */
+.sl-chip select { background: none; border: none; color: inherit; font: inherit; padding: 0 1px;
+  text-decoration: underline dotted; text-underline-offset: 2px; cursor: pointer; }
+.sl-chip select:focus-visible { outline: 1px solid #4a6fa5; }
+/* The dropdown itself is painted by the platform: a transparent control gives it a WHITE list, whatever
+   the page's colour-scheme says, so the options carry the colours themselves. */
+.sl-chip select option { background: #16161c; color: #cfe4ff; }
+/* The absolute level an offset resolves to. Quieter than the clause itself: it restates it, never adds to it. */
+.sl-chip .sl-abs { opacity: .55; font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.sl-chip input { width: 54px; padding: 0 3px; font-size: 11px; background: #0f1116; text-align: right;
+  border: 1px solid #2f3d4d; border-radius: 2px; }
 .sl-adders { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px 8px 124px; }
 @media (max-width: 640px) { .sl-adders { padding-left: 12px; } }
 .sl-add { border: 1px dashed #33333e; background: transparent; color: #8a8a96; font-size: 11.5px;
@@ -118,12 +171,20 @@ dialog.modal-box.sell-pop { width: min(1500px, 97vw); max-height: 92vh; }
 /* two panes: the field on the left, its values on the right. A dropdown for the field covered the values,
    and the values are the reason the field was chosen. */
 .sl-popwrap { position: relative; display: inline-block; }
-.sl-pop { position: absolute; z-index: 9; top: calc(100% + 4px); left: 0; width: min(560px, 92vw);
+/* Anchored in VIEWPORT coordinates (`usePopAnchor`), so no scrolling ancestor can clip it. Still a child of
+   the dialog: the modal's top layer paints over anything left outside it. */
+.sl-pop { position: fixed; z-index: 320; width: min(560px, 92vw);
   background: #16161c; border: 1px solid #4a4a58; border-radius: 3px; padding: 8px;
-  box-shadow: 0 12px 34px #000c; text-align: left; }
-.sl-pop.narrow { width: 220px; }
-.sl-pk2 { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 10px; }
-.sl-fields { display: flex; flex-direction: column; gap: 1px; max-height: 300px; overflow-y: auto;
+  box-shadow: 0 12px 34px #000c; text-align: left;
+  /* Bounded and self-scrolling: it opens inside a popin that is itself inside the viewport, and an unbounded
+     list of fields ran off the bottom of both — the last entries were unreachable. `overscroll-behavior`
+     keeps a wheel over the picker from scrolling the popin behind it once the list ends. */
+  max-height: min(46vh, 380px); overflow: auto; overscroll-behavior: contain; }
+.sl-pop.narrow { width: min(220px, 92vw); }
+.sl-pk2 { display: grid; grid-template-columns: 232px minmax(0, 1fr); gap: 10px; }
+/* Two columns: sixteen fields in one column needed a scrollbar of its own AND left the values pane beside
+   it mostly empty, which is the shape a one-row range editor makes worst. */
+.sl-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; align-content: start;
   border-right: 1px solid #2c2c36; padding-right: 8px; }
 .sl-field { background: none; border: 1px solid transparent; text-align: left; color: #8a8a96;
   font-size: 11.5px; padding: 3px 6px; }
@@ -139,8 +200,10 @@ dialog.modal-box.sell-pop { width: min(1500px, 97vw); max-height: 92vh; }
 .sl-val:hover { background: #1b1b22; }
 .sl-val.on { background: #24303d; border-color: #3a5470; color: #cfe4ff; }
 .sl-sub { color: #6a6a78; font-size: 9.5px; text-transform: uppercase; letter-spacing: .08em; margin-top: 5px; }
-.sl-pkrow { display: flex; gap: 6px; align-items: center; }
-.sl-pkrow input[type=number] { width: 74px; }
+.sl-pkrow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+/* The words of the phrase are words, not flex items to be squeezed: "level is" broke across two lines. */
+.sl-pkrow > span { flex: 0 0 auto; white-space: nowrap; }
+.sl-pkrow input[type=number] { width: 74px; flex: 0 0 auto; }
 .sl-pkfoot { display: flex; gap: 10px; align-items: center; border-top: 1px solid #2c2c36; padding-top: 5px;
   font-size: 11px; color: #8a8a96; }
 .sl-pkfoot label { display: flex; gap: 5px; align-items: center; }
@@ -149,12 +212,14 @@ dialog.modal-box.sell-pop { width: min(1500px, 97vw); max-height: 92vh; }
 .cfg-actions button.danger { background: #3b1d1d; border-color: #7f1d1d; color: #fca5a5; }
 
 /* the review step: the rules propose, this is where the player strikes items off */
-.sl-review { margin-top: 12px; }
+.sl-review { margin-top: 12px; }   /* sizing lives with the body's column rules above */
 .sl-review .cfg-head { gap: 8px; align-items: center; }
 .sl-review .sl-rq { width: 160px; font-size: 12px; }
 /* NO scroller of its own: the popin body already scrolls, and a box inside it that also scrolls gives the
    same list two sliders. The sticky header sticks to the BODY's scroll, so the columns stay named. */
-.sl-rlist { overflow: visible; }
+/* The one scroller in the popin: the rows. Windowed against THIS element, so overflow-anchor must be off —
+   a resized spacer would otherwise move scrollTop, fire a scroll, resize it again, and run to the end. */
+.sl-rlist { flex: 1 1 auto; min-height: 140px; overflow: auto; overflow-anchor: none; }
 .sl-rlist td { cursor: pointer; }
 .sl-rlist input[type=checkbox] { cursor: pointer; margin: 0; }
 /* struck off: still listed (so it can come back), plainly not part of the sale */

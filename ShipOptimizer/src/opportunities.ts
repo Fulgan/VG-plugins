@@ -1,6 +1,7 @@
 import type { Item, ShipHardpoint } from "./types";
 import { boosterType, boosterValue } from "./booster";
-import { compareModules } from "./itemKind";
+import { shipFit } from "./itemKind";
+import { moduleBetter, type ModuleCtx, type ShipPools } from "./fleetDps";
 import { effectiveMainVal } from "./format";
 import { turretFits, moduleFits, mayKeepEquipped, type GearFilter } from "./gearFit";
 
@@ -13,7 +14,7 @@ import { turretFits, moduleFits, mayKeepEquipped, type GearFilter } from "./gear
 // Each family scores by the SAME rule the tab that would apply it uses:
 //   turrets  the gain function the caller passes in — the Gear tab's selected ranking, whole-battery in
 //            expanded mode, so recommending and fitting cannot disagree
-//   modules  `compareModules` — headline, reactor bracket, aspect slots, role stats, draw, breadth
+//   modules  `moduleBetter` — the DPS objective where it has an opinion, `compareModules` for the ties
 //   boosters `boosterValue` — no damage model applies
 
 // Config-aware turret opportunities: per hardpoint, rank candidates that fit the slot's CONFIGURED
@@ -54,21 +55,24 @@ export interface Opp {
   slotLabel?: string;
 }
 
-// Module opportunities, judged by the SAME comparator the gear tab uses (`compareModules`: headline, reactor
-// bracket, aspect slots, role-useful stats, draw, breadth). Scoring these on the headline alone — which is what
-// the generic path did — offered modules the tab then declined to fit, because a headline tie is common and
-// everything that breaks it was invisible here.
+// Module opportunities, judged by the SAME rule the gear tab uses (`moduleBetter`: the battery objective
+// wherever it has an opinion, the comparator for the ties it cannot see). Scoring these on the headline alone —
+// which is what the generic path did — offered modules the tab then declined to fit, and offered a scanner that
+// cost the battery a crit aspect and 2,605 pooled Combat Power for a bigger Precision number.
 export function gearModuleOpps(cands: Item[], mslots: { slot: string; size: string; equipped: Item | null }[],
-                        energy: { used: number; capacity: number } | undefined, role: string | null): Opp[] {
+                        energy: { used: number; capacity: number } | undefined, role: string | null,
+                        pools?: ShipPools | null, turrets?: Item[]): Opp[] {
   const best = new Map<string, Opp>();
+  const fit = shipFit(role, mslots, turrets ?? []);
   for (const m of mslots) {
     const eq = m.equipped;
     if (!eq) continue;   // an empty slot is filled from the Gear tab
     const en = energy && energy.capacity > 0
       ? { usedWithout: energy.used - (eq.powerUsage ?? 0), capacity: energy.capacity } : undefined;
+    const mctx: ModuleCtx = { pools, turrets, energy: en, role, fit };
     for (const c of cands) {
       if (!moduleFits(c, m.slot, m.size)) continue;
-      if (compareModules(c, eq, en, role) <= 0) continue;
+      if (!moduleBetter(c, eq, mctx)) continue;
       // The rail's number is the headline change, which can be 0 when the win came from a tie-break — the entry
       // still belongs here, it just sorts below anything with a headline gain.
       const delta = (effectiveMainVal(c) ?? 0) - (effectiveMainVal(eq) ?? 0);

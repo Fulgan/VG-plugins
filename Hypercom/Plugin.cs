@@ -20,7 +20,7 @@ namespace Hypercom
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "fulgan.vanguardgalaxy.hypercom";
-        public const string Version = "0.2.0";
+        public const string Version = "0.2.1";
 
         internal static ManualLogSource Log;
 
@@ -323,6 +323,16 @@ namespace Hypercom
         private long _lastCredits;
         private long _lastShopStock;
 
+        // A value still MOVING is not news yet. `PollEvents` runs every frame, and a batched sale moves credits
+        // and shop stock on every one of them — so a 7,764-row sale emitted an event per frame, each of which
+        // is a client refresh of a payload measured in megabytes. The signal is emitted once the value
+        // has held still for this long, which is what "a sale happened" means to anyone listening.
+        private const float SettleSeconds = 1f;
+        private float _creditsMovedAt;
+        private bool _creditsDirty;
+        private float _shopMovedAt;
+        private bool _shopDirty;
+
         private void PollEvents()
         {
             try
@@ -357,14 +367,25 @@ namespace Hypercom
                 if (echo != _lastEcho)
                     EventBus.Emit("echo", new Dictionary<string, object> { ["active"] = echo });
 
+                var now = UnityEngine.Time.realtimeSinceStartup;
+
                 // Credits change ⇒ a buy/sell happened ⇒ inventory/shop changed → tell the client to refresh.
-                if (credits != _lastCredits)
+                // Once it has SETTLED: a sale of thousands of rows moves this every frame while it runs.
+                if (credits != _lastCredits) { _creditsMovedAt = now; _creditsDirty = true; }
+                else if (_creditsDirty && now - _creditsMovedAt >= SettleSeconds)
+                {
+                    _creditsDirty = false;
                     EventBus.Emit("credits", new Dictionary<string, object> { ["credits"] = credits });
+                }
 
                 // Shop stock change while staying docked ⇒ a purchase/sale happened. Catches BARTER buys
                 // too (those don't move credits), so the web opportunities refresh after any shop change.
-                if (docked && _lastDocked && shopStock != _lastShopStock)
+                if (docked && _lastDocked && shopStock != _lastShopStock) { _shopMovedAt = now; _shopDirty = true; }
+                else if (_shopDirty && now - _shopMovedAt >= SettleSeconds)
+                {
+                    _shopDirty = false;
                     EventBus.Emit("shopChanged");
+                }
 
                 _lastDocked = docked; _lastEcho = echo; _lastShip = ship; _lastStation = stationName; _lastCredits = credits; _lastShopStock = shopStock;
             }

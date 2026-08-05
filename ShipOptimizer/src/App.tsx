@@ -8,6 +8,7 @@ import type { CritContext } from "./turretScore";
 import type { ShipPools } from "./fleetDps";
 import { background, poolsForShip, poolsFromStatus, poolsReconcile, rankSub, setRank, MIN_GAIN } from "./fleetDps";
 import { isRoleStat } from "./roleStats";
+import { kindOf } from "./itemKind";
 import OfficersTab, { useOfficerBuilder, type BuilderShip } from "./OfficersTab";
 import { evaluateRecruits, type RecruitOfficer } from "./officer";
 import SummaryTab from "./SummaryTab";
@@ -16,12 +17,14 @@ import BoostersTab, { useBoosterBuilder } from "./BoostersTab";
 import { isBooster } from "./booster";
 import GearTab, { useGearBuilder, isTurret, type Ranking } from "./GearTab";
 import { ItemTip } from "./ItemCard";
+import { Notice } from "./Notice";
 import { Modal, useConfirm } from "./Modal";
 import SellList from "./SellList";
 import type { Kind as SellKind, Rule as SellRule, SellListFile } from "./sellRules";
 import type { CatalogTypes, Inventories, Item, Loadout, LoadoutPresetInfo, LogEntry, Officers, Recruits, ShipLayout, StatLine, Status, Vitals } from "./types";
 import { num, subFmt, statVal, mainVal, brokeMsg, barterMsg, undockedMsg, buyExpect, priceLabel, affordTip, affordLine } from "./format";
 import { useHoverIntent } from "./useCursorTip";
+import { useWindowed } from "./useWindowed";
 import TabBadge, { TabNote } from "./TabBadge";
 import { gearTurretOpps, gearModuleOpps, gearBoosterOpps, type Opp } from "./opportunities";
 import { useApply } from "./useApply";
@@ -39,8 +42,14 @@ const tabFromHash = (): Tab => {
 
 // Last docked snapshot, persisted so it survives reloads / jumps while undocked.
 const SNAP_KEY = SNAPSHOT_KEY; // canonical name lives in storage.ts (it evicts this key on a full quota)
+// What survives a reload, and deliberately NOT the item lists. Inventory and shop stock are UNBOUNDED — an
+// armory of 85k items serialises past the whole origin quota, so caching them cannot succeed at the one size
+// where it would matter, and the attempt costs a multi-megabyte stringify plus a push of the same payload at
+// the bridge. They are refetched by the first refresh anyway, which is exactly what already happened whenever
+// the quota evicted this key. What stays is small, bounded and worth having before the first paint: the
+// loadout, the layout, and the pool reading they have to travel with.
 interface Snap {
-  inv: Inventories | null; loadout: Loadout | null; shops: Item[]; layout?: ShipLayout | null;
+  loadout: Loadout | null; layout?: ShipLayout | null;
   // The last DOCKED pool reading, with the ship and station it belongs to. The layout above is cached the same
   // way, and the two have to travel together: score a cached docked battery against a live in-space pool and the
   // pool cannot absorb its own gear, so the background collapses to zero.
@@ -300,20 +309,6 @@ function cell(line: StatLine | undefined): string {
   return num(line.amount);
 }
 
-// Never-shown item classes.
-const EXCLUDE_KINDS = ["ammo", "aspect", "deploy", "drone", "defensiveturret"];
-
-// Classify an item as equipment we care about, or null to always exclude it.
-function kindOf(it: Item): "Turret" | "Module" | "Booster" | null {
-  const c = (it.category ?? "").toLowerCase();
-  const t = (it.type ?? "").toLowerCase();
-  if (EXCLUDE_KINDS.some((e) => c.includes(e))) return null;
-  if (!it.stats?.length) return null; // no stats ⇒ ammo/consumable/etc.
-  if (c.includes("turret") || t.endsWith("turret")) return "Turret";
-  if (c.includes("booster") || t.endsWith("booster")) return "Booster";
-  return "Module";
-}
-
 // Global-filter token: "Turret" / "Booster", or the specific module type for modules.
 function globalToken(it: Item): string | null {
   const k = kindOf(it);
@@ -330,9 +325,16 @@ function statColumns(items: Item[]): string[] {
 export default function App() {
   const [conn, setConn] = useState<Conn>(loadConn());
   const [status, setStatus] = useState<Status | null>(null);
-  const [inv, setInv] = useState<Inventories | null>(() => loadSnap()?.inv ?? null);
+  // Item lists start empty and arrive with the first refresh — they are not cached (see Snap).
+  const [inv, setInv] = useState<Inventories | null>(null);
   const [loadout, setLoadout] = useState<Loadout | null>(() => loadSnap()?.loadout ?? null);
-  const [shops, setShops] = useState<Item[]>(() => loadSnap()?.shops ?? []);
+  const [shops, setShops] = useState<Item[]>([]);
+  // What the station holds of the player's OWN sold stock, and whether the tab is asking for it. A REF as well
+  // as state because `refresh` is called from callbacks that captured an older render, and the fetch must use
+  // what the toggle says NOW rather than what it said when the callback was made.
+  const [buybackCount, setBuybackCount] = useState(0);
+  const [buybackShown, setBuybackShown] = useState(false);
+  const showBuyback = useRef(false);
   // Deadline after which the cached shop list must not be bought from (see RestockClock). Deliberately not
   // persisted with the snapshot: a countdown restored from a previous session would be pure fiction.
   const [restock, setRestock] = useState<{ secs: number; fetched: number } | null>(null);
@@ -372,7 +374,10 @@ export default function App() {
   const [layout, setLayout] = useState<ShipLayout | null>(() => loadSnap()?.layout ?? null);
   const [catTypes, setCatTypes] = useState<CatalogTypes | null>(null);
 
-  const refresh = useCallback(async () => {
+  // `fresh` is set only by a refresh the PLAYER asked for. The bridge caches the inventory for a few seconds
+  // because building it holds a game frame, and an event burst must not pay that cost once per event — but a
+  // refresh someone clicked is exactly when a stale answer is not acceptable.
+  const refresh = useCallback(async (fresh = false) => {
     setLoading(true);
     setError(null);
     // Every buy/sell path already refreshes; bumping here re-reads the ledger with them rather than adding a
@@ -424,7 +429,7 @@ export default function App() {
       if (!s.docked) {
         setStale(true);
         try {
-          const live = await api.inventories(conn); // cargo only when undocked
+          const live = await api.inventories(conn, fresh); // cargo only when undocked
           const cargo = live.stores.filter((st) => st.id === "cargo");
           setInv((prev) => ({ stores: [...cargo, ...(prev?.stores ?? []).filter((st) => st.id !== "cargo")] }));
         } catch { /* keep snapshot */ }
@@ -444,7 +449,7 @@ export default function App() {
         // layout — and the gear optimizer, which re-runs whenever the pool changes, would compute a proposal
         // for the old ship's hardpoints. After buying a ship that's a different slot layout entirely, so the
         // proposal was nonsense and each apply produced a new one: it took three applies to converge.
-        const invData = await api.inventories(conn);
+        const invData = await api.inventories(conn, fresh);
         let ld: Loadout | null = null;
         try {
           ld = await api.loadout(conn);
@@ -457,11 +462,12 @@ export default function App() {
         setInv(invData);
         setLoadout(ld);
         setLayout(lay); // hardpoint positions for the gear editor
-        const shopRes = await api.shops(conn);
+        const shopRes = await api.shops(conn, showBuyback.current);
         const shopData = shopRes.shops
           .flatMap((shop) => shop.items.map((it) => ({ ...it, location: shop.facility })))
           .filter((it) => kindOf(it) !== null);
         setShops(shopData);
+        setBuybackCount(shopRes.shops.reduce((n, shop) => n + (shop.buybackCount ?? 0), 0));
         // When this list stops being safe to buy from. Stamped with the fetch time so the countdown can be
         // extrapolated locally instead of polling the bridge every second. Absent on a game build that has no
         // restock timer — the clock then simply doesn't render.
@@ -470,7 +476,7 @@ export default function App() {
         // kept otherwise: an in-space reading omits the ship's own gear, so caching it would overwrite the only
         // reading that can be reconciled with the layout stored beside it.
         saveSnap({
-          inv: invData, loadout: ld, shops: shopData, layout: lay,
+          loadout: ld, layout: lay,
           pools: cachedPools.current.pools, poolsShip: cachedPools.current.ship, poolsStation: cachedPools.current.station,
         });
 
@@ -558,8 +564,13 @@ export default function App() {
   // The sell list needs the UNFILTERED inventory: aspect stock is counted off portable AspectItems, which
   // are not equippable and so never reach `equippable`. Applying that filter out of habit here would zero
   // every aspect stock and spare every carrier.
-  // What the sell list may act on: equippable items, PLUS anything the game refuses to sell — a protected
-  // item that never reaches the list cannot be shown as protected, and "0 protected" would mean two things.
+  // What the sell list may act on: EQUIPMENT (the game's Turret | Module | Booster categories), plus anything
+  // the game refuses to sell — a protected item that never reaches the list cannot be shown as protected, and
+  // "0 protected" would mean two things.
+  //
+  // Deliberately NOT the whole inventory. A default stance of "sell everything else" would then propose the
+  // player's ammo, ore and trade goods, and the protection against that would be a rule they have to remember
+  // to write; cargo stock is Station Assistant's auto-sell, which has its own per-category switches.
   const sellItems: Item[] = useMemo(() => {
     const out: Item[] = [];
     for (const store of inv?.stores ?? [])
@@ -570,9 +581,13 @@ export default function App() {
     return out;
   }, [inv]);
 
-  // `GamePlayer.current.level` is not on /status yet, so the highest level owned stands in: it is the only
-  // figure in hand that tracks progression, and every "vs mine" filter reads it.
-  const myLevel = useMemo(() => Math.max(1, ...sellItems.map((i) => i.level ?? 0)), [sellItems]);
+  // The player's own level, which every "vs mine" filter compares against. The bridge reports it
+  // (`GamePlayer.level`); the fallback is the highest item level owned, which is NOT a level and behaves badly
+  // as one — it makes the best item's relative level exactly 0 and every other item negative, so "within 10 of
+  // mine" silently means "within 10 of my best item". Kept only so an older bridge still filters at all.
+  const myLevel = useMemo(
+    () => status?.level ?? Math.max(1, ...sellItems.map((i) => i.level ?? 0)),
+    [status?.level, sellItems]);
 
   const [sellOpen, setSellOpen] = useState(false);
   const [sellDefault, setSellDefault] = useState<SellKind>(() => load<SellKind>("shipoptimizer.sellDefault", "keep"));
@@ -615,6 +630,9 @@ export default function App() {
   );
   const invShown = useMemo(() => filtered.filter(passes), [filtered, hidden]);
   const shopShown = useMemo(() => shops.filter(passes), [shops, hidden]);
+  // An item the player just SOLD is not an opportunity to buy: the rails exist to find what the station stocks
+  // that beats what is fitted, and offering back what was scrapped a minute ago is the opposite of that.
+  const shopStock = useMemo(() => shops.filter((it) => !it.buyback), [shops]);
   const loadoutShown = useMemo(() => currentItems.filter(passes), [currentItems, hidden]);
 
   const role = status?.role ?? null;
@@ -732,12 +750,14 @@ export default function App() {
     const turrets = gearTurretOpps(cands.filter(isTurret), gearBuilder.hps, gearBuilder.filters, gearBuilder.cats, gearGain)
       .filter((o) => baseDps <= 0 || o.delta / baseDps >= MIN_GAIN);
     const boosters = gearBoosterOpps(cands.filter(isBooster), boosterBuilder.slotTypes, boosterBuilder.equippedBySlot);
+    // The rails judge a module the way the tab does: on the battery it changes, wherever the pools allow it.
     const other = gearModuleOpps(cands.filter((i) => !isTurret(i) && !isBooster(i)), gearBuilder.mslots,
-      shipPools?.energy, status?.role ?? null);
+      shipPools?.energy, status?.role ?? null,
+      gearBuilder.ranking === "expanded" ? shipPools : null, equippedT);
     return [...turrets, ...boosters, ...other].sort((a, b) => b.delta - a.delta);
   }, [passes, currentItems, gearBuilder, boosterBuilder, gearGain]);
   const invOpps = useMemo(() => oppsFor(equippable), [equippable, hidden, oppsFor]);
-  const shopOpps = useMemo(() => oppsFor(shops), [shops, hidden, oppsFor]);
+  const shopOpps = useMemo(() => oppsFor(shopStock), [shopStock, hidden, oppsFor]);
   const credits = status?.credits ?? null;
 
   // Officer optimizer: ships with officer slots (from /officers) joined with names/roles (from /ships),
@@ -976,7 +996,15 @@ export default function App() {
             <h2>
               {status && !status.docked ? "Station shop (last)" : "Station shop"}{" "}
               <small>{shopShown.length}/{shops.length}</small>{" "}
-              <RestockClock deadline={restock} onExpire={refresh} />
+              <RestockClock deadline={restock} onExpire={refresh} />{" "}
+              {/* Fetched on request, because after selling an armory this is thousands of rows and megabytes
+                  on a list that is otherwise read for what the STATION sells. */}
+              {buybackCount > 0 && (
+                <button className="mini" title="Items you sold here. The station holds them until it restocks."
+                        onClick={() => { showBuyback.current = !buybackShown; setBuybackShown(!buybackShown); refresh(); }}>
+                  {buybackShown ? "hide" : "show"} {buybackCount.toLocaleString()} you sold
+                </button>
+              )}
             </h2>
             {shopShown.length ? (
               <ItemGrid items={shopShown} showShop equipped={currentItems} role={role} flashed={flashed} conn={conn} docked={!!status?.docked} credits={credits} onBought={refresh} />
@@ -1171,6 +1199,7 @@ function ItemGrid({
   flashed?: Set<string>; conn: Conn; docked?: boolean; credits?: number | null; onBought?: () => void;
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const wrapRef = useRef<HTMLDivElement | null>(null);
   const toggleSel = (k: string) =>
     setSelected((s) => {
       const n = new Set(s);
@@ -1364,6 +1393,12 @@ function ItemGrid({
     return r;
   }, [items, columns, filters, sort]);
 
+  // WINDOWED, not capped: an armory of 8k items is an ordinary long playthrough, and the point of this table is
+  // working through it — so every row stays in the list and only the slice on screen is in the DOM. Filtering
+  // and sorting above still run over everything.
+  const win = useWindowed(rows.length, { scroll: wrapRef, rowH: 20 });
+  const capped = rows.slice(win.start, win.end);
+
   const clickSort = (key: string) => setSort((s) => (s?.key === key ? { key, dir: s.dir === -1 ? 1 : -1 } : { key, dir: -1 }));
   const arrow = (key: string) => (sort?.key === key ? (sort.dir === -1 ? " ▼" : " ▲") : "");
   const setF = (key: string, v: string) => setFilters((f) => ({ ...f, [key]: v }));
@@ -1375,8 +1410,15 @@ function ItemGrid({
   // what was left making these tooltips feel heavier than the gear tab's (whose list is far shorter).
   const body = useMemo(() => (
     <tbody>
-      {rows.map((it, i) => (
+      {/* Spacers stand in for the undrawn rows, so the scrollbar measures the whole list. The cell is not
+          optional: a `<tr>` with no cells collapses to zero height, the container's scrollHeight then covers
+          only the drawn slice, and the browser clamping scrollTop against it fights the window forever. */}
+      {win.padTop > 0 && (
+        <tr aria-hidden="true"><td colSpan={columns.length} style={{ height: win.padTop, padding: 0, border: 0 }} /></tr>
+      )}
+      {capped.map((it, i) => (
         <tr
+          ref={i === 0 ? win.measureRef : undefined}
           key={i}
           className={`row-click ${selected.has(exactKey(it)) ? "sel" : ""} ${flashed?.has(flashKey(it)) ? "flash" : ""}`}
           onClick={() => toggleSel(exactKey(it))}
@@ -1389,8 +1431,11 @@ function ItemGrid({
           ))}
         </tr>
       ))}
+      {win.padBottom > 0 && (
+        <tr aria-hidden="true"><td colSpan={columns.length} style={{ height: win.padBottom, padding: 0, border: 0 }} /></tr>
+      )}
     </tbody>
-  ), [rows, columns, selected, flashed, toggleSel, showTip, hideTip]);
+  ), [capped, win.padTop, win.padBottom, win.measureRef, columns, selected, flashed, toggleSel, showTip, hideTip]);
 
   // Memoized for the same reason as `body` — the header carries a live input/select per column, and
   // re-creating ~15 of them on every hover is pure waste.
@@ -1438,8 +1483,8 @@ function ItemGrid({
   return (
     <div className="grid-wrap-outer">
       {confirmUi}
-      {gridMsg && <div className={gridMsg.ok ? "sum-msg ok" : "sum-msg err"}>{gridMsg.ok ? "✓" : "⚠"} {gridMsg.text}</div>}
-    <div className="grid-wrap">
+      <Notice msg={gridMsg} onClose={() => setGridMsg(null)} />
+    <div className="grid-wrap" ref={wrapRef}>
       {/* Dragged widths ride as custom properties on the table, so the CSS keeps the defaults and one style
           object covers header and body cells alike. */}
       <table
@@ -1453,7 +1498,7 @@ function ItemGrid({
         {head}
         {body}
       </table>
-      <div className="hint">{rows.length}/{items.length} shown</div>
+      <div className="hint">{rows.length.toLocaleString()}/{items.length.toLocaleString()} shown</div>
     </div>
       {hover && <ItemTooltip it={hover.it} x={hover.x} y={hover.y} equipped={equipped} role={role} conn={conn} />}
     </div>
@@ -1592,7 +1637,7 @@ function OpportunityList({ opps, equipped, showCost, role, credits, conn, docked
           <Pills options={types} isOn={(t) => !hiddenTypes.has(t)} onToggle={toggle} />
         </div>
       )}
-      {buyMsg && <div className={buyMsg.ok ? "sum-msg ok" : "sum-msg err"}>{buyMsg.ok ? "✓" : "⚠"} {buyMsg.text}</div>}
+      <Notice msg={buyMsg} onClose={() => setBuyMsg(null)} />
       {list}
       {hover && <ItemTooltip it={hover.it} x={hover.x} y={hover.y} equipped={equipped} role={role} conn={conn} />}
     </div>

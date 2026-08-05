@@ -7,6 +7,72 @@ Each mod versions on its own, so a date can carry one mod or all of them. Every 
 
 ---
 
+## 2026-08-05 - Hypercom 0.2.1 | Station Assistant 1.1.1
+
+A fix release, almost all of it from playing a long save: an 8,000-item armory found a lot of things that
+work fine on a fresh one.
+
+### Hypercom 0.2.1
+
+**Selling a lot of things at once**
+
+- **Selling a long list took minutes and looked frozen.** Every row was its own request, and each one waited
+  for a frame — 7,891 items was over two minutes of that. The whole list now goes out as one request and
+  takes a couple of seconds, and the game shows how far it has got while it works.
+- **Sold items now reach the station's shop.** They were only being put on the shelf when the game allowed
+  them to be bought back; everything else was sold into nowhere.
+- **The station's shop panel updates when a sale fills it.** The goods were there, but the open panel kept
+  drawing the list it had when it opened — typing in its search box was the only way to see them.
+- **Boosters are no longer skipped** with "slot 25 now holds Combat Power I, not Combat Power I". The check
+  was comparing an item's internal name against the one you were shown, and for a booster those differ. The
+  same check guards buying, where it was refusing ammo and materials for the same reason.
+- **A big sale no longer makes the app reload your inventory dozens of times**, and the shop list no longer
+  drags the game down afterwards — what you sold is held back until you ask for it, with "show N you sold"
+  in the shop header.
+
+**In-game messages**
+
+- **Every notification the mod has ever sent was invisible.** It was created hidden and never shown, so
+  buys, sales and hires happened in silence. They appear now — and are readable, having first appeared in
+  black on a black banner.
+
+**The sell list**
+
+- **Common gear and most boosters were invisible to it.** Anything that rolled no substats was treated as
+  though it were not equipment, so a rule that said to sell it did nothing and it survived every sale.
+- **Editing a rule no longer switches it off.** It left the rule set for as long as the editor was open, so
+  a sale run while editing ignored it.
+- **A rule that names activities no longer sweeps up your modules and boosters** without saying so — "no
+  activity (modules, boosters)" is a value you can tick, and so is "none" for a field an item simply has
+  none of.
+- **"level vs mine" compares against your level**, not against the highest-level item you own.
+- A relative-level rule now reads as a sentence — "level is at least 10 levels below mine" — and every word
+  of it can be changed where it stands. "at or below mine" and "exactly mine" need no number at all.
+- The rule editor takes the room it needs, the field picker is no longer cut off, comparisons can be flipped
+  in place, and the split's groups are nested and sorted the way the rule groups them.
+
+**Gear suggestions**
+
+- **A "+25% Precision" roll was being valued as +0.25 Precision.** Percentage rolls are now read against the
+  pool they scale, and a "+% Combat Power" substat counts at all.
+- **Modules are judged by what they do to your battery**, not by their headline stat. A scanner with more
+  Precision that gives up pooled Combat Power, a crit aspect and a reactor bracket is no longer an upgrade
+  on a combat ship — while armour, aspect slots and draw still decide between two modules the damage model
+  rates equally.
+- **A reactor swap counts the power budget it changes.** A smaller reactor is not an upgrade when the load
+  it leaves you with costs the reactor bonus on every pool.
+- An empty aspect slot is valued by what you could put in it, and rolls your ship cannot use — Drone Power
+  with no drone bay, Salvage Power on a ship that neither salvages nor carries a salvage gun — are ignored.
+
+### Station Assistant 1.1.1
+
+- **The hotkeys answer even when there is nothing to do.** Auto-sell with no categories ticked, the gunner
+  with nothing to move, a restock while undocked — each said so only inside the mod's own settings window,
+  so the key looked broken.
+- **Items sold by auto-sell reach the station's shop**, not only the ones the game lets you buy back.
+
+---
+
 ## 2026-08-03 - Hypercom 0.2.0 | Station Assistant 1.1.0 | Quick Save 1.0.0
 
 ### Hypercom 0.2.0

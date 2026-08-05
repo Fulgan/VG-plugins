@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compareModules } from "./itemKind";
+import { compareModules, kindOf } from "./itemKind";
 import type { Item } from "./types";
 
 // The case that produced no suggestion at all: two Tractor Beams both reading "7 Tractor Beams", where the
@@ -58,5 +58,43 @@ describe("compareModules", () => {
   // advantage twice.
   it("ignores the quality level itself", () => {
     expect(compareModules(mod({ bonus: 15 }), mod({ bonus: 0 }))).toBe(0);
+  });
+});
+
+describe("aspect slots are capacity, not contents", () => {
+  it("a FULL 2/2 does not outrank a full 1/1 — the aspects already count through their stats", () => {
+    const full2 = mod({ aspectSlots: 2, aspects: [{ name: "A", description: "", stats: [] }, { name: "B", description: "", stats: [] }] } as Partial<Item>);
+    const full1 = mod({ aspectSlots: 1, aspects: [{ name: "A", description: "", stats: [] }] } as Partial<Item>);
+    expect(compareModules(full2, full1)).toBe(0);
+  });
+
+  it("an EMPTY slot still wins: it is somewhere to put one later", () => {
+    const spare = mod({ aspectSlots: 2, aspects: [{ name: "A", description: "", stats: [] }] } as Partial<Item>);
+    const full1 = mod({ aspectSlots: 1, aspects: [{ name: "A", description: "", stats: [] }] } as Partial<Item>);
+    expect(compareModules(spare, full1)).toBeGreaterThan(0);
+  });
+});
+
+describe("kindOf", () => {
+  const row = (o: Partial<Item>): Item => ({ name: "x", stats: [], substats: [], aspects: [], ...o } as unknown as Item);
+
+  it("classifies by the game's CATEGORY, whatever the item rolled", () => {
+    // A common piece of gear rolls no substats, so `stats` is empty — and that used to read as "not equipment",
+    // which kept every Standard module and booster out of the sell list entirely.
+    expect(kindOf(row({ category: "Module", type: "Tractor Beam", stats: [] }))).toBe("Module");
+    expect(kindOf(row({ category: "Booster", type: "Booster", stats: [] }))).toBe("Booster");
+    expect(kindOf(row({ category: "Turret", type: "Railgun", stats: [] }))).toBe("Turret");
+  });
+
+  it("keeps stock out of the equipment lists", () => {
+    for (const c of ["Ore", "Ammo", "Junk", "TradeGoods", "RefinedProduct", "Crystal", "Salvage", "Currency"])
+      expect(kindOf(row({ category: c, stats: [{ stat: "x", amount: 1, multiplier: 1 }] }))).toBeNull();
+    expect(kindOf(row({ category: "Drone" }))).toBeNull();
+    expect(kindOf(row({ category: "DefensiveTurret" }))).toBeNull();   // excluded before the Turret match
+  });
+
+  it("falls back to the shape when a bridge sends no category at all", () => {
+    expect(kindOf(row({ type: "Plasma Turret", stats: [{ stat: "x", amount: 1, multiplier: 1 }] }))).toBe("Turret");
+    expect(kindOf(row({ type: "Whatever", stats: [] }))).toBeNull();
   });
 });

@@ -262,5 +262,8 @@ export function affordTip(heading: string, items: Priced[], credits: number | nu
 // offers are priced in items, so the count is the cost there.
 export const buyExpect = (it: Item) => ({
   name: it.name,
+  // IDENTITY, not display text: an item whose `displayName` is a localisation key resolves to a `name` that can
+  // never match the raw value the bridge compares against (Hypercom).
+  id: it.identifier ?? null,
   cost: it.costItem ? (it.costItemCount ?? 0) : (it.cost ?? 0),
 });

@@ -1,4 +1,4 @@
-import { activityOf, background, contributionOf, sameScale, setPowerByLayer, setRank, type Rank, type ShipPools } from "./fleetDps";
+import { activityOf, background, capacityWith, contributionOf, mulOf, sameScale, setPowerByLayer, setRank, type Rank, type ShipPools } from "./fleetDps";
 import { energyDraw, reactorBracket, reactorModifier, repowered } from "./reactor";
 import type { Item, Vitals } from "./types";
 import { num, statTotals } from "./format";
@@ -52,8 +52,12 @@ export default function GearTotals({ pools, reactor, ranking, vitals, curTurrets
   // Why the score is single-layer when it is: set only when the ship cannot reach one layer at all.
   layerNote?: string | null;
 }) {
-  const capacity = reactor?.capacity ?? null;
+  const capacityNow = reactor?.capacity ?? null;
   const usedNow = reactor?.used ?? null;
+  // A REACTOR swap moves the budget itself, so the projected load is over the projected capacity — and the
+  // objective's own owner does the arithmetic, aspect lines and multipliers included.
+  const capacityNext = capacityNow == null ? null : capacityWith(capacityNow, curOther, nextOther);
+  const capacity = capacityNow;
 
   // Energy is projected as a DELTA against the game's own used figure: the reactor sums every connected item,
   // including gear this tab never shows (boosters), so re-summing what we can see would understate the draw.
@@ -62,7 +66,7 @@ export default function GearTotals({ pools, reactor, ranking, vitals, curTurrets
   const usedNext = usedNow == null ? null : usedNow + (drawNext - drawCur);
 
   const usageNow = capacity && capacity > 0 && usedNow != null ? usedNow / capacity : reactor?.usage ?? null;
-  const usageNext = capacity && capacity > 0 && usedNext != null ? usedNext / capacity : null;
+  const usageNext = capacityNext && capacityNext > 0 && usedNext != null ? usedNext / capacityNext : null;
 
   // The modifier baked into the reported pools is the game's own figure where available — the table is only
   // used to project a usage the game hasn't evaluated yet.
@@ -79,7 +83,12 @@ export default function GearTotals({ pools, reactor, ranking, vitals, curTurrets
     const raw = repowered(cpNow, modNow ?? 0, 0);
     const delta = nextTurrets.reduce((n, it) => n + contributionOf(it).combatPower, 0)
                 - curTurrets.reduce((n, it) => n + contributionOf(it).combatPower, 0);
-    cpNext = repowered(Math.max(0, raw + delta), 0, modNext ?? modNow ?? 0);
+    // A `×Combat Power` line scales the pool rather than adding to it, so the additive move happens with the
+    // current product divided out and the pending one put back: `(base + Σ amount) * Π multiplier`, the game's
+    // own order. Identical arithmetic to the plain sum when nothing in the build rolls such a line.
+    const mulCur = mulOf([...curTurrets, ...curOther], (m) => m.combatPower);
+    const mulNext = mulOf([...nextTurrets, ...nextOther], (m) => m.combatPower);
+    cpNext = repowered(Math.max(0, (raw / mulCur + delta) * mulNext), 0, modNext ?? modNow ?? 0);
   }
 
   // The battery's own score against a fixed non-turret background. Only meaningful in expanded mode — simple
@@ -99,7 +108,13 @@ export default function GearTotals({ pools, reactor, ranking, vitals, curTurrets
     const bg = background(pools, curTurrets);
     const cur: Rank = setRank(curTurrets, bg);
     const bgNext = bg.energy
-      ? { ...bg, energy: { ...bg.energy, used: bg.energy.used - energyDraw(curOther) + energyDraw(nextOther) } }
+      ? { ...bg, energy: {
+            ...bg.energy,
+            used: bg.energy.used - energyDraw(curOther) + energyDraw(nextOther),
+            // A reactor swap moves the budget, and the reading keeps the one it was taken at (see ShipPools).
+            capacity: capacityNext ?? bg.energy.capacity,
+            capacityAll: bg.energy.capacityAll ?? bg.energy.capacity,
+          } }
       : bg;
     const next: Rank = setRank(nextTurrets, bgNext);
     const act = cur[0] === 1 ? activityOf(curTurrets) : undefined;
@@ -137,12 +152,14 @@ export default function GearTotals({ pools, reactor, ranking, vitals, curTurrets
     return Math.max(0, scaled);
   };
 
-  // Precision is pooled and ADDITIVE, so it projects exactly the way Combat Power does.
+  // Precision is pooled, and it projects exactly the way Combat Power does — both halves of a stat line, with
+  // no reactor bracket to unwind (Precision is not a `reactorAffectedStat`).
   const precNow = pools?.poolPrecision ?? null;
   const precNext = precNow == null ? null
-    : Math.max(0, precNow
+    : Math.max(0, (precNow / mulOf([...curTurrets, ...curOther], (m) => m.precision)
         + nextTurrets.reduce((n, it) => n + contributionOf(it).precision, 0)
-        - curTurrets.reduce((n, it) => n + contributionOf(it).precision, 0));
+        - curTurrets.reduce((n, it) => n + contributionOf(it).precision, 0))
+        * mulOf([...nextTurrets, ...nextOther], (m) => m.precision));
 
   // Per-layer throughput, because a gun can only reach the layer it is built for. Scored against the same fixed
   // background as the headline figure, so the rows and the index agree.

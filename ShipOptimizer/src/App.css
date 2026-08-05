@@ -104,6 +104,11 @@ button:disabled { opacity: 0.45; cursor: default; }
   font-size: 13px;
 }
 .hint { color: #8a8a8a; font-size: 12.5px; }
+/* Reads as a link inside the row-count hint, but stays a button: it performs an action, not navigation. */
+.grid-drawall {
+  background: none; border: 0; padding: 0; font: inherit; color: #7fb4ff;
+  text-decoration: underline; cursor: pointer;
+}
 
 section { margin-top: 18px; }
 section h2 {
@@ -197,6 +202,11 @@ section h2 small { color: #777; font-weight: 400; }
 .grid-wrap {
   overflow: auto;
   max-height: 60vh;
+  /* The rows are windowed, so the spacers above and below RESIZE as you scroll. Scroll anchoring reacts to
+     that by moving scrollTop to keep the anchor node still, which fires another scroll, which recomputes the
+     window, which resizes the spacers again — one wheel tick then walks to the end of the list on its own.
+     Anchoring has to be off wherever a list is virtualized. */
+  overflow-anchor: none;
   border: 1px solid #262626;
   border-radius: 6px;
 }

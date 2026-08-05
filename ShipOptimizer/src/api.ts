@@ -108,10 +108,16 @@ const get = <T>(c: Conn, path: string): Promise<T> => send<T>(c, "GET", path);
 
 export const api = {
   status: (c: Conn) => get<Status>(c, "/status"),
-  inventories: (c: Conn) => get<Inventories>(c, "/inventories"),
+  // `fresh` bypasses the bridge's short cache. The cache exists because building this list holds a game frame
+  // (thousands of armory rows, read one at a time through the game API), so an event burst must not pay for it
+  // repeatedly — but a refresh the PLAYER asked for is exactly when a stale answer is not acceptable.
+  inventories: (c: Conn, fresh = false) => get<Inventories>(c, "/inventories" + (fresh ? "?fresh=1" : "")),
   loadout: (c: Conn) => get<Loadout>(c, "/loadout"),
   ships: (c: Conn) => get<Ships>(c, "/ships"),
-  shops: (c: Conn) => get<Shops>(c, "/shops"),
+  // The station's stock. BUY-BACK IS OPT-IN, and at a playthrough's scale that is the difference between a
+  // 200 KB read and a 10 MB one: selling an armory hands thousands of rows to the shop, and they would arrive
+  // in every poll of a list read for what the STATION sells. The count comes back either way.
+  shops: (c: Conn, buyback = false) => get<Shops>(c, "/shops" + (buyback ? "?buyback=1" : "")),
   officers: (c: Conn) => get<Officers>(c, "/officers"),
   recruits: (c: Conn) => get<Recruits>(c, "/recruits"),
   // `guid` selects any ship the player OWNS; omitted means the one being flown. This is the only route that
@@ -154,16 +160,34 @@ export const api = {
   // `key` is the offer's inventory SLOT, and shops reuse slots for different goods when they restock — so
   // the item we think we're buying travels with the request. The bridge refuses (409) if the slot now holds
   // something else, or costs something else, rather than silently buying the wrong thing.
-  buy: (c: Conn, shop: string | null, key: number, count = 1, expect?: { name: string; cost: number }) =>
+  buy: (c: Conn, shop: string | null, key: number, count = 1, expect?: { name: string; cost: number; id?: string | null }) =>
     send<{ bought: number; spent: number; barter: boolean }>(c, "POST", "/buy",
-      { shop, key, count, expectName: expect?.name, expectCost: expect?.cost }),
+      { shop, key, count, expectName: expect?.name, expectId: expect?.id, expectCost: expect?.cost }),
   // Sell from a store. `key` is the item's inventory SLOT, and a slot freed by an earlier sale is refillable
   // by a drop or a /move — so the name we believe we are selling travels with the request and the bridge
   // refuses with 409 rather than selling whatever now sits there. The sell list reviews a batch before it
   // spends, so every row's handle is older than the press by construction: `expectName` is not optional here
   // even though the endpoint allows it to be.
-  sell: (c: Conn, store: string, key: number, count: number, expectName: string) =>
-    send<{ sold: number; credits: number }>(c, "POST", "/sell", { store, key, count, expectName }),
+  sell: (c: Conn, store: string, key: number, count: number, expectName: string, expectId?: string | null) =>
+    send<{ sold: number; credits: number }>(c, "POST", "/sell", { store, key, count, expectName, expectId }),
+  // A whole reviewed list in ONE request. Selling row by row costs a round trip and a main-thread hop each,
+  // and a hop is serviced once per frame — a long playthrough's armory is minutes of that, with the game
+  // silent throughout. The bridge walks the list a chunk per frame and announces its progress in game.
+  // A batch is not a transaction: `failures` names what was refused and the rest still sold.
+  // `expectId` is the item's `identifier` — IDENTITY, where `expectName` is display text. They are not the
+  // same claim: a booster's `displayName` is a localisation key and its `name` is the resolved text, so a guard
+  // on the name alone refused every one of them (Hypercom).
+  sellBatch: (c: Conn, items: { store: string; key: number; count: number; expectName: string; expectId?: string | null }[]) =>
+    send<{
+      sold: number; credits: number; failed: number;
+      failures: { key: number; name: string | null; error: string }[];
+      // Every refusal counted by reason — `failures` names only the first few, and a skip count without the
+      // reasons is not something a player can act on.
+      failureCounts?: Record<string, number>;
+      // How many rows the station will sell BACK, and why the rest will not — a sale the station cannot undo
+      // is a different decision from one it can, and the player only finds out afterwards.
+      boughtBack?: number; buybackNote?: string | null;
+    }>(c, "POST", "/sell", { items }),
   // Hire a recruit. The bridge re-checks docked / not-ECHO / affordability and finds the game's hire
   // method by reflection (the crew API moves between betas). dryRun reports without spending.
   hireOfficer: (c: Conn, guid: string, dryRun = false) =>

@@ -1,4 +1,5 @@
 import type { ApplyApi } from "./useApply";
+import { Notice } from "./Notice";
 
 // The apply affordance for ONE tab's section, so Officers, Boosters and Ship gear offer it identically.
 //
@@ -44,7 +45,7 @@ export function ApplyMsg({ apply }: { apply: ApplyApi }) {
   return (
     <>
       {gate && <div className="sum-msg err">⚠ {gate}</div>}
-      {apply.msg && <div className={apply.msg.ok ? "sum-msg ok" : "sum-msg err"}>{apply.msg.ok ? "✓" : "⚠"} {apply.msg.text}</div>}
+      <Notice msg={apply.msg} onClose={() => apply.setMsg(null)} />
     </>
   );
 }

@@ -222,7 +222,14 @@
 .sum-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .sum-chip { display: inline-flex; align-items: center; gap: 7px; background: #101014; border: 1px solid #23232a;
   border-radius: 20px; padding: 3px 10px 3px 4px; font-size: 12.5px; }
-.sum-msg { margin: 10px 0; padding: 8px 12px; border-radius: 6px; font-size: 12.5px; }
+/* A notice is dismissible (see Notice.tsx): the × sits beside the text rather than under it, so a long
+   message cannot push it out of reach. */
+.sum-msg { display: flex; align-items: flex-start; gap: 8px; margin: 10px 0; padding: 8px 12px;
+  border-radius: 6px; font-size: 12.5px; }
+.sum-msg-t { flex: 1 1 auto; min-width: 0; }
+.sum-msg-x { flex: 0 0 auto; background: none; border: none; color: inherit; opacity: .6; cursor: pointer;
+  font-size: 15px; line-height: 1; padding: 0 2px; }
+.sum-msg-x:hover { opacity: 1; }
 .sum-msg.ok { background: #12200f; border: 1px solid #2f6b3a; color: #86efac; }
 .sum-msg.err { background: #241012; border: 1px solid #6b2f2f; color: #ff9a9a; }
 /* A caution about a plan, not a failure that already happened — amber, so it doesn't read as an error. */

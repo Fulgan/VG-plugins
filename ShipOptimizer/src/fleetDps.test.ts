@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { setDps, setPower, setRank, rankGt, rankSub, worthSwitching, MIN_GAIN, background, contributionOf, precisionCrit, expectedCrit, speedRatio, optimizeTurretSet, optimizeTurretSetLayered, coversLayer, coversLayers, sameScale, setPowerByLayer, poolShare, poolsForShip, poolsReconcile, type ShipPools, type Rank, rating, isCombat } from "./fleetDps";
+import { setDps, setPower, setRank, rankGt, rankSub, slotPotential, worthSwitching, MIN_GAIN, background, capacityWith, contributionOf, moduleBetter, moduleGain, mulOf, poolsWithModule, precisionCrit, expectedCrit, speedRatio, optimizeTurretSet, optimizeTurretSetLayered, coversLayer, coversLayers, sameScale, setPowerByLayer, poolShare, poolsForShip, poolsReconcile, type ShipPools, type Rank, rating, isCombat } from "./fleetDps";
 import type { Item } from "./types";
 
 // A ship whose hull/crew/modules alone give some power and precision.
@@ -18,6 +18,11 @@ const gun = (over: Partial<Item> = {}): Item => ({
 
 const withStats = (lines: { stat: string; amount: number }[], over: Partial<Item> = {}) =>
   gun({ stats: lines.map((l) => ({ ...l, multiplier: 1 })), ...over } as Partial<Item>);
+
+// A percentage line arrives with `amount: 0` and the factor in `multiplier` — the shape the bridge sends and the
+// one a naive reading collapses into an additive.
+const withMul = (lines: { stat: string; amount?: number; multiplier?: number }[], over: Partial<Item> = {}) =>
+  gun({ stats: lines.map((l) => ({ amount: 0, multiplier: 1, ...l })), ...over } as Partial<Item>);
 
 describe("precisionCrit", () => {
   it("is linear below 5% and soft-caps above it", () => {
@@ -49,9 +54,91 @@ describe("background", () => {
     expect(b.poolCombatPower).toBe(8_000);
     expect(b.poolPrecision).toBe(600);
   });
+
+  it("divides the equipped guns' MULTIPLIER lines out of the pools they name", () => {
+    // `(base + Σ amount) * Π multiplier`: the ×1.25 is part of the reported 1,000, so additive space is 800 and
+    // the gun's own 400 comes out of THAT — not out of the product.
+    const equipped = [withMul([{ stat: "Precision", multiplier: 1.25 }, { stat: "Precision", amount: 400 }])];
+    const b = background(bg, equipped);
+    expect(b.poolPrecision).toBeCloseTo(1_000 / 1.25 - 400, 10);
+    expect(b.precisionResidual).toBeCloseTo(1, 10);              // nothing but the gun's own factor was known
+  });
+
+  it("holds the reported pool multiplier and gives back only the guns' share of it", () => {
+    const equipped = [withMul([{ stat: "Precision", multiplier: 1.25 }])];
+    const b = background({ ...bg, poolPrecisionMult: 2.5 }, equipped);
+    expect(b.poolPrecision).toBeCloseTo(1_000 / 2.5, 10);        // additive space, the whole product removed
+    expect(b.precisionResidual).toBeCloseTo(2, 10);              // 2.5 with the gun's 1.25 taken out
+  });
+
+  it("round trips: putting the same battery back rebuilds the reported pool", () => {
+    const equipped = [
+      withMul([{ stat: "Precision", multiplier: 1.25 }, { stat: "Precision", amount: 400 }]),
+      withStats([{ stat: "Precision", amount: 150 }]),
+    ];
+    const pools = { ...bg, poolPrecision: 10_000, poolPrecisionMult: 2.5 };
+    const b = background(pools, equipped);
+    const rebuilt = (b.poolPrecision + 550) * (b.precisionResidual ?? 1)
+      * mulOf(equipped, (m) => m.precision);
+    expect(rebuilt).toBeCloseTo(pools.poolPrecision, 8);
+  });
+});
+
+describe("contributionOf", () => {
+  it("keeps a stat line's two halves apart", () => {
+    const c = contributionOf(withMul([{ stat: "Precision", amount: 300 }, { stat: "Precision", multiplier: 1.05 }]));
+    expect(c.precision).toBe(300);
+    expect(c.mul.precision).toBeCloseTo(1.05, 10);
+  });
+
+  it("reads a power multiplier whatever pool it names, since it is a UNIT stat", () => {
+    const laser = withMul([{ stat: "Combat Power", multiplier: 1.1 }], { type: "Mining Laser", category: "Turret" });
+    expect(contributionOf(laser).mul.combatPower).toBeCloseTo(1.1, 10);
+  });
+
+  it("folds a multiplier into the additive term for a stat with NO pool reading", () => {
+    // Nothing reports a typed-damage pool, so a ×1.05 has nothing to scale: the five points it displays as are
+    // closer to the game's answer than a multiple of an unseen zero.
+    const c = contributionOf(withMul([{ stat: "Kinetic Damage", multiplier: 1.05 }]));
+    expect(c.typedDamage.get("Kinetic")).toBeCloseTo(0.05, 10);
+  });
 });
 
 describe("setDps", () => {
+  it("scores a ×Precision roll against the WHOLE pool, not as its own points", () => {
+    // The fault this guards: reading ×1.25 as +0.25 Precision against a four-figure pool prices one of the
+    // strongest rolls in the game at nothing.
+    const equipped = [gun(), gun()];
+    const b = background(bg, equipped);
+    const plain = setDps(equipped, b);
+    const scaled = setDps([withMul([{ stat: "Precision", multiplier: 1.25 }]), gun()], b);
+    const asPoints = setDps([withStats([{ stat: "Precision", amount: 0.25 }]), gun()], b);
+    expect(scaled).toBeGreaterThan(plain);
+    expect(asPoints / plain).toBeLessThan(1.0001);     // what the fold was worth: within noise of nothing
+    // Orders apart, which is the whole point — the roll moves the battery, the fold moved a rounding error.
+    expect(scaled - plain).toBeGreaterThan((asPoints - plain) * 100);
+  });
+
+  it("credits a ×Combat Power substat, which the main-stat reading cannot see", () => {
+    const pools = { ...bg, poolCombatPowerMult: 2, energy: undefined };
+    const equipped = [gun(), gun()];
+    const b = background(pools, equipped);
+    const plain = setDps(equipped, b);
+    const scaled = setDps([withMul([{ stat: "Combat Power", multiplier: 1.1 }]), gun()], b);
+    expect(scaled).toBeGreaterThan(plain);
+    expect(scaled / plain).toBeCloseTo(1.1, 6);        // it scales the pool AND both guns' own power
+  });
+
+  it("is unchanged when nothing in the battery rolls a multiplier", () => {
+    // The degrade rule: a build with no ×lines and a bridge reporting no pool multiplier must score exactly what
+    // it scored before the two halves were separated.
+    const equipped = [withStats([{ stat: "Precision", amount: 400 }]), gun()];
+    const b = background(bg, equipped);
+    expect(b.precisionResidual).toBe(1);
+    expect(setDps(equipped, b)).toBeCloseTo(
+      setDps(equipped, { ...b, precisionResidual: undefined }), 10);
+  });
+
   it("rises when a set contributes more power", () => {
     const weak = setDps([gun(), gun()], bg);
     const strong = setDps([gun({ mainStat: { name: "Combat Power", amount: "3,000" } }), gun()], bg);
@@ -1035,5 +1122,167 @@ describe("the worth-it floor", () => {
     const base: Rank = [2, 100_000];
     expect(worthSwitching([2, 99_000], base)).toBe(false);
     expect(worthSwitching([2, 100_000], base)).toBe(false);
+  });
+});
+
+describe("judging a MODULE", () => {
+  // A module pools its stats, so a swap is a change to the background every gun is scored against.
+  const mod = (over: Partial<Item> = {}, lines: { stat: string; amount?: number; multiplier?: number }[] = []): Item =>
+    gun({
+      category: "Module", type: "Scanner", slotType: "Scanner", gameplayType: null,
+      mainStat: { name: "Precision", amount: "12,300" },
+      stats: lines.map((l) => ({ amount: 0, multiplier: 1, ...l })),
+      ...over,
+    } as Partial<Item>);
+
+  const battery = [gun(), gun()];
+  const pools: ShipPools = {
+    poolCombatPower: 40_000, poolPrecision: 12_300, equivalentTurrets: 4,
+    precisionDivisor: 5_000, critDamage: 1, megaCrit: 0,
+    critChance: 0.2, critChanceMult: 1,
+  };
+
+  it("moves the pools a module actually feeds, and its draw with them", () => {
+    const small = mod({ powerUsage: 2_150 }, [{ stat: "Combat Power", amount: 2_605 }]);
+    const big = mod({ mainStat: { name: "Precision", amount: "18,800" }, powerUsage: 3_294 });
+    const p2 = poolsWithModule({ ...pools, energy: { used: 10_000, capacity: 20_000, mod: 0.2 } }, small, big);
+    expect(p2.poolPrecision).toBeCloseTo(12_300 + 6_500, 6);      // the headline it brings
+    expect(p2.poolCombatPower).toBeCloseTo(40_000 - 2_605, 6);    // the pooled substat it gives up
+    expect(p2.energy!.used).toBe(10_000 + 3_294 - 2_150);         // and the draw that re-brackets everything
+  });
+
+  it("refuses the swap that trades a battery-wide gain for a bigger headline", () => {
+    // The reported case: +6.5K Precision, -2,605 pooled Combat Power, -5% crit chance from a lost aspect.
+    const equipped = mod({ powerUsage: 2_150 }, [
+      { stat: "Combat Power", amount: 2_605 },
+      { stat: "Critical Chance", amount: 0.05 },
+    ]);
+    const scanner = mod({ mainStat: { name: "Precision", amount: "18,800" }, powerUsage: 3_294 },
+      [{ stat: "Drone Power", amount: 4_238 }, { stat: "Hull HP", amount: 3_763 }]);
+    const ctx = { pools, turrets: battery, role: "Combat" as const };
+    expect(moduleGain(scanner, equipped, ctx)).toBeLessThan(0);
+    expect(moduleBetter(scanner, equipped, ctx)).toBe(false);
+    // ...and the same pair with no pool reading falls back to the headline, which is simple mode's whole model.
+    expect(moduleBetter(scanner, equipped, { role: "Combat" })).toBe(true);
+  });
+
+  it("takes the swap that lifts the battery, headline or not", () => {
+    const equipped = mod({ powerUsage: 2_150 });
+    const better = mod({ powerUsage: 2_150 }, [{ stat: "Combat Power", amount: 8_000 }]);
+    const ctx = { pools, turrets: battery, role: "Combat" as const };
+    expect(moduleGain(better, equipped, ctx)).toBeGreaterThan(MIN_GAIN);
+    expect(moduleBetter(better, equipped, ctx)).toBe(true);
+  });
+
+  it("refuses a reactor that buys substats with the ship's own power budget", () => {
+    // The reported case: a Lv74 reactor with +2,288 Combat Power over a Lv79 one, and 11,091 less capacity —
+    // which takes the load from 40% to 61% and the reactor bonus from +20% to +10% on EVERY pool at once.
+    const reactor = (energy: number, lines: { stat: string; amount: number }[]) =>
+      mod({ type: "Reactor", slotType: "Reactor", powerUsage: 0, mainStat: { name: "Energy", amount: String(energy) } },
+          lines);
+    const equipped = reactor(33_100, [{ stat: "Precision", amount: 3_936 }, { stat: "Torpedo Power", amount: 4_177 }]);
+    const cand = reactor(22_000, [{ stat: "Combat Power", amount: 2_288 }, { stat: "Shield HP", amount: 2_290 }]);
+    const withEnergy: ShipPools = { ...pools, energy: { used: 13_375, capacity: 33_100, mod: 0.2 } };
+
+    const swapped = poolsWithModule(withEnergy, equipped, cand);
+    expect(swapped.energy!.capacity).toBeCloseTo(22_000, 6);      // the budget moves with the reactor
+    expect(swapped.energy!.used).toBe(13_375);                    // neither reactor DRAWS anything
+
+    const ctx = { pools: withEnergy, turrets: battery, role: "Combat" as const };
+    expect(moduleGain(cand, equipped, ctx)).toBeLessThan(0);
+    expect(moduleBetter(cand, equipped, ctx)).toBe(false);
+  });
+
+  it("keeps what is fitted when the objective is slightly AGAINST, whatever the tie-breaks say", () => {
+    // The reported case: two engines of identical thrust, where the candidate carries one more aspect and one
+    // more slot but gives up 425 pooled Combat Power and the incumbent's ZERO draw (Solar Powered).
+    const engine = (over: Partial<Item>, lines: { stat: string; amount: number }[], aspects: number) =>
+      mod({
+        type: "Engine", slotType: "Engine", mainStat: { name: "Thrust", amount: "41,500" },
+        aspectSlots: aspects, aspects: Array.from({ length: aspects }, (_, i) => ({ name: `A${i}`, description: "", stats: [] })),
+        ...over,
+      } as Partial<Item>, lines);
+    const equipped = engine({ powerUsage: 0 }, [{ stat: "Combat Power", amount: 3_074 }], 1);
+    const cand = engine({ powerUsage: 2_173 },
+      [{ stat: "Combat Power", amount: 2_649 }, { stat: "Salvage Power", amount: 3_122 }], 2);
+    const ctx = {
+      pools: { ...pools, energy: { used: 13_375, capacity: 33_100, mod: 0.2 } },
+      turrets: battery, role: "Combat" as const,
+      fit: { role: "Combat", hasDroneBay: false, activities: ["Combat"] },
+    };
+    expect(moduleGain(cand, equipped, ctx)).toBeLessThan(0);
+    expect(moduleBetter(cand, equipped, ctx)).toBe(false);
+  });
+
+  it("counts an ASPECT that grants capacity, and its multiplier half", () => {
+    // "+10% reactor energy" is an aspect line, not a headline, and it moves the budget exactly as the
+    // reactor's own does — 10% of the budget, not 10% of nothing.
+    const plain = mod({ type: "Reactor", slotType: "Reactor", powerUsage: 0,
+      mainStat: { name: "Energy", amount: "20,000" } });
+    const withAspect = mod({ type: "Reactor", slotType: "Reactor", powerUsage: 0,
+      mainStat: { name: "Energy", amount: "20,000" },
+      aspects: [{ name: "Overcharged", description: "", stats: [{ stat: "EnergyCapacity", amount: 0, multiplier: 1.1 }] }],
+    } as Partial<Item>);
+    expect(capacityWith(20_000, [plain], [withAspect])).toBeCloseTo(22_000, 6);
+    // and an ADDITIVE aspect line adds, in the same composition
+    const flat = mod({ type: "Reactor", slotType: "Reactor", powerUsage: 0,
+      mainStat: { name: "Energy", amount: "20,000" },
+      aspects: [{ name: "Extra Cells", description: "", stats: [{ stat: "Energy Capacity", amount: 2_500, multiplier: 1 }] }],
+    } as Partial<Item>);
+    expect(capacityWith(20_000, [plain], [flat])).toBeCloseTo(22_500, 6);
+  });
+
+  it("a SUB-FLOOR loss is still a loss: the tie-breaks may not override it", () => {
+    // The band between "nothing to say" and "worth a refit" is where a comparator used to win: a module with a
+    // spare aspect slot beat one that was quietly better for the guns.
+    const equipped = mod({ powerUsage: 2_150 }, [{ stat: "Combat Power", amount: 60 }]);
+    const roomier = mod({ powerUsage: 2_150, aspectSlots: 2 }, []);
+    const ctx = { pools, turrets: battery, role: "Combat" as const };
+    const gain = moduleGain(roomier, equipped, ctx);
+    expect(gain).toBeLessThan(0);
+    expect(Math.abs(gain)).toBeLessThan(MIN_GAIN);              // too small to be worth a refit...
+    expect(moduleBetter(roomier, equipped, ctx)).toBe(false);   // ...and never an upgrade either
+    // The spare slot decides only where the objective truly says nothing.
+    const same = mod({ powerUsage: 2_150 }, []);
+    expect(moduleBetter(roomier, same, ctx)).toBe(true);
+  });
+
+  it("prices an empty aspect slot by what it could HOLD, not by existing", () => {
+    // A spare slot on a hungry module is somewhere to put Solar Powered — worth a bracket here, since 18,000
+    // of 33,100 is over half and dropping 4,000 of draw crosses back under. On a module that already draws
+    // nothing the same slot has nothing left to win, whatever the slot count says.
+    const ctx = {
+      pools: { ...pools, energy: { used: 18_000, capacity: 33_100, mod: 0.2 } },
+      turrets: battery, role: "Combat" as const,
+    };
+    const hungry = mod({ powerUsage: 4_000, aspectSlots: 1 });
+    const hungryNoSlot = mod({ powerUsage: 4_000, aspectSlots: 0 });
+    const free = mod({ powerUsage: 0, aspectSlots: 1 });
+    expect(slotPotential(hungry, ctx)).toBeGreaterThan(0);
+    expect(slotPotential(hungryNoSlot, ctx)).toBe(0);       // no slot, no potential
+    expect(slotPotential(free, ctx)).toBe(0);               // no draw left to remove
+    // Between two modules the objective cannot separate, the one with somewhere to put an aspect wins.
+    expect(moduleBetter(hungry, hungryNoSlot, ctx)).toBe(true);
+    expect(moduleBetter(hungryNoSlot, hungry, ctx)).toBe(false);
+  });
+
+  it("never lets a potential gain outweigh a measured one", () => {
+    const ctx = {
+      pools: { ...pools, energy: { used: 18_000, capacity: 33_100, mod: 0.2 } },
+      turrets: battery, role: "Combat" as const,
+    };
+    const spare = mod({ powerUsage: 4_000, aspectSlots: 1 });
+    const stronger = mod({ powerUsage: 4_000, aspectSlots: 0 }, [{ stat: "Combat Power", amount: 8_000 }]);
+    expect(moduleBetter(spare, stronger, ctx)).toBe(false);  // the slot is a maybe; the pool is a fact
+  });
+
+  it("lets the comparator decide when the objective has no opinion", () => {
+    // Neither touches a pooled stat: the battery scores identically, so armour and breadth are the answer.
+    const plain = mod({ powerUsage: 2_150 });
+    const tougher = mod({ powerUsage: 2_150 }, [{ stat: "Hull HP", amount: 5_000 }]);
+    const ctx = { pools, turrets: battery, role: "Combat" as const };
+    expect(Math.abs(moduleGain(tougher, plain, ctx))).toBeLessThan(MIN_GAIN);
+    expect(moduleBetter(tougher, plain, ctx)).toBe(true);        // more, for the same draw and headline
+    expect(moduleBetter(plain, tougher, ctx)).toBe(false);
   });
 });

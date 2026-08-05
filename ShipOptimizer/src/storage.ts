@@ -75,11 +75,21 @@ export function load<T>(key: string, fallback: T): T {
   }
 }
 
+// Eviction order for a full store, and the set that decides whether a failed write is worth telling the
+// player about. ONE owner: `reclaim`, `writeLocal` and `save` all read it.
+const DISPOSABLE: readonly string[] = [SNAPSHOT_KEY, LOG_KEY];
+const isDisposable = (key: string) => DISPOSABLE.includes(key);
+
+// The largest cache entry worth attempting, in UTF-16 chars. Origin quotas are commonly ~5M chars, and the
+// preferences this exists to protect are a few thousand ∴ a ceiling well under the quota keeps a big
+// inventory from crowding them out while still caching any ordinary one.
+const MAX_CACHE_CHARS = 1_000_000;
+
 // Drop the disposable caches to free space. Returns whether anything was actually removed, so the write
 // is only retried when the store really did shrink.
 function reclaim(exceptKey: string): boolean {
   let freed = false;
-  for (const k of [SNAPSHOT_KEY, LOG_KEY]) {
+  for (const k of DISPOSABLE) {
     if (k === exceptKey) continue; // never evict the key we're trying to write
     try {
       if (localStorage.getItem(k) != null) { localStorage.removeItem(k); freed = true; }
@@ -96,6 +106,14 @@ export function save(key: string, value: unknown): boolean {
     raw = JSON.stringify(value);
   } catch (e) {
     report({ key, message: `could not serialize: ${(e as Error).message}`, quota: false, reclaimed: false });
+    return false;
+  }
+  // A cache too big to hold is REFUSED rather than attempted: an armory of 85k items serialises past the
+  // whole origin quota, so the write cannot succeed, and retrying it every refresh costs a multi-megabyte
+  // stringify, a doomed `setItem`, and a push of the same payload at the bridge. Any stale copy goes with
+  // it — booting from an outdated snapshot is worse than booting from none, which just refetches.
+  if (isDisposable(key) && raw.length > MAX_CACHE_CHARS) {
+    try { localStorage.removeItem(key); } catch { /* storage blocked — nothing cached to drop */ }
     return false;
   }
   queuePush(key, raw); // bridge-side copy — independent of whether the local cache write succeeds
@@ -116,6 +134,13 @@ function writeLocal(key: string, raw: string): boolean {
     const freed = reclaim(key);
     if (freed) {
       try { localStorage.setItem(key, raw); return true; } catch { /* still full — fall through */ }
+    }
+    // A DISPOSABLE key that will not fit is not the player's problem: it rebuilds on the next docked
+    // refresh, so the only cost is a slower boot, and nothing they can do would change the outcome. Its
+    // stale copy is dropped so the space goes to the preferences this whole path exists to protect.
+    if (isDisposable(key)) {
+      try { localStorage.removeItem(key); } catch { /* already in the error path */ }
+      return false;
     }
     report({ key, message: `browser storage is full — "${key}" was not saved`, quota: true, reclaimed: freed });
     return false;

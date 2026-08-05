@@ -51,7 +51,7 @@ namespace StationAssistant
                 if (toSell is null or { Count: 0 })
                     return Fail("no matching items");
 
-                var shop = SpaceStation.current?.shopInventory; // station's actual shop (general/conquest/etc.)
+                var shop = SpaceStation.current?.shopInventory; // for the grid refresh below
                 var buyback = 0;
 
                 var items = 0;
@@ -66,12 +66,10 @@ namespace StationAssistant
                     if (!VG.Game.Wallet.SetBalance(player, AddClamped(VG.Game.Wallet.Balance(player), value)))
                         break;
 
-                    // Buyback-eligible gear returns to the station shop so it can be re-bought.
-                    if (shop != null && entry.item.buyBack)
-                    {
-                        try { shop.Add(entry.item, count, buyback: true); buyback += count; }
-                        catch { }
-                    }
+                    // Sold goods go to the station's shelf — ONE owner (`VG.Game.GameShops.Shelve`), shared with
+                    // the bridge, because the game adds them WHATEVER their buy-back flag says.
+                    if (VG.Game.GameShops.Shelve(SpaceStation.current, entry.item, count).boughtBack)
+                        buyback += count;
                     cargo.Remove(entry, count);
 
                     items += count;
@@ -80,7 +78,7 @@ namespace StationAssistant
 
                 if (buyback > 0)
                 {
-                    RefreshShop(shop);
+                    VG.Game.GameShops.Repaint(shop);
                     Plugin.Log.LogInfo($"Returned {buyback} item(s) to the {shop.facility} shop buyback.");
                 }
 
@@ -286,21 +284,6 @@ namespace StationAssistant
         private static MethodInfo _updateVisible;
 
         // Push shop changes into the visible grid (UpdateVisibleItems is internal; reflected once).
-        private static void RefreshShop(Inventory shop)
-        {
-            _updateVisible ??= typeof(Inventory).GetMethod("UpdateVisibleItems",
-                BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
-            try { _updateVisible?.Invoke(shop, null); }
-            catch { }
-            try
-            {
-                var iim = InventoryInteractionManager.Instance;
-                if (iim != null && iim.isShopOpen)
-                    iim.ReloadUI();
-            }
-            catch { }
-        }
-
         private static SellResult Fail(string reason) => new SellResult { Items = 0, Credits = 0, Reason = reason };
     }
 

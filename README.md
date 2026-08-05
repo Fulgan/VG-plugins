@@ -25,6 +25,33 @@ mod without the others.
 
 **[What changed in the latest release](RELEASE-NOTES.md)**
 
+## Downloads
+
+One link per mod that never changes. The version behind it does — these are updated with every release, so a
+bookmark (or a pinned message) keeps working.
+
+<!-- DOWNLOADS:BEGIN — rewritten by tools/publish-oss.ps1 from each mod's <Version>; edit the prose, not the
+     links, or the next mirror run will overwrite what you wrote. -->
+
+### Hypercom
+
+Ship Optimizer ships inside it — one download for both.
+
+**[Download Hypercom 0.2.1](https://github.com/Fulgan/VG-plugins/releases/download/Hypercom-v0.2.1/Hypercom-v0.2.1.zip)**
+· [all Hypercom releases](https://github.com/Fulgan/VG-plugins/releases?q=Hypercom)
+
+### Station Assistant
+
+**[Download Station Assistant 1.1.1](https://github.com/Fulgan/VG-plugins/releases/download/StationAssistant-v1.1.1/StationAssistant-v1.1.1.zip)**
+· [all Station Assistant releases](https://github.com/Fulgan/VG-plugins/releases?q=Station+Assistant)
+
+### Quick Save
+
+**[Download Quick Save 1.0.0](https://github.com/Fulgan/VG-plugins/releases/download/QuickSave-v1.0.0/QuickSave-v1.0.0.zip)**
+· [all Quick Save releases](https://github.com/Fulgan/VG-plugins/releases?q=Quick+Save)
+
+<!-- DOWNLOADS:END -->
+
 
 
 

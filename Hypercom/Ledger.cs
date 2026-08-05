@@ -21,6 +21,11 @@ namespace Hypercom
         private static readonly object Gate = new object();
         private static List<Dictionary<string, object>> _cache;
 
+        // A write is the WHOLE file — up to 4,000 lines — because the cache is trimmed and the tail must go
+        // with it. That is nothing for one sale and everything for a batch of thousands, which paid it per row.
+        private static int _deferred;
+        private static bool _dirty;
+
         private static string Path => System.IO.Path.Combine(Paths.ConfigPath, "hypercom-ledger.jsonl");
 
         // One transaction. `credits` is signed from the PLAYER's side: negative for a purchase, positive for a
@@ -54,10 +59,37 @@ namespace Hypercom
                     Load();
                     _cache.Add(entry);
                     if (_cache.Count > MaxEntries) _cache.RemoveRange(0, _cache.Count - MaxEntries);
-                    Persist();
+                    if (_deferred > 0) _dirty = true; else Persist();
                 }
             }
             catch (Exception ex) { Plugin.Log.LogWarning($"ledger write failed: {ex.Message}"); }
+        }
+
+        /**
+         * Hold the file write until `Flush`, for an operation that records many rows at once.
+         *
+         * The ROWS are not batched — the ledger is the audit trail and a sale is a row whatever else is
+         * happening. Only the persistence is: rewriting the file per row made a 7,891-item sale into 7,891 full
+         * file writes, which is the whole of the ~12ms each sale cost and the reason the game stood still
+         * through it. Nested and ref-counted, so an inner scope cannot flush an outer one's work early.
+         *
+         * `Flush` must run even when the operation throws: an unflushed batch loses rows for transactions that
+         * already moved money.
+         */
+        internal static void Defer()
+        {
+            lock (Gate) _deferred++;
+        }
+
+        internal static void Flush()
+        {
+            lock (Gate)
+            {
+                if (_deferred > 0) _deferred--;
+                if (_deferred > 0 || !_dirty) return;
+                _dirty = false;
+                Persist();
+            }
         }
 
         // Newest first, optionally limited and scoped to one playthrough. Totals are computed over the FILTERED

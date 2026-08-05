@@ -92,12 +92,18 @@ export interface Item {
   costItemCount?: number; // shop: barter qty (per unit)
   costItemOwned?: number; // shop: how many of the barter item the player owns (affordability)
   stock?: number; // shop: units in stock, -1 = infinite
+  // shop: the player's OWN stock, handed back after a sale. Absent means the station's own — every row
+  // in the ordinary answer — so this is only ever true.
+  buyback?: boolean;
 }
 
 export interface Shop {
   id: string;
   facility: string;
   items: Item[];
+  // How many of this shop's rows are the player's OWN stock, handed back after a sale. Reported whether or not
+  // those rows were asked for, so the tab can offer them by number instead of hiding that they exist.
+  buybackCount?: number;
 }
 
 export interface Shops {
@@ -174,6 +180,10 @@ export interface Status {
   shipType?: string | null; // ship class, e.g. "Chisel Mk I"
   role?: string | null; // Combat | Mining | Salvaging | Cargo | Generic
   credits: number;
+  /** The player's OWN level (the commander's). Absent on a bridge that predates it, and the difference matters:
+   *  without it a "vs mine" filter can only compare against the highest item level owned, which is not a level
+   *  — it makes the best item's own relative level 0 and every other item negative. */
+  level?: number | null;
   // Every currency the RUNNING build ships, not a fixed set: the release has four commendations and no
   // `VanguardMark`, the beta the same four plus it — so the wallet is whatever the bridge enumerated out of the
   // item registry. Counted by the same call the shop DTO uses for `costItemOwned`, so the header and an offer's

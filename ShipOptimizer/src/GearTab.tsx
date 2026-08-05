@@ -4,10 +4,10 @@ import type { CatalogTypes, Inventories, Item, ShipHardpoint, ShipLayout } from 
 import { RARITY_COLOR, num, mainVal, effectiveMainVal } from "./format";
 import { aspectDamageFraction, damageAspects } from "./aspect";
 import { turretScore, scoreReasons, BASE_CRIT, type CritContext } from "./turretScore";
-import { activityOf, optimizeTurretSet, optimizeTurretSetLayered, coversLayer, sameScale, background, setRank, rankGt, rankSub, worthSwitching, isCombat, MIN_GAIN, type LayerRole, type LayerTarget, type PowerActivity, type Rank, type ShipPools } from "./fleetDps";
+import { activityOf, optimizeTurretSet, optimizeTurretSetLayered, coversLayer, sameScale, background, setRank, rankGt, rankSub, worthSwitching, isCombat, moduleBetter, moduleGain, shortlist, MIN_GAIN, type LayerRole, type LayerTarget, type ModuleCtx, type PowerActivity, type Rank, type ShipPools } from "./fleetDps";
 import { AspectMarks } from "./AspectMark";
 import { load, save } from "./storage";
-import { ACTIVITIES, catOf, activityLabel, compareModules, equippedIn, isTurret, type Activity } from "./itemKind";
+import { ACTIVITIES, catOf, activityLabel, compareModules, equippedIn, isTurret, shipFit, type Activity } from "./itemKind";
 import { ItemTip } from "./ItemCard";
 import { useEscape } from "./Modal";
 import { turretFits, moduleFits, mayKeepEquipped, parseActivity, type GearFilter } from "./gearFit";
@@ -179,9 +179,17 @@ export function answerSlot(key: string, plan: Record<string, Item>, ctx: SlotCtx
   if (!m) return null;
   const e = ctx.pools?.energy;
   const en = e && e.capacity > 0 ? { usedWithout: e.used - (m.equipped?.powerUsage ?? 0), capacity: e.capacity } : undefined;
-  const cand = ctx.gear.filter((g) => moduleFits(g, slot, m.size) && !usedOther.has(handle(g)))
-    .sort((x, y) => compareModules(y, x, en, ctx.role))[0];
-  return cand && (!m.equipped || compareModules(cand, m.equipped, en, ctx.role) > 0) ? cand : null;
+  // A module pools its stats like everything else, so in EXPANDED mode it is judged on the battery it changes
+  // — Precision, Combat Power, a crit aspect and the draw priced against each other — and the comparator only
+  // breaks the ties that objective cannot see.
+  const turrets = ctx.hps.map((h) => plan[`t:${h.index}`] ?? h.equipped).filter((x): x is Item => !!x);
+  const mctx: ModuleCtx = {
+    pools: ctx.ranking === "expanded" ? ctx.pools : null,
+    turrets, energy: en, role: ctx.role, fit: shipFit(ctx.role, ctx.mslots, turrets),
+  };
+  const fits = ctx.gear.filter((g) => moduleFits(g, slot, m.size) && !usedOther.has(handle(g)));
+  const cand = fits.reduce<Item | undefined>((a, b) => (!a || moduleBetter(b, a, mctx) ? b : a), undefined);
+  return cand && moduleBetter(cand, m.equipped, mctx) ? cand : null;
 }
 
 export interface GearChange { key: string; kind: "Turret" | "Module"; label: string; current: Item | null; next: Item; }
@@ -491,7 +499,10 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
           current: keepOk(hp) ? hp.equipped : undefined,
           candidates: [
             ...(hp.equipped && keepOk(hp) ? [hp.equipped] : []),
-            ...gear.filter((g) => turretFits(g, hp.size, filters[hp.index] ?? { mode: "all" }, cats) && !used.has(handle(g))),
+            // Shortlisted, because the search is linear in this list and runs once per layer assignment: a
+            // long playthrough's armory holds thousands of guns per size, of which only the best on each
+            // axis can win (see `shortlist`).
+            ...shortlist(gear.filter((g) => turretFits(g, hp.size, filters[hp.index] ?? { mode: "all" }, cats) && !used.has(handle(g)))),
           ],
         }));
         // A slot's layer ROLE is derived from its own filter — no second piece of state to keep in step, and the
@@ -603,12 +614,10 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
         // module is better — headline, then energy draw, then how much else it brings.
         const en = pools?.energy && pools.energy.capacity > 0
           ? { usedWithout: pools.energy.used - (m.equipped?.powerUsage ?? 0), capacity: pools.energy.capacity } : undefined;
-        // A swap must not quietly give up a reactor bracket. `compareModules` weighs the headline stat against
-        // this module's own draw, which cannot see that crossing a bracket edge scales EVERY power pool at once —
-        // the bonus steps +20% → +10% at half capacity, so a slightly better engine can cost more damage across
-        // the whole battery than it brings. The bracket is therefore a CONSTRAINT here, not a term: a module that
-        // lowers it is refused rather than scored, because there is no common unit to trade the two in (a
-        // module's own pooled contribution is inside the reported pool and invisible to the objective).
+        // A swap must not quietly give up a reactor bracket. Under the OBJECTIVE the bracket is a term like any
+        // other — `poolsWithModule` moves the draw and `poolParts` re-brackets on it — but the comparator that
+        // decides the remaining ties cannot see that crossing an edge scales EVERY power pool at once (+20% →
+        // +10% at half capacity), so it stays a CONSTRAINT wherever the objective is not deciding.
         const keepsBracket = (cand: Item): boolean => {
           const e = pools?.energy;
           if (!e || !(e.capacity > 0)) return true;
@@ -617,9 +626,14 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
           const after = e.used - energyDraw(current) + energyDraw(planned);
           return reactorModifier(after / e.capacity) >= reactorModifier(e.used / e.capacity);
         };
-        const best = gear.filter((g) => moduleFits(g, m.slot, m.size) && !used.has(handle(g)) && keepsBracket(g))
-          .sort((x, y) => compareModules(y, x, en, role))[0];
-        if (best && (!m.equipped || compareModules(best, m.equipped, en, role) > 0)) { n[key] = best; used.add(handle(best)); }
+        const turrets = hps.map((h) => a[`t:${h.index}`] ?? h.equipped).filter((x): x is Item => !!x);
+        const mctx: ModuleCtx = {
+          pools: ranking === "expanded" ? pools : null,
+          turrets, energy: en, role, fit: shipFit(role, mslots, turrets),
+        };
+        const fits = gear.filter((g) => moduleFits(g, m.slot, m.size) && !used.has(handle(g)) && keepsBracket(g));
+        const best = fits.reduce<Item | undefined>((x, y) => (!x || moduleBetter(y, x, mctx) ? y : x), undefined);
+        if (best && moduleBetter(best, m.equipped, mctx)) { n[key] = best; used.add(handle(best)); }
         else delete n[key];
       }
       return n;
@@ -761,6 +775,16 @@ export default function GearTab({
     return e && e.capacity > 0 ? { usedWithout: e.used - (equipped?.powerUsage ?? 0), capacity: e.capacity } : undefined;
   }, [builder.pools]);
 
+  // The list orders modules by the same rule that suggests one, so what sits at the top is what the ⚡ picks.
+  const moduleCtx = useCallback((equipped?: Item | null): ModuleCtx => {
+    const turrets = hps.map((h) => builder.assign[`t:${h.index}`] ?? h.equipped).filter((x): x is Item => !!x);
+    return {
+      pools: builder.ranking === "expanded" ? builder.pools : null,
+      turrets, energy: modEnergy(equipped), role,
+      fit: shipFit(role, mslots, turrets),
+    };
+  }, [hps, mslots, builder.assign, builder.pools, builder.ranking, modEnergy, role]);
+
   // Items shown in the shared list, filtered by the selected slot + aspect OR-filter.
   const listItems = useMemo(() => {
     let items: Item[] = [];
@@ -778,12 +802,19 @@ export default function GearTab({
     if (q) items = items.filter((it) => it.name.toLowerCase().includes(q) || (it.type ?? "").toLowerCase().includes(q));
     // A copy: with no filter applied `items` can still be `gear` itself, and sorting in place would reorder
     // the caller's store. The ranking mode is a dependency — the order is what it changes.
-    // Modules order by the module comparator (headline ties are common and draw breaks them); turrets by the
-    // selected ranking.
-    return selSlot?.startsWith("m:")
-      ? [...items].sort((a, b) => compareModules(b, a, modEnergy(curOf(selSlot)), role))
-      : [...items].sort((a, b) => rankValue(b, builder.ranking, builder.crit) - rankValue(a, builder.ranking, builder.crit));
-  }, [selSlot, hps, mslots, gear, filters, cats, aspFilter, listQ, builder.ranking, builder.crit]);
+    if (selSlot?.startsWith("m:")) {
+      // Ordered by what each candidate does to the BATTERY against the fitted module — one number per item, so
+      // the order is a ranking rather than a chain of pairwise verdicts, which need not be transitive.
+      const eq = curOf(selSlot);
+      const mc = moduleCtx(eq);
+      const gain = new Map(items.map((it) => [handle(it), moduleGain(it, eq, mc)]));
+      return [...items].sort((a, b) => {
+        const d = (gain.get(handle(b)) ?? 0) - (gain.get(handle(a)) ?? 0);
+        return Math.abs(d) > 1e-9 ? d : compareModules(b, a, mc.energy, role, mc.fit);
+      });
+    }
+    return [...items].sort((a, b) => rankValue(b, builder.ranking, builder.crit) - rankValue(a, builder.ranking, builder.crit));
+  }, [selSlot, hps, mslots, gear, filters, cats, aspFilter, listQ, builder.ranking, builder.crit, curOf, moduleCtx, role]);
 
   // Relative value of every candidate in the list, in EXPANDED mode: swap it into the selected slot, leave the
   // other slots as they stand, and score the resulting BATTERY. Expressed as a percentage of the best option,

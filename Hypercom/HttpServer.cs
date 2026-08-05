@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
@@ -381,6 +382,8 @@ namespace Hypercom
                         return;
                     }
 
+                    // Names this request in the main-thread stall warning, and in the oversized-payload one.
+                    MainThread.Route = method + " " + path;
                     var result = Route(method, path, query, body);
                     WriteResponse(stream, result.Status, result.Body, allowOrigin);
                 }
@@ -414,8 +417,8 @@ namespace Hypercom
                 switch (method + " " + path)
                 {
                     case "GET /status": return Api.Status();
-                    case "GET /inventories": return Api.Inventories();
-                    case "GET /shops": return Api.Shops();
+                    case "GET /inventories": return Api.Inventories(QueryParam(query, "fresh") != null);
+                    case "GET /shops": return Api.Shops(QueryParam(query, "buyback") != null, QueryParam(query, "fresh") != null);
                     case "GET /loadout": return Api.Loadout();
                     case "GET /ships": return Api.Ships();
                     case "GET /officers": return Api.Officers();
@@ -734,11 +737,22 @@ namespace Hypercom
             catch { }
         }
 
+        // A response big enough to be worth reporting: serialising it costs real time, and the size grows with
+        // the playthrough rather than with anything a fresh save would show.
+        private const int BigBodyBytes = 1 << 20; // 1 MiB
+
         private static void WriteResponse(NetworkStream stream, int status, object body, string allowOrigin)
         {
+            // Timed because this half runs on the CONNECTION's thread while the main-thread half runs inside a
+            // frame: separating them is what says whether a slow route is stalling the game or only the client.
+            var t0 = Stopwatch.GetTimestamp();
             var text = Json.Write(body);
+            var serMs = (Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency;
             WarnOnKeyLeaks(text);
             var json = Encoding.UTF8.GetBytes(text);
+            if (json.Length >= BigBodyBytes)
+                Plugin.Log.LogWarning($"{MainThread.Route ?? "?"} served {json.Length / 1024 / 1024.0:F1} MB, " +
+                                      $"serialised off-thread in {serMs:F0}ms");
             var reason = Reasons.TryGetValue(status, out var r) ? r : "Status";
             var sb = new StringBuilder();
             sb.Append($"HTTP/1.1 {status} {reason}\r\n");

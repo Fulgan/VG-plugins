@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Diagnostics;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -147,6 +148,11 @@ namespace Hypercom
                 ["shipType"] = p?.currentSpaceShip?.shipClass?.displayName, // ship class, e.g. "Chisel Mk I"
                 ["role"] = roleType != null ? roleType.GetRole().ToString() : null,
                 ["credits"] = VG.Game.Wallet.Balance(p),
+                // The PLAYER's level, which is the commander's (`GamePlayer.level => commander.level`). Every
+                // "vs mine" filter needs it, and without it a client can only substitute something that is not
+                // a level at all — the highest item level owned, which makes the best item's own relative level
+                // 0 and every other item negative. Name-based: absent ⇒ null, and the client says so.
+                ["level"] = (int?)Compat.Num(p, "level"),
                 // Every currency this build has, counted with the same call the shop DTO uses for
                 // `costItemOwned` (`CountAvailableItems`) ∴ the header total and an offer's "you have" cannot
                 // disagree.
@@ -866,8 +872,87 @@ namespace Hypercom
             }
         }
 
-        internal static Result Inventories() => MainThread.Run(() =>
+        // ---- /inventories, cached ------------------------------------------------------------------------
+        //
+        // The DTO is built on the MAIN THREAD, so its cost is a frame the game does not get: a long
+        // playthrough's armory is thousands of rows, each read through the game API, and one refresh measured
+        // 1.4s of held frame at 8k rows. The app refreshes on dock, undock, ship change and after every apply,
+        // and those arrive in bursts — so the same 1.4s was paid several times over for a list that had not
+        // changed between them.
+        //
+        // A SHORT ttl, because the armory also changes from inside the game (loot, a sale at the station
+        // counter) where the bridge sees nothing: 4s is long enough to collapse a burst and short enough that
+        // nobody watches a stale list. `fresh=1` bypasses it for a deliberate refresh, and every mutation this
+        // bridge performs invalidates it outright.
+        private const float InvTtlSeconds = 4f;
+        private static readonly object InvLock = new object();
+        private static object _invBody;
+        private static float _invAt = -999f;
+        private static string _invKey;
+
+        /**
+ * A read whose cost is set by the playthrough, held for a few seconds.
+         *
+         * ONE owner for both of them: `/inventories` and `/shops` cache for the same reason, key on the same
+         * kind of thing (which world am I looking at) and are dropped by the same mutations — written twice
+         * they drift, and the one that is forgotten is the one that serves a pre-sale world.
+         *
+         * The GRAPH is cached, not the serialised text: serialising happens on the connection's thread, so
+         * caching text would move ~145ms INTO the frame to save it off-thread.
+         */
+        private sealed class ReadCache
         {
+            private readonly object _gate = new object();
+            private readonly float _ttl;
+            private Dictionary<string, object> _body;
+            private string _key;
+            private float _at = -999f;
+
+            internal ReadCache(float ttl) { _ttl = ttl; }
+
+            internal bool TryGet(string key, bool fresh, float now, out Dictionary<string, object> body)
+            {
+                lock (_gate)
+                {
+                    body = _body;
+                    return !fresh && _body != null && _key == key && now - _at < _ttl;
+                }
+            }
+
+            internal void Put(string key, Dictionary<string, object> body, float now)
+            {
+                lock (_gate) { _body = body; _key = key; _at = now; }
+            }
+
+            internal void Drop()
+            {
+                lock (_gate) { _body = null; _at = -999f; }
+            }
+        }
+
+        private static readonly ReadCache ShopCache = new ReadCache(InvTtlSeconds);
+
+        /// <summary>Drop the cached inventory AND shop DTOs. Called by every path here that moves an item.</summary>
+        internal static void InvalidateInventories()
+        {
+            lock (InvLock) { _invAt = -999f; _invBody = null; }
+            // A sale moves items INTO the shop's buy-back stock, so the shop list is as stale as the armory —
+            // and a client that refreshes both after selling would otherwise be told the sale never happened.
+            ShopCache.Drop();
+        }
+
+        internal static Result Inventories(bool fresh = false) => MainThread.Run(() =>
+        {
+            // Keyed on what decides the SHAPE of the answer, so a dock, an undock or a ship change cannot be
+            // served from a cache built for the other state — those change which stores exist, not just counts.
+            var key = (Docked ? "d" : "u") + "|" + (CurrentPlaythrough() ?? "") + "|" +
+                      (GamePlayer.current?.currentSpaceShip?.guid ?? "");
+            var now = UnityEngine.Time.realtimeSinceStartup;
+            if (!fresh)
+                lock (InvLock)
+                    if (_invBody != null && _invKey == key && now - _invAt < InvTtlSeconds)
+                        return Result.Ok(_invBody);
+
             var stores = new List<object>();
             // undocked → cargo only; docked → all three.
             var ids = Docked ? Stores.All : new[] { Stores.Cargo };
@@ -877,20 +962,54 @@ namespace Hypercom
                 if (inv != null)
                     stores.Add(Stores.StoreDto(id, inv));
             }
-            return Result.Ok(new Dictionary<string, object> { ["stores"] = stores });
+            // The GRAPH is cached, not the serialised text, and deliberately: serialising happens on the
+            // connection's thread (`WriteResponse`), so caching text would mean serialising here instead —
+            // inside the frame — trading ~145ms of client latency for ~145ms of extra game stall. A repeat
+            // request therefore still pays its own `Json.Write`; it just no longer costs the game anything.
+            var body = new Dictionary<string, object> { ["stores"] = stores };
+            lock (InvLock) { _invBody = body; _invAt = now; _invKey = key; }
+            return Result.Ok(body);
         });
 
-        internal static Result Shops() => MainThread.Run(() =>
+        // Is this offer the player's OWN stock, handed back after a sale? Read by name: the flag is an entry
+        // field on a type this binary otherwise only reads through public members, and a shape change here must
+        // degrade to "not buy-back" rather than take the endpoint down with it.
+        private static bool IsBuyback(Inventory.InventoryItem e)
+            => e != null && (Compat.Get<bool>(e, "isSoldByPlayer") || Compat.Get<bool>(e, "buyBack"));
+
+        /**
+         * The station's stock.
+         *
+         * BUY-BACK IS OPT-IN (`?buyback=1`), and that is a scale decision, not a preference: selling a long
+         * playthrough's armory hands thousands of rows to the shop, and they arrive in every poll of a list the
+         * player is reading for what the STATION sells (measured: 10.2 MB and 843ms of held frame after one
+         * 7,891-item sale). What was sold is a list you go LOOKING for, so it is fetched when looked for; the
+         * count comes back either way, so the client can offer it rather than hide it.
+         */
+        internal static Result Shops(bool buyback = false, bool fresh = false) => MainThread.Run(() =>
         {
             if (!Docked) return Result.Err(403, "not docked");
+            // Keyed on what decides the SHAPE of the answer: the station, and whether buy-back is in it.
+            var key = (CurrentPlaythrough() ?? "") + "|" + (SpaceStation.current?.name ?? "") + "|" + (buyback ? "b" : "-");
+            var now = UnityEngine.Time.realtimeSinceStartup;
+            if (ShopCache.TryGet(key, fresh, now, out var cached))
+                return Result.Ok(cached);
+
             var shops = new List<object>();
             foreach (var (id, shop) in EnumerateShops())
             {
                 var items = new List<object>();
+                var sold = 0;
                 if (shop.items != null)
                     foreach (var e in shop.items)
                         if (e?.item != null && (e.count > 0 || e.item.HasInfiniteShopSupply())) // hide sold-out
                         {
+                            var mine = IsBuyback(e);
+                            if (mine)
+                            {
+                                sold++;
+                                if (!buyback) continue;
+                            }
                             var dto = Stores.ItemDto(e.item);
                             // The offer's slot IS the handle POST /buy needs. ItemDto only fills `key` for
                             // store entries, so without this a shop offer arrived with key:null and the web
@@ -905,6 +1024,9 @@ namespace Hypercom
                             if (e.costItem != null)
                                 dto["costItemOwned"] = GamePlayer.current?.CountAvailableItems(e.costItem) ?? 0;
                             dto["stock"] = e.item.HasInfiniteShopSupply() ? -1 : e.count;
+                            // Only when true: absent means "the station's own stock", which is every row in the
+                            // ordinary answer, and a false on each of them is bytes saying nothing.
+                            if (mine) dto["buyback"] = true;
                             items.Add(dto);
                         }
                 shops.Add(new Dictionary<string, object>
@@ -912,13 +1034,15 @@ namespace Hypercom
                     ["id"] = id,
                     ["facility"] = id,
                     ["items"] = items,
+                    // Reported whether or not the rows are: a client cannot offer to show what it cannot count.
+                    ["buybackCount"] = sold,
                 });
             }
             // When this stock rolls over. The client needs it because offer keys are slot indices that get
             // REUSED for different goods on restock (see Clock) — knowing the deadline lets it refetch before
             // a click can land on the wrong item. The game shows the same countdown in its shop panel.
             var st = SpaceStation.current;
-            return Result.Ok(new Dictionary<string, object>
+            var body = new Dictionary<string, object>
             {
                 ["shops"] = shops,
                 ["station"] = st?.name,
@@ -926,7 +1050,9 @@ namespace Hypercom
                 // Reflected: a direct reference to this newer static would fail to JIT where it is absent,
                 // taking the whole endpoint with it.
                 ["refreshInterval"] = st == null ? null : Compat.StaticGet(st.GetType(), "ShopRefreshInterval"),
-            });
+            };
+            ShopCache.Put(key, body, now);
+            return Result.Ok(body);
         });
 
         // Ship vitals: hull / armor / shield as current-vs-max, plus cargo fill.
@@ -989,6 +1115,9 @@ namespace Hypercom
         {
             if (!Docked) return Result.Err(403, "not docked");
             if (Echo) return Result.Err(409, "ECHO active");
+            // Anything past this point moves items, so the cached list is wrong from here on — dropped
+            // BEFORE the work rather than after it, so a mutation that fails halfway cannot leave a stale cache.
+            InvalidateInventories();
 
             var from = Str(body, "from");
             var to = Str(body, "to");
@@ -1019,46 +1148,108 @@ namespace Hypercom
             return Result.Ok(new Dictionary<string, object> { ["moved"] = n });
         });
 
-        internal static Result Sell(Dictionary<string, object> body) => MainThread.Run(() =>
+        // How long one main-thread job may spend selling before handing the frame back. Every game read and
+        // write runs inside that job, so a batch that ran as ONE job would freeze the game for its whole
+        // length — and the batch this exists for is a long playthrough's entire armory.
+        //
+        // A TIME budget, not a row count: what a sale costs is not knowable from here (it was 12ms each while
+        // the ledger rewrote its file per row, and a fixed 64 rows then held the frame for 800ms — one frame
+        // per chunk, which is a freeze with extra steps). Budgeting the frame instead means a slow sale yields
+        // sooner and a fast one gets through more, and neither can turn the batch into a hang.
+        private const double SellFrameBudgetMs = 12;
+
+        // ...but always ONE row, however slow it is: a budget that can be exhausted before the first sale would
+        // spin forever without selling anything.
+        private const int SellMinPerFrame = 1;
+
+        // A cap on one request, so a malformed or hostile body cannot make the bridge hold frames indefinitely.
+        private const int SellBatchMax = 25_000;
+
+        // How often a long sale says so on screen. The point is that the player knows the game is working, not
+        // that they can count along: a toast per item is 8,000 toasts, which is the same as no message at all.
+        private const double SellToastEverySeconds = 2.5;
+
+        /** One sale's outcome — an error carries the status the whole request would have used alone. */
+        private struct Sale
+        {
+            internal int Sold;
+            internal long Credits;
+            internal int Code;
+            internal string Error;
+            internal string Name;
+            /// Whether the goods reached a shop the player can buy them back from, and why not when they did not.
+            internal bool BoughtBack;
+            internal string BuybackNote;
+        }
+
+        // The refusals every sale shares, plus the cache drop. INVALIDATE FIRST: a route that sells and
+        // then invalidates has a window where the next read is served the pre-sale world.
+        private static Result? SellGate()
         {
             if (!Docked) return Result.Err(403, "not docked");
             if (Echo) return Result.Err(409, "ECHO active");
+            InvalidateInventories();
+            return null;
+        }
 
-            var store = Str(body, "store");
+        /**
+         * Does the slot still hold what the caller believes it holds? Null when it does.
+         *
+         * IDENTITY first (`expectId` against `identifier`), because a NAME is not identity: for ammo, materials
+         * and boosters `displayName` is a localisation KEY (`@BoosterCombatPower1`) while the DTO's `name` is
+         * the resolved text ("Combat Power I") — so a client echoing the name it was shown could never match the
+         * raw value, and every booster in a reviewed list was refused with "slot 25 now holds Combat Power I,
+ * not Combat Power I".
+         *
+         * `expectName` stays supported for a client that sends no id, and is compared BOTH raw and resolved:
+         * either spelling is the same claim about the same item, and refusing a sale over which one arrived is
+         * the guard misfiring rather than working.
+         */
+        private static bool SameItem(InventoryItemType item, string expectId, string expectName)
+        {
+            if (item == null) return false;
+            if (!string.IsNullOrEmpty(expectId)) return string.Equals(item.identifier, expectId, StringComparison.Ordinal);
+            if (string.IsNullOrEmpty(expectName)) return true;      // nothing claimed, nothing to refuse
+            var raw = string.IsNullOrEmpty(item.displayName) ? item.identifier : item.displayName;
+            return string.Equals(raw, expectName, StringComparison.Ordinal)
+                || string.Equals(Stores.Text(raw), Stores.Text(expectName), StringComparison.Ordinal);
+        }
+
+        private static string SlotChanged(InventoryItemType item, int slot, string expectId, string expectName)
+            => SameItem(item, expectId, expectName) ? null
+             : $"inventory changed: slot {slot} now holds \"{Stores.ItemName(item)}\" — refresh the inventory";
+
+        // ONE sale, on the main thread and past the gate. `quiet` suppresses the per-item notice: in a batch the
+        // announcement is the batch's, and one toast per row buries every other thing the game wants to say.
+        private static Sale SellOne(Dictionary<string, object> row, bool quiet)
+        {
+            var store = Str(row, "store");
             if (!Stores.IsValidStore(store))
-                return Result.Err(400, "store must be cargo|armory|material");
-            if (!TryInt(body, "key", out var slot))
-                return Result.Err(400, "missing item key (slot)");
+                return new Sale { Code = 400, Error = "store must be cargo|armory|material" };
+            if (!TryInt(row, "key", out var slot))
+                return new Sale { Code = 400, Error = "missing item key (slot)" };
 
             var inv = Stores.Resolve(store);
             if (inv == null)
-                return Result.Err(400, "store unavailable");
+                return new Sale { Code = 400, Error = "store unavailable" };
 
             var entry = Stores.FindEntry(inv, slot);
             if (entry == null)
-                return Result.Err(404, $"item not found in {store}");
+                return new Sale { Code = 404, Error = $"item not found in {store}" };
 
             var item = entry.item;
             // An inventory `key` is a store SLOT, and a slot freed by an earlier sale is refillable by a drop
             // or a /move — so a client that reviewed a list before spending is acting on a handle older than
             // the press. Same guard as /buy, one store over: echo back what you believe you are selling and
             // the sale is refused when the slot disagrees. Optional, so older callers are unchanged.
-            var expectName = Str(body, "expectName");
-            if (!string.IsNullOrEmpty(expectName))
-            {
-                var actual = string.IsNullOrEmpty(item.displayName) ? item.identifier : item.displayName; // raw: matched against the client's echoed name
-                if (!string.Equals(actual, expectName, StringComparison.Ordinal))
-                    // Compare RAW (that is what the client echoed), report in words: for ammo and materials
-                    // `displayName` is an untranslated key like "@RailcannonAmmo".
-                    return Result.Err(409, $"inventory changed: slot {slot} now holds \"{Stores.Text(actual)}\", "
-                                           + $"not \"{Stores.Text(expectName)}\" — refresh the inventory");
-            }
+            var mismatch = SlotChanged(item, slot, Str(row, "expectId"), Str(row, "expectName"));
+            if (mismatch != null) return new Sale { Code = 409, Error = mismatch };
 
             if (!item.canSell || item.missionItem || item.criticalItem
                 || VG.Game.ItemFlags.IsFavourited(entry, item) || item.sellValue <= 0)
-                return Result.Err(403, "item is not sellable");
+                return new Sale { Code = 403, Error = "item is not sellable" };
 
-            var want = Int(body, "count");
+            var want = Int(row, "count");
             var n = want <= 0 ? entry.count : Math.Min(want, entry.count);
             var value = (long)item.sellValue * n;
 
@@ -1066,24 +1257,195 @@ namespace Hypercom
             // Refuse the sale outright if the balance cannot be written: handing over the goods and failing to
             // pay for them is the one outcome worse than not selling.
             if (!VG.Game.Wallet.SetBalance(player, AddClamped(VG.Game.Wallet.Balance(player), value)))
-                return Result.Err(500, "could not credit the sale — nothing was sold");
+                return new Sale { Code = 500, Error = "could not credit the sale — nothing was sold" };
 
-            var shop = SpaceStation.current?.shopInventory;
-            if (shop != null && item.buyBack)
-                try { shop.Add(item, n, buyback: true); } catch { }
+            var back = Buyback(item, n);
 
             inv.Remove(entry, n);
+            var name = Stores.Text(item.displayName);
             // A sale moves money too, so it gets the same in-game notice and log line as a purchase.
-            Notify.Transaction("sell", $"sold {n}x {Stores.Text(item.displayName)} for {value:N0} cr.");
-            Ledger.Record("sell", Stores.Text(item.displayName), item.identifier, n,
-                          value, null, 0, store);
-            return Result.Ok(new Dictionary<string, object> { ["sold"] = n, ["credits"] = value });
-        });
+            if (!quiet) Notify.Transaction("sell", $"sold {n}x {name} for {value:N0} cr.");
+            // The ledger stays PER ITEM whatever the announcement does: it is the audit trail, and "8,000 items"
+            // is not an answer to "what did I sell".
+            Ledger.Record("sell", name, item.identifier, n, value, null, 0, store);
+            return new Sale { Sold = n, Credits = value, Name = name, BoughtBack = back.ok, BuybackNote = back.note };
+        }
+
+        /**
+         * Put what was just sold on a shelf the player can buy it back from, and SAY when that is not possible.
+         *
+         * `SpaceStation.current.shopInventory` is the game's "first non-null shop" convenience, which at a
+         * station whose only facility is a bounty office is the bounty office — a shop that holds bounties, not
+         * gear. So the goods are offered to the general shop first, then to whatever the station has, and the
+         * refusals are counted rather than swallowed: a sale that quietly cannot be undone is exactly the thing
+ * a player needs told. Volume is checked before the add, because a shop's capacity is m³ and
+         * an armory's worth of gear does not fit in one.
+         */
+        // ONE owner, in `Shared/GameShops.cs`: Station Assistant sells too, and the two copies of this had the
+        // same two faults.
+        private static (bool ok, string note) Buyback(InventoryItemType item, int n)
+            => VG.Game.GameShops.Shelve(SpaceStation.current, item, n);
+
+        /**
+         * Sell one item, or a whole reviewed list in one request.
+         *
+         * The list form exists because the per-item one cannot be looped at a playthrough's scale: every request
+ * costs a round trip AND a main-thread hop, and a hop is serviced once per frame — 8,000 rows is
+         * over two minutes of waiting for frames, with the game silent throughout. Batched, the same sale is
+         * 8,000 / 64 frames, and the bridge announces it on screen while it works.
+         *
+ * A batch is not a transaction: each row is guarded and reported on its own (V60's per-entry handles are
+         * what make that safe), so one refusal never abandons the rest.
+         */
+        internal static Result Sell(Dictionary<string, object> body)
+        {
+            var rows = body != null && body.TryGetValue("items", out var raw) ? raw as List<object> : null;
+            if (rows == null)
+                return MainThread.Run(() =>
+                {
+                    var gate = SellGate();
+                    if (gate.HasValue) return gate.Value;
+                    var r = SellOne(body, quiet: false);
+                    if (r.Error == null)
+                    {
+                        var st = SpaceStation.current;
+                        if (st != null) VG.Game.GameShops.Repaint(st.generalShopInventory ?? st.shopInventory);
+                    }
+                    return r.Error != null
+                        ? Result.Err(r.Code, r.Error)
+                        : Result.Ok(new Dictionary<string, object>
+                        {
+                            ["sold"] = r.Sold, ["credits"] = r.Credits,
+                            ["boughtBack"] = r.BoughtBack, ["buybackNote"] = r.BuybackNote,
+                        });
+                });
+            if (rows.Count > SellBatchMax)
+                return Result.Err(400, $"too many items in one request (max {SellBatchMax})");
+            return SellBatch(rows);
+        }
+
+        // How many failures a response names. The count is always exact; the list is for the player to read, and
+        // a thousand identical "not sellable" lines are not more informative than a dozen.
+        private const int SellFailuresReported = 20;
+
+        private static Result SellBatch(List<object> rows)
+        {
+            var gate = MainThread.Run(SellGate, "POST /sell (batch)");
+            if (gate.HasValue) return gate.Value;
+
+            var total = rows.Count;
+            var failures = new List<object>();
+            // Every refusal COUNTED by reason, whatever the named list holds: the names stop at
+            // `SellFailuresReported`, and "6 skipped" without saying six of WHAT is not a report.
+            var reasons = new Dictionary<string, int>();
+            long credits = 0;
+            var sold = 0;
+            var failed = 0;
+            var at = 0;
+            var backOk = 0;
+            string backNote = null;
+            var lastToast = DateTime.UtcNow;
+            var announced = false;
+            var started = Stopwatch.StartNew();
+
+            // The ledger keeps its row per sale and writes ONCE for the batch. In the finally, because the rows
+            // record money that has already moved.
+            Ledger.Defer();
+            try
+            {
+                while (at < total)
+                {
+                    // Each pass is its own main-thread job: the frame comes back between them, which is what
+                    // keeps a batch from reading as a hang. Everything inside runs on that thread, toasts too.
+                    MainThread.Run<object>(() =>
+                    {
+                        if (!announced)
+                        {
+                            announced = true;
+                            Notify.Toast($"Your quartermaster is selling {total:N0} items…");
+                        }
+                        var frame = Stopwatch.StartNew();
+                        var inFrame = 0;
+                        while (at < total && (inFrame < SellMinPerFrame || frame.Elapsed.TotalMilliseconds < SellFrameBudgetMs))
+                        {
+                            var row = rows[at] as Dictionary<string, object>;
+                            var r = row == null
+                                ? new Sale { Code = 400, Error = "row is not an object" }
+                                : SellOne(row, quiet: true);
+                            if (r.Error != null)
+                            {
+                                failed++;
+                                reasons.TryGetValue(r.Error ?? "?", out var had);
+                                reasons[r.Error ?? "?"] = had + 1;
+                                if (failures.Count < SellFailuresReported)
+                                    failures.Add(new Dictionary<string, object>
+                                    {
+                                        ["key"] = row == null ? -1 : (object)Int(row, "key"),
+                                        ["name"] = row == null ? null : Str(row, "expectName"),
+                                        ["error"] = r.Error,
+                                    });
+                            }
+                            else
+                        {
+                            sold += r.Sold; credits += r.Credits;
+                            if (r.BoughtBack) backOk++;
+                            else if (backNote == null) backNote = r.BuybackNote;
+                        }
+                            at++;
+                            inFrame++;
+                        }
+                        var now = DateTime.UtcNow;
+                        if (at < total && (now - lastToast).TotalSeconds >= SellToastEverySeconds)
+                        {
+                            lastToast = now;
+                            Notify.Toast($"Selling… {at:N0} of {total:N0}");
+                        }
+                        if (at >= total)
+                            Notify.Transaction("sell", $"sold {sold:N0} items for {credits:N0} cr."
+                                                       + (failed > 0 ? $" ({failed:N0} skipped)" : ""));
+                        return null;
+                    }, "POST /sell (batch)");
+                }
+            }
+            finally
+            {
+                Ledger.Flush();
+                // ONCE, at the end: the shop grid is rebuilt from the inventory, so doing it per row would be
+                // the per-item cost exists to avoid — and the player only sees the end state anyway.
+                MainThread.Run<object>(() =>
+                {
+                    var st = SpaceStation.current;
+                    if (st != null) VG.Game.GameShops.Repaint(st.generalShopInventory ?? st.shopInventory);
+                    return null;
+                }, "POST /sell (repaint)");
+            }
+
+            // The per-item cost is what decides whether this reads as a pause or a freeze, and it is not
+            // knowable from the code — so it is measured, every time, with the shape that produced it.
+            Plugin.Log.LogInfo($"sold {sold:N0} of {total:N0} rows in {started.ElapsedMilliseconds:N0}ms "
+                               + $"({started.Elapsed.TotalMilliseconds / Math.Max(1, total):F2}ms/row); "
+                               + $"buy-back {backOk:N0}" + (backNote == null ? "" : $", rest not offered: {backNote}"));
+
+            return Result.Ok(new Dictionary<string, object>
+            {
+                ["sold"] = sold,
+                ["credits"] = credits,
+                ["failed"] = failed,
+                ["failures"] = failures,
+                // What can be undone, and why the rest cannot. A sale is irreversible if the goods went nowhere,
+                // and the player deciding whether to sell again deserves to know that BEFORE they do.
+                ["boughtBack"] = backOk,
+                ["buybackNote"] = backNote,
+            });
+        }
 
         internal static Result Buy(Dictionary<string, object> body) => MainThread.Run(() =>
         {
             if (!Docked) return Result.Err(403, "not docked");
             if (Echo) return Result.Err(409, "ECHO active");
+            // Anything past this point moves items, so the cached list is wrong from here on — dropped
+            // BEFORE the work rather than after it, so a mutation that fails halfway cannot leave a stale cache.
+            InvalidateInventories();
 
             if (!TryInt(body, "key", out var slot))
                 return Result.Err(400, "missing item key (slot)");
@@ -1122,16 +1484,15 @@ namespace Hypercom
             // buying, and the purchase is refused when that disagrees with the slot's current occupant.
             // Optional, so callers that don't send it still work.
             var expectName = Str(body, "expectName");
-            if (!string.IsNullOrEmpty(expectName))
+            var expectId = Str(body, "expectId");
+            if (!string.IsNullOrEmpty(expectName) || !string.IsNullOrEmpty(expectId))
             {
-                // RAW deliberately: compared against the name the CLIENT echoed back, which is the raw one.
-                var actual = string.IsNullOrEmpty(offer.item.displayName) ? offer.item.identifier : offer.item.displayName; // raw: matched against the client's echoed name
-                if (!string.Equals(actual, expectName, StringComparison.Ordinal))
-                    // Compare the RAW name (that is what the client echoes back), but say it in words: for
-                    // ammo and materials `displayName` is an untranslated key like "@RailcannonAmmo", which
-                    // is not something to put in front of a person.
-                    return Result.Err(409, $"shop restocked: slot {slot} now holds \"{Stores.Text(actual)}\", "
-                                           + $"not \"{Stores.Text(expectName)}\" — refresh the shop list");
+                // IDENTITY where the caller sends one, and a name matched in BOTH spellings otherwise: for ammo
+                // and materials `displayName` is a key like "@RailcannonAmmo" while the DTO's `name` is the
+                // resolved text, so comparing raw against a resolved echo refuses every one of them.
+                if (!SameItem(offer.item, expectId, expectName))
+                    return Result.Err(409, $"shop restocked: slot {slot} now holds \"{Stores.ItemName(offer.item)}\" "
+                                           + "— refresh the shop list");
             }
             // Same slot, same item, new price is just as wrong to buy blind.
             if (TryInt(body, "expectCost", out var expectCost))
@@ -1205,6 +1566,8 @@ namespace Hypercom
 
             // Apply only while docked (armory readable + a sane place to refit). No queueing.
             if (!Docked) return Result.Err(403, "dock to apply");
+            // A refit moves gear between the ship and the armory, so the cached list is wrong from here on.
+            InvalidateInventories();
             // And only where the refit can happen: a station without a personal hangar (an industry station, say)
             // offers no way to change gear, so accepting the request would report success for nothing.
             if (!HasFacility("PersonalHangar"))
@@ -1237,6 +1600,9 @@ namespace Hypercom
         {
             if (!Docked) return Result.Err(403, "not docked");
             if (Echo) return Result.Err(409, "ECHO active");
+            // Anything past this point moves items, so the cached list is wrong from here on — dropped
+            // BEFORE the work rather than after it, so a mutation that fails halfway cannot leave a stale cache.
+            InvalidateInventories();
             var n = LoadoutCore.Undo(_lastApplied);
             _lastApplied = null; // one level of undo
             return Result.Ok(new Dictionary<string, object> { ["restored"] = n });

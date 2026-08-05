@@ -23,7 +23,7 @@ namespace StationAssistant
 {
     internal enum SellTrigger { Manual, OnDock, OnUndock }
 
-    [BepInPlugin(Guid, "Station Assistant", "1.1.0")]
+    [BepInPlugin(Guid, "Station Assistant", "1.1.1")]
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "fulgan.vanguardgalaxy.stationassistant";
@@ -54,11 +54,11 @@ namespace StationAssistant
             host.RegisterHotkey("stationassistant.sell", "Station Assistant: sell cargo",
                 () => Cfg.SellHotkey.Value.MainKey,
                 k => Cfg.SellHotkey.Value = new KeyboardShortcut(k),
-                () => Window.ShowLastSell(AutoSell.SellNow(Cfg)));
+                () => Window.ShowLastSell(AutoSell.SellNow(Cfg), announce: true));
             host.RegisterHotkey("stationassistant.ammo", "Station Assistant: gunner",
                 () => Cfg.AmmoHotkey.Value.MainKey,
                 k => Cfg.AmmoHotkey.Value = new KeyboardShortcut(k),
-                () => Window.ShowLastAmmo(Gunner.RunNow(Cfg)));
+                () => Window.ShowLastAmmo(Gunner.RunNow(Cfg), announce: true));
             host.RegisterHotkey("stationassistant.decoy", "Station Assistant: toggle auto-decoy",
                 () => Cfg.DecoyHotkey.Value.MainKey,
                 k => Cfg.DecoyHotkey.Value = new KeyboardShortcut(k),
@@ -572,21 +572,36 @@ namespace StationAssistant
             SyncBuffers();
         }
 
-        internal void ShowLastSell(AutoSell.SellResult r)
-            => _lastSell = r.Items > 0
+        // An action the player ASKED FOR reports on screen, whatever the outcome. The window line is for looking
+        // back at; a hotkey press needs an answer where the player is looking, and "it did nothing" is an answer
+        // — pressing F8 with every category off used to be indistinguishable from a broken hotkey.
+        //
+        // `announce` is false for the automatic runs: a "nothing to do" toast on every dock is noise, and the
+        // success path announces itself from inside the job either way.
+        internal void ShowLastSell(AutoSell.SellResult r, bool announce = false)
+        {
+            _lastSell = r.Items > 0
                 ? Loc.F("sell.result.sold", Say.Count(r.Items, "item"), Say.Credits(r.Credits))
                 : Loc.F("sell.result.nothing", r.Reason);
+            if (announce && r.Items == 0) Util.Notify(_lastSell, warn: true);
+        }
 
-        internal void ShowLastAmmo(Gunner.AmmoResult r)
-            => _lastAmmo = r.Reason == "ok"
+        internal void ShowLastAmmo(Gunner.AmmoResult r, bool announce = false)
+        {
+            _lastAmmo = r.Reason == "ok"
                 ? Loc.F("ammo.result.ok", Util.Moved(r.Moves, r.Stowed, r.Pulled, r.Bought, "round"))
                 : Loc.F("ammo.result.nothing", r.Reason);
+            if (announce && r.Reason != "ok") Util.Notify(_lastAmmo, warn: true);
+        }
 
-        internal void ShowLastQm(Quartermaster.QmResult r)
-            => _lastQm = r.Skipped ? Loc.T(r.SkipReason == "space" ? "qm.result.skipped.space" : "qm.result.skipped.funds")
+        internal void ShowLastQm(Quartermaster.QmResult r, bool announce = false)
+        {
+            _lastQm = r.Skipped ? Loc.T(r.SkipReason == "space" ? "qm.result.skipped.space" : "qm.result.skipped.funds")
                 : r.Short ? Loc.F("qm.result.short", r.ShortItems)
                 : r.Reason == "ok" ? Loc.F("qm.result.ok", Util.Moved(r.Moves, r.Stowed, r.Pulled, r.Bought, "item"))
                 : Loc.F("qm.result.nothing", r.Reason);
+            if (announce && (r.Skipped || r.Short || r.Reason != "ok")) Util.Notify(_lastQm, warn: true);
+        }
 
         private void SyncBuffers()
         {
@@ -793,7 +808,7 @@ namespace StationAssistant
 
             GUILayout.Space(6f);
             if (GUILayout.Button(Loc.T("qm.runNow")))
-                ShowLastQm(Quartermaster.Restock(_cfg));
+                ShowLastQm(Quartermaster.Restock(_cfg), announce: true);
             if (_lastQm.Length > 0)
                 GUILayout.Label("<size=11>" + _lastQm + "</size>");
             GUILayout.Label(Loc.F("qm.saveHint", _cfg.ToggleKey.Value));
@@ -947,7 +962,7 @@ namespace StationAssistant
             GUILayout.Space(6f);
             GUILayout.BeginHorizontal();
             if (GUILayout.Button(Loc.F("ammo.runNow", _cfg.AmmoHotkey.Value)))
-                ShowLastAmmo(Gunner.RunNow(_cfg));
+                ShowLastAmmo(Gunner.RunNow(_cfg), announce: true);
             if (GUILayout.Button(Loc.T("ammo.autoload")))
                 ShowLastAmmo(Gunner.Autoload(_cfg));
             GUILayout.EndHorizontal();
@@ -1030,7 +1045,7 @@ namespace StationAssistant
 
             GUILayout.BeginHorizontal();
             if (GUILayout.Button(Loc.F("btn.sellNow", _cfg.SellHotkey.Value)))
-                ShowLastSell(AutoSell.SellNow(_cfg));
+                ShowLastSell(AutoSell.SellNow(_cfg), announce: true);
             if (GUILayout.Button(Loc.T("btn.listMatches")))
                 _matchList = AutoSell.ListMatches(_cfg);
             GUILayout.EndHorizontal();

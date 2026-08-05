@@ -24,7 +24,7 @@ namespace Hypercom
 
         // The on-screen half lives in Shared/GameToast.cs — every plugin needs it, and this one adds only the
         // web log and the BepInEx log on top.
-        internal static void Toast(string text) => VG.Game.GameToast.Show(text);
+        internal static void Toast(string text, bool warn = false) => VG.Game.GameToast.Show(text, warn);
 
         // A completed transaction: on screen, in the web log, and in the BepInEx log.
         //

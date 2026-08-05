@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import SellList from "./SellList";
+import { api, ApiError } from "./api";
 import type { Cats, Kind, Rule, SellListFile } from "./sellRules";
 import type { Item } from "./types";
 
@@ -52,6 +53,15 @@ const click = (el: Element | undefined, what: string) => {
   act(() => { el.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
 };
 const ticks = () => [...host.querySelectorAll<HTMLInputElement>(".sl-rlist input[type=checkbox]")];
+// React reads a controlled input through its OWN value descriptor, so assigning `el.value` and firing an
+// event leaves state untouched — the box shows the text and the component never hears about it.
+const type = (el: HTMLInputElement, v: string) => {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+  act(() => {
+    setter.call(el, v);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+};
 
 describe("writing a rule", () => {
   it("hands the new rule to the owner of the rule set", () => {
@@ -63,6 +73,111 @@ describe("writing a rule", () => {
     expect(onChange.mock.calls[0][0].rules).toHaveLength(1);
   });
 
+  it("the adder writes the same sentence the chip reads back", () => {
+    const onChange = vi.fn();
+    render([], onChange);
+    click(button("add sell rule"), "the add button");
+    click(button("narrow it down"), "the picker");
+    click(button("level vs mine"), "the field");
+    type(host.querySelector<HTMLInputElement>(".sl-pkrow input[type=number]")!, "10");
+    click(button("add"), "the adder");            // defaults: at least / below
+    expect(host.querySelector(".sl-chip")!.textContent).toContain("levels");
+    click(button("Add rule"), "the commit button");
+    const rules = onChange.mock.calls.at(-1)![0].rules as Rule[];
+    expect(rules.at(-1)!.where.lrel).toEqual({ min: null, max: -10 });
+  });
+
+  it("keeps an edited rule IN EFFECT until the edit is added", () => {
+    // Taking it out of the set while it was open in the editor was a trap with money attached: the rule row
+    // vanished, the draft said "not applied yet", and a sale run in that state ignored the rule entirely.
+    const onChange = vi.fn();
+    render([RULE], onChange);
+    click(button("edit"), "the edit button");
+    expect(onChange).not.toHaveBeenCalled();                 // the rule set is untouched by opening an editor
+    expect(host.querySelector(".sl-rule.editing")).toBeTruthy();
+    click(button("Add rule"), "the commit button");
+    const rules = onChange.mock.calls.at(-1)![0].rules as Rule[];
+    expect(rules).toHaveLength(1);                           // replaced in place, not appended beside itself
+    expect(rules[0].id).toBe(RULE.id);
+  });
+
+  it("leaves the original alone when the edit is discarded", () => {
+    const onChange = vi.fn();
+    render([RULE], onChange);
+    click(button("edit"), "the edit button");
+    click(button("discard"), "discard");
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("flips a comparison in place, since the picker can only ever ADD a bound", () => {
+    const onChange = vi.fn();
+    render([{ ...RULE, where: { v: { min: null, max: 500 } } }], onChange);
+    click(button("edit"), "the edit button");        // pulls the rule into the draft
+    click(button("or less"), "the comparison word");
+    click(button("Add rule"), "the commit button");
+    const rules = onChange.mock.calls.at(-1)![0].rules as Rule[];
+    expect(rules.at(-1)!.where.v).toEqual({ min: 500, max: null });
+  });
+
+  it("reads a relative level as a direction and a distance, with every word a control", () => {
+    // "-10, or less, vs mine" is arithmetic. "at least 10 levels below mine" is the rule.
+    render([{ ...RULE, where: { lrel: { min: null, max: -10 } } }]);
+    click(button("edit"), "the edit button");
+    const chip = host.querySelector(".sl-chip")!;
+    const sels = [...chip.querySelectorAll<HTMLSelectElement>("select")].map((s) => s.value);
+    expect(sels).toEqual(["at least", "below"]);
+    expect(chip.querySelector<HTMLInputElement>("input")!.value).toBe("10");
+    expect(chip.textContent).toContain("mine");
+    expect(host.querySelector(".sl-abs")!.textContent).toBe("= Lv 10 or less");   // myLevel 20
+  });
+
+  it("says the distance-free readings whole: no number to type for 'at or below mine'", () => {
+    render([{ ...RULE, where: { lrel: { min: null, max: 0 } } }]);
+    click(button("edit"), "the edit button");
+    const chip = host.querySelector(".sl-chip")!;
+    expect(chip.querySelector("input")).toBeNull();
+    expect([...chip.querySelectorAll("select")].map((x) => (x as HTMLSelectElement).value)).toEqual(["at or below"]);
+    expect(host.querySelector(".sl-abs")!.textContent).toBe("= Lv 20 or less");   // myLevel 20
+  });
+
+  it("says MY OWN LEVEL as its own reading, with no number and no direction", () => {
+    // A distance of zero in both directions is what "exactly mine" means, and typing 0 twice is not a thing
+    // anyone should have to know.
+    render([{ ...RULE, where: { lrel: { min: 0, max: 0 } } }]);
+    click(button("edit"), "the edit button");
+    const chip = host.querySelector(".sl-chip")!;
+    expect(chip.querySelector("input")).toBeNull();
+    expect([...chip.querySelectorAll("select")].map((x) => (x as HTMLSelectElement).value)).toEqual(["exactly"]);
+    expect(chip.textContent).toContain("mine");
+    expect(host.querySelector(".sl-abs")!.textContent).toBe("= Lv 20");   // myLevel 20
+  });
+
+  it("the adder can write it without a number at all", () => {
+    const onChange = vi.fn();
+    render([], onChange);
+    click(button("add sell rule"), "the add button");
+    click(button("narrow it down"), "the picker");
+    click(button("level vs mine"), "the field");
+    const q = host.querySelector<HTMLSelectElement>(".sl-pkrow select")!;
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!;
+      setter.call(q, "exactly");
+      q.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(host.querySelector(".sl-pkrow input")).toBeNull();   // nothing to type
+    click(button("add"), "the adder");
+    click(button("Add rule"), "the commit button");
+    const rules = onChange.mock.calls.at(-1)![0].rules as Rule[];
+    expect(rules.at(-1)!.where.lrel).toEqual({ min: 0, max: 0 });
+  });
+
+  it("says a draft is not applied yet, and offers the same control at the head", () => {
+    render([]);
+    click(button("add sell rule"), "the add button");
+    expect(host.querySelector(".sl-editor .cfg-head")!.textContent).toContain("not applied yet");
+    expect(host.querySelectorAll(".sl-editor button.apply")).toHaveLength(2);
+  });
+
   it("keeps the editor open on discard and leaves the rule set alone", () => {
     const onChange = vi.fn();
     render([], onChange);
@@ -70,6 +185,84 @@ describe("writing a rule", () => {
     click(button("discard"), "the discard button");
     expect(onChange).not.toHaveBeenCalled();
     expect(button("add sell rule")).toBeTruthy(); // the adder is back, so no draft is left behind
+  });
+});
+
+describe("the sale", () => {
+  it("goes out as ONE request for the whole list, not one per row", async () => {
+    // A round trip and a main-thread hop per row is minutes of waiting on a long playthrough's armory.
+    const batch = vi.spyOn(api, "sellBatch").mockResolvedValue({ sold: 2, credits: 300, failed: 0, failures: [], boughtBack: 2 });
+    const single = vi.spyOn(api, "sell");
+    render([RULE]);
+    click(button("Sell 2"), "the sell button");
+    click(button("Sell"), "the confirmation");
+    await act(async () => {});
+    expect(single).not.toHaveBeenCalled();
+    expect(batch).toHaveBeenCalledTimes(1);
+    expect(batch.mock.calls[0][1]).toHaveLength(2);
+    expect(batch.mock.calls[0][1][0]).toMatchObject({ store: "armory", expectName: "Cutter Mk.X" });
+    batch.mockRestore(); single.mockRestore();
+  });
+
+  it("falls back to one request per row against a bridge that has no batch form", async () => {
+    const batch = vi.spyOn(api, "sellBatch").mockRejectedValue(new ApiError(400, "missing item key (slot)"));
+    const single = vi.spyOn(api, "sell").mockResolvedValue({ sold: 1, credits: 100 });
+    render([RULE]);
+    click(button("Sell 2"), "the sell button");
+    click(button("Sell"), "the confirmation");
+    await act(async () => {});
+    expect(single).toHaveBeenCalledTimes(2);
+    batch.mockRestore(); single.mockRestore();
+  });
+});
+
+describe("what a notice does after it is read", () => {
+  it("can be dismissed, rather than sitting there until a reload", async () => {
+    vi.spyOn(api, "sellBatch").mockResolvedValue({ sold: 2, credits: 300, failed: 0, failures: [] });
+    render([RULE]);
+    click(button("Sell 2"), "the sell button");
+    click(button("Sell"), "the confirmation");
+    await act(async () => {});
+    expect(host.querySelector(".sum-msg")).toBeTruthy();
+    click(host.querySelector(".sum-msg-x")!, "the dismiss button");
+    expect(host.querySelector(".sum-msg")).toBeNull();
+    vi.restoreAllMocks();
+  });
+});
+
+describe("what became of the goods", () => {
+  it("says when the station cannot sell them back — the sale is final and only this says so", async () => {
+    vi.spyOn(api, "sellBatch").mockResolvedValue({
+      sold: 2, credits: 300, failed: 0, failures: [], boughtBack: 0,
+      buybackNote: "this station has no shop",
+    });
+    render([RULE]);
+    click(button("Sell 2"), "the sell button");
+    click(button("Sell"), "the confirmation");
+    await act(async () => {});
+    expect(host.querySelector(".sum-msg")!.textContent).toContain("Nothing can be bought back");
+    expect(host.querySelector(".sum-msg")!.textContent).toContain("this station has no shop");
+    vi.restoreAllMocks();
+  });
+});
+
+describe("what the skips were", () => {
+  it("groups the refusals by reason, over ALL of them", async () => {
+    // "6 skipped" with two example names says nothing about the other four. The reason is the actionable part.
+    vi.spyOn(api, "sellBatch").mockResolvedValue({
+      sold: 2, credits: 300, failed: 6, boughtBack: 2,
+      failures: [{ key: 1, name: "A", error: "inventory changed" }],
+      failureCounts: { "inventory changed": 4, "item is not sellable": 2 },
+    });
+    render([RULE]);
+    click(button("Sell 2"), "the sell button");
+    click(button("Sell"), "the confirmation");
+    await act(async () => {});
+    const text = host.querySelector(".sum-msg")!.textContent!;
+    expect(text).toContain("6 skipped");
+    expect(text).toContain("4× inventory changed");
+    expect(text).toContain("2× item is not sellable");
+    vi.restoreAllMocks();
   });
 });
 
@@ -107,15 +300,6 @@ describe("the review step", () => {
 });
 
 describe("saved lists (V38)", () => {
-  // React reads a controlled input through its OWN value descriptor, so assigning `el.value` and firing an
-  // event leaves state untouched — the box shows the text and the component never hears about it.
-  const type = (el: HTMLInputElement, v: string) => {
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
-    act(() => {
-      setter.call(el, v);
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-  };
   const nameBox = () => host.querySelector<HTMLInputElement>(".sl-lists input:not([type=file])")!;
 
   it("saves what is on screen under a name, carrying the categories the rules use", async () => {
