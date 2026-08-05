@@ -27,9 +27,6 @@ mod without the others.
 
 ## Downloads
 
-One link per mod that never changes. The version behind it does — these are updated with every release, so a
-bookmark (or a pinned message) keeps working.
-
 <!-- DOWNLOADS:BEGIN — rewritten by tools/publish-oss.ps1 from each mod's <Version>; edit the prose, not the
      links, or the next mirror run will overwrite what you wrote. -->
 
