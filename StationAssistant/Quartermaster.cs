@@ -317,6 +317,11 @@ namespace StationAssistant
                     Plugin.Log.LogWarning($"Quartermaster: could not move {e.item?.identifier}: {ex.Message}");
                 }
             }
+            if (moved > 0)
+            {
+                VG.Game.GameShops.Repaint(src);
+                VG.Game.GameShops.Repaint(dst);
+            }
             return moved;
         }
 

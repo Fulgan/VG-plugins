@@ -24,7 +24,7 @@ namespace StationAssistant
 {
     internal enum SellTrigger { Manual, OnDock, OnUndock }
 
-    [BepInPlugin(Guid, "Station Assistant", "1.1.4")]
+    [BepInPlugin(Guid, "Station Assistant", "1.1.5")]
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "fulgan.vanguardgalaxy.stationassistant";

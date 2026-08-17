@@ -65,6 +65,11 @@ namespace VG.Game
             dest.Add(offer.item, amount);
             foreach (var part in offer.item.GetComponents<InventoryItemPart>())
                 part.OnPurchase(amount);
+            // A buy that replaces something of the same volume moves `spaceUsed` not at all, and that is the only
+            // thing the cargo panel watches — so the repaint is the difference between the item appearing and the
+            // player reloading the game to find it.
+            GameShops.Repaint(dest);
+            if (finite) GameShops.Repaint(shop);
             return true;
         }
     }

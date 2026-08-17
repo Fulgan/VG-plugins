@@ -1210,6 +1210,8 @@ namespace Hypercom
             if (movedOut != n)
                 return Result.Err(409, $"the game released {movedOut} of {n} — nothing was moved");
             dst.Add(entry.item, n);
+            VG.Game.GameShops.Repaint(src);
+            VG.Game.GameShops.Repaint(dst);
             return Result.Ok(new Dictionary<string, object> { ["moved"] = n });
         });
 

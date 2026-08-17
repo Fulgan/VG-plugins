@@ -89,6 +89,10 @@ namespace StationAssistant
                     credits = AddClamped(credits, value);
                 }
 
+                // The cargo panel does not rebuild on its own unless the used volume changed, so the store we
+                // took items OUT of is repainted whether or not anything landed on a shelf.
+                VG.Game.GameShops.Repaint(cargo);
+
                 if (buyback > 0)
                 {
                     VG.Game.GameShops.Repaint(shop);

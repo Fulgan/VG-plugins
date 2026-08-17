@@ -54,6 +54,10 @@ namespace VG.Game
          * `UpdateVisibleItems` is internal, so it is reached by name; both halves are best-effort, because a
          * repaint that fails must never fail the sale that already happened.
          */
+        // Rebuild a store's VISIBLE list and reload whatever panel is drawing it. Named for the shop it was
+        // written for, but it applies to any inventory, and the player's own stores need it MORE: the cargo panel
+        // only rebuilds when `spaceUsed` changes (`InventoryPanel.FillCargoImage`), so a change that nets to the
+        // same volume — sell an item and buy the same one back — leaves it drawing a list the data has moved past.
         public static void Repaint(Inventory shop)
         {
             if (shop == null) return;
@@ -63,8 +67,9 @@ namespace VG.Game
             try { _updateVisible?.Invoke(shop, null); } catch { }
             try
             {
-                var iim = Behaviour.UI.InventoryInteractionManager.Instance;
-                if (iim != null && iim.isShopOpen) iim.ReloadUI();
+                // ⊥ gated on `isShopOpen`: the station-storage and cargo panels are the ones that go stale
+                // without a volume delta, and the game calls this unconditionally itself (`Inventory.cs:806`).
+                Behaviour.UI.InventoryInteractionManager.Instance?.ReloadUI();
             }
             catch { }
         }

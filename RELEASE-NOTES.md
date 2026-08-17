@@ -7,6 +7,23 @@ Each mod versions on its own, so a date can carry one mod or all of them. Every 
 
 ---
 
+## 2026-08-17 - Hypercom 0.3.3 | Station Assistant 1.1.5
+
+Bug fix.
+
+### Hypercom 0.3.3
+
+- **Fixed: items the mod moved could stay invisible in the panel until you reloaded.** The game's cargo panel
+  only redraws when the used volume changes, so a swap of the same size went unnoticed. Every store the mod
+  touches is now redrawn on the spot.
+
+### Station Assistant 1.1.5
+
+- **Fixed: auto-sell and the Quartermaster now redraw the panels they change**, so moved items appear without
+  a reload.
+
+---
+
 ## 2026-08-17 - Hypercom 0.3.2 | Station Assistant 1.1.4
 
 Bug fix.

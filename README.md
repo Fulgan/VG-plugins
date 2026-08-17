@@ -37,12 +37,12 @@ bookmark (or a pinned message) keeps working.
 
 Ship Optimizer ships inside it — one download for both.
 
-**[Download Hypercom 0.3.2](https://github.com/Fulgan/VG-plugins/releases/download/Hypercom-v0.3.2/Hypercom-v0.3.2.zip)**
+**[Download Hypercom 0.3.3](https://github.com/Fulgan/VG-plugins/releases/download/Hypercom-v0.3.3/Hypercom-v0.3.3.zip)**
 · [all Hypercom releases](https://github.com/Fulgan/VG-plugins/releases?q=Hypercom)
 
 ### Station Assistant
 
-**[Download Station Assistant 1.1.4](https://github.com/Fulgan/VG-plugins/releases/download/StationAssistant-v1.1.4/StationAssistant-v1.1.4.zip)**
+**[Download Station Assistant 1.1.5](https://github.com/Fulgan/VG-plugins/releases/download/StationAssistant-v1.1.5/StationAssistant-v1.1.5.zip)**
 · [all Station Assistant releases](https://github.com/Fulgan/VG-plugins/releases?q=Station+Assistant)
 
 ### Quick Save

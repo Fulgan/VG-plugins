@@ -126,10 +126,11 @@ namespace Hypercom
                 if (signature == (last ?? "")) continue;
                 Reported[kv.Key] = signature;
                 if (!d.Diverged) continue;
+                // `Summary` prints BOTH directions: the first live run logged `data 21, view 36` with an empty
+                // "Not drawn" list, because the rows were ones the view still DRAWS and this line never said so.
                 Plugin.Log.LogWarning(
-                    $"[diag] {kv.Key} view disagrees with data at {when} (after {LastAction}): data {d.Data} rows, view {d.View}. " +
-                    $"Not drawn: {string.Join(", ", d.MissingFromView.ToArray())}. " +
-                    "The items are in the save; the panel has not rebuilt its list. GET /diag/inventory for the full picture.");
+                    $"[diag] view disagrees with data at {when} (after {LastAction}): {d.Summary(kv.Key)}. " +
+                    "The data is what the save holds; the panel has not rebuilt its list. GET /diag/inventory for the full picture.");
             }
         }
     }
