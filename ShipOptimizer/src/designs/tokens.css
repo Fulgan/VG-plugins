@@ -51,6 +51,17 @@
   --map-panel: #14161b;
   --map-sunken: #101216;
   --map-void: #0b0e14;             /* the graph's backdrop, and the level digits that sit on a filled node */
+  /* The level digit has TWO inks and `mapRamp.ink` measures which one contrasts with a given node's fill:
+     --map-void where the fill is bright, this where it is dark. Move either and that choice moves with it. */
+  --map-lvl: #f5f8fd;
+  --map-spark: #bcd6ee;            /* traffic running down a gate line — dimmer than any node fill */
+  --map-spark-glow: #6fa8d855;
+  --map-star: #cfe0f5;             /* the decorative starfield behind the graph */
+  --map-hq-ring: #cddff5;          /* the rings marking a conquest headquarters, deliberately not a faction hue */
+  --map-eye: #d9c48a;              /* umbral infection present at a station in this system */
+  --map-umbral-glow: #5b1d8c99;     /* halo on a system whose Umbral daily is on the board right now */
+  --map-umbral-dim: #4a3358;        /* outline of a system whose daily is already spent today */
+  --map-eye-pupil: #2a1c34;
   --map-track: #1c1c22;
   --map-line: #23252c;
   --map-line-hover: #3a4f6b;

@@ -4,8 +4,9 @@
 import { OFFICER_SKILLS, type SkillMeta } from "./officerSkills";
 import { RARITY_RANK } from "./format";
 import type { Officer, OfficerSkill } from "./types";
-
-export type Scope = "current" | "potential";
+// One owner for "score it as it is, or as it will be": the booster optimizer asks the same question of resonance.
+export { type Scope } from "./scope";
+import type { Scope } from "./scope";
 
 // Idle-income multiplier by rarity (game: HourlyIdleIncome = level × 40 × mult). Mirrors OfficerData
 // in Assembly-CSharp. (Rarity ordering for the comparator tiebreak lives in ./format as RARITY_RANK.)

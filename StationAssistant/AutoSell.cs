@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -70,7 +70,7 @@ namespace StationAssistant
                     // the bridge, because the game adds them WHATEVER their buy-back flag says.
                     if (VG.Game.GameShops.Shelve(SpaceStation.current, entry.item, count).boughtBack)
                         buyback += count;
-                    cargo.Remove(entry, count);
+                    VG.Game.GameMembers.RemoveItems(cargo, entry, count);
 
                     items += count;
                     credits = AddClamped(credits, value);

@@ -315,7 +315,7 @@ export default function SummaryTab({
             <div><b>Turrets &amp; modules</b> <span className="dim">— {gear.changes.length} change{gear.changes.length === 1 ? "" : "s"}</span></div>
             <button className="apply sm" disabled={gate || !gearPayload.length} title={!gearPayload.length ? "Pick gear in the Ship gear tab." : "Equip the selected gear."} onClick={applyGear}>Apply gear</button>
           </div>
-          <PlanNotice regresses={gear.planRegresses} />
+          <PlanNotice verdict={gear.planVerdict} />
           {gear.changes.length ? gear.changes.map((c, i) => (
             <ChangeRow key={i} onHover={setTip}
               cur={c.current && { label: c.current.name, color: RARITY_COLOR[c.current.rarity] ?? "#cfcfcf", img: api.itemImageBySlot(conn, c.key, c.current?.name), tip: { item: c.current, imgUrl: api.itemImageBySlot(conn, c.key, c.current?.name) } }}

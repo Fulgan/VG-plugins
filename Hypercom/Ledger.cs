@@ -18,15 +18,11 @@ namespace Hypercom
     internal static class Ledger
     {
         private const int MaxEntries = 4000;   // trimmed on write; ~1 MB of lines at this shape
-        private static readonly object Gate = new object();
-        private static List<Dictionary<string, object>> _cache;
 
-        // A write is the WHOLE file — up to 4,000 lines — because the cache is trimmed and the tail must go
-        // with it. That is nothing for one sale and everything for a batch of thousands, which paid it per row.
-        private static int _deferred;
-        private static bool _dirty;
-
-        private static string Path => System.IO.Path.Combine(Paths.ConfigPath, "hypercom-ledger.jsonl");
+        // The MECHANICS live in `JsonlStore` — the mission log needs the same append-only file, the same trim and
+        // the same deferred write, and two copies of that is two answers to "what happens when a row cannot be
+        // written". What stays here is the SHAPE of a transaction row and what a total over them means.
+        private static readonly JsonlStore Store = new JsonlStore("hypercom-ledger.jsonl", MaxEntries);
 
         // One transaction. `credits` is signed from the PLAYER's side: negative for a purchase, positive for a
         // sale, so a running total is a plain sum. A barter purchase moves no credits at all and instead
@@ -54,13 +50,7 @@ namespace Hypercom
                     entry["costItem"] = costItem;
                     entry["costItemCount"] = costItemCount;
                 }
-                lock (Gate)
-                {
-                    Load();
-                    _cache.Add(entry);
-                    if (_cache.Count > MaxEntries) _cache.RemoveRange(0, _cache.Count - MaxEntries);
-                    if (_deferred > 0) _dirty = true; else Persist();
-                }
+                Store.Append(entry);
             }
             catch (Exception ex) { Plugin.Log.LogWarning($"ledger write failed: {ex.Message}"); }
         }
@@ -76,30 +66,16 @@ namespace Hypercom
          * `Flush` must run even when the operation throws: an unflushed batch loses rows for transactions that
          * already moved money.
          */
-        internal static void Defer()
-        {
-            lock (Gate) _deferred++;
-        }
+        internal static void Defer() => Store.Defer();
 
-        internal static void Flush()
-        {
-            lock (Gate)
-            {
-                if (_deferred > 0) _deferred--;
-                if (_deferred > 0 || !_dirty) return;
-                _dirty = false;
-                Persist();
-            }
-        }
+        internal static void Flush() => Store.Flush();
 
         // Newest first, optionally limited and scoped to one playthrough. Totals are computed over the FILTERED
         // rows, so they always describe what the caller is looking at.
         internal static Dictionary<string, object> Dto(int limit, string playthrough)
         {
-            lock (Gate)
             {
-                Load();
-                var rows = _cache.AsEnumerable();
+                var rows = Store.Rows().AsEnumerable();
                 if (!string.IsNullOrEmpty(playthrough))
                     rows = rows.Where(e => string.Equals(Get(e, "playthrough"), playthrough, StringComparison.Ordinal));
                 var all = rows.ToList();
@@ -132,43 +108,8 @@ namespace Hypercom
         // Drop every row for one playthrough (or all of them when none is named).
         internal static int Clear(string playthrough)
         {
-            lock (Gate)
-            {
-                Load();
-                var before = _cache.Count;
-                _cache = string.IsNullOrEmpty(playthrough)
-                    ? new List<Dictionary<string, object>>()
-                    : _cache.Where(e => !string.Equals(Get(e, "playthrough"), playthrough, StringComparison.Ordinal)).ToList();
-                Persist();
-                return before - _cache.Count;
-            }
-        }
-
-        private static void Load()
-        {
-            if (_cache != null) return;
-            _cache = new List<Dictionary<string, object>>();
-            try
-            {
-                if (!File.Exists(Path)) return;
-                foreach (var line in File.ReadAllLines(Path))
-                {
-                    if (string.IsNullOrWhiteSpace(line)) continue;
-                    // One unparseable line loses one transaction, not the file: a partial last write (killed
-                    // mid-append) must not take the rest of the history with it.
-                    try { var o = Json.ParseObject(line); if (o != null) _cache.Add(o); } catch { }
-                }
-            }
-            catch (Exception ex) { Plugin.Log.LogWarning($"ledger load failed: {ex.Message}"); }
-        }
-
-        private static void Persist()
-        {
-            try
-            {
-                File.WriteAllLines(Path, _cache.Select(Json.Write));
-            }
-            catch (Exception ex) { Plugin.Log.LogWarning($"ledger save failed: {ex.Message}"); }
+            return Store.Keep(e => !string.IsNullOrEmpty(playthrough)
+                && !string.Equals(Get(e, "playthrough"), playthrough, StringComparison.Ordinal));
         }
 
         private static string Get(Dictionary<string, object> e, string k)

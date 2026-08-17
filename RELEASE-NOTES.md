@@ -7,6 +7,54 @@ Each mod versions on its own, so a date can carry one mod or all of them. Every 
 
 ---
 
+## 2026-08-17 - Hypercom 0.3.0 | Station Assistant 1.1.2
+
+A shopping list to go with the sell list, resonance counted on boosters, and a lot of fixes to the gear
+suggestions. Both mods also work on game beta 0.8.1.26.
+
+### Hypercom 0.3.0
+
+**Shopping list.** Allow you to specify what you are shopping for - quality, type, aspect, substat count, a
+price ceiling, or how many you already own. Matching offers in a station's shop are flagged for you.
+
+**Filters improvements.** More natural display for filters.
+
+**Booster resonance is taken into account.** Boosters are now ranked with their resonance bonus counted, either as current or fully unlocked.
+
+**Booster preferences.** Specify which resonance bonuses you prefer and which to ignore, per ship.
+
+**Sell list.** Now shows what the default rule is about to take, not just how many. Sort it, group it, choose the columns. You can also sell straight from the inventory grid.
+
+**Gear suggestions.** New **Suggest whole ship**: guns and modules picked in one pass. Modules are judged as a set rather than one at a time, and every suggested row explains the reason for the pick.
+
+**Map.** New Umbral daily layer, display improvement (still WIP).
+
+**Filters, grouping and column selection in inventory** for easier management.
+
+**Works on game beta 0.8.1.26.** Moving items, selling and applying a loadout would all have stopped working on that build.
+
+#### Fixes
+
+- The gear tab no longer offers you two builds in turn.
+- Combat Power, Precision and power draw are valued properly, so a worse module is no longer offered as an
+  upgrade.
+- Core-mining guns are suggested again, and the gear tab no longer goes quiet on a mining or salvage ship.
+- Fixed stats calculation so the result after applying a change matches what was predicted.
+- A pinned slot is left alone.
+- Extra tractor beams no longer count as an upgrade.
+- Item tooltips are no longer cut off, and the hardpoint dots sit on the ship.
+- What you sold shows in the shop list, tinted, with no extra click.
+- Choosing columns works as expected, and a column that reads the same on every row is not offered.
+- Conquest contribution, the mission log and the reputation log all read correctly.
+
+### Station Assistant 1.1.2
+
+**Works on game beta 0.8.1.26.** Auto-sell, the ammo valet and the decoy charge would all have stopped working
+on that build. Nothing else has changed, and the mod still works on the earlier betas and on the release
+version.
+
+---
+
 ## 2026-08-05 - Hypercom 0.2.1 | Station Assistant 1.1.1
 
 A fix release, almost all of it from playing a long save: an 8,000-item armory found a lot of things that

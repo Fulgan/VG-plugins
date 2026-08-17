@@ -23,6 +23,14 @@ The **Sell list...** button is for clearing out junk. You describe what you want
 you exactly which items those rules picked, you untick anything you want to keep, then you sell. Lists can
 be named, saved, exported and imported, so a set of rules can move to your next playthrough.
 
+The **shopping list** button on the shop list writes the same kind of rules the other way round: what you are
+shopping *for*. Quality, type, size, aspect, level, how many substats it rolled — plus a price ceiling and
+"only while I own fewer than this many". Anything a station has on offer that matches joins the shop list
+marked **★ on my list**, with the same buy button the upgrades have, so you find the spare or the aspect
+carrier you came for even though it beats nothing you currently fly with. Several ticked values read as "any
+of these" until you pick another reading — all of them, at least two of them, none of them. The rules never
+buy anything on their own.
+
 ### Officers
 
 Ranks your crew by the skills you care about and fills the ship you pick, and it points out recruits at the

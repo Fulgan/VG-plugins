@@ -21,3 +21,6 @@ node_modules/
 *.DotSettings.user
 *.local
 .DS_Store
+
+# Game reference assemblies — NOT redistributable, never commit.
+refs/

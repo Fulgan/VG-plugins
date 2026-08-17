@@ -35,12 +35,22 @@ header h1 {
 /* Credits on hand. Deliberately the loudest thing in the header after the app name: it is what the player checks
    before every purchase, and it used to be the grey tail of a run-on status line. `tabular-nums` keeps the digits
    from shifting sideways as the balance changes. */
+/* A ROW, not a line of text: the pill holds a mark or an icon beside a 15px figure, and aligning those by font
+   metrics (`vertical-align`) puts the icon wherever the glyph's baseline happens to sit. Centring the row is the
+   only thing that holds for both an emoji-sized mark and a 15px sprite. */
 .wallet {
+  display: inline-flex; align-items: center; gap: 4px;
   margin-left: 10px; padding: 2px 9px; border-radius: 999px;
   background: #1f2a14; border: 1px solid #3d5a24; color: #b7e07a;
   font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap;
 }
 .wallet b { color: #d7f59e; font-size: 15px; font-weight: 700; }
+/* The unit, as a mark rather than a word. Quieter than the figure — it never changes, and the number is what is
+   being read — and it keeps the pill as narrow as the digits it holds. */
+.wallet-mark { opacity: .75; font-weight: 700; }
+/* A currency's own art sits where its name used to. The flex row above centres it; `display: block` stops the
+   image contributing its own inline-box descent, which is what left it hanging below the figure. */
+.wallet .price-icon { display: block; }
 /* The barter currency, in the amber the app already uses for money going OUT at a barter price. */
 .wallet.marks { margin-left: 6px; background: #2a2410; border-color: #5a4a1e; color: #e8c877; }
 .wallet.marks b { color: #ffe08a; }
@@ -497,8 +507,17 @@ dialog.modal-box::backdrop { background: #000a; }
 .ship-chip.other { color: #b58a6a; background: #2a1f16; border-color: #453121; } /* a different ship than the current one */
 
 .opp-d.switch { color: #86b0ff; }
+/* A shopping-list row states a REASON where the others state a gain, so it reads as a label rather than as a
+   number: amber (the app's own "you asked for this" colour) and no tabular figures to line up with.
+   `b-want` is namespaced on purpose — a bare `.want` would collide with any later rule of that name, which is
+   how a badge once inherited a button's padding. */
+.opp-d.b-want { color: #e8c07a; font-size: 10.5px; white-space: nowrap; }
 
 /* buy straight from a shop opportunity — disabled (with a reason) when undocked or unaffordable */
+/* The reason a row is an upgrade, where its number cannot say it. Quiet: it explains the verdict beside it, and
+   must not read as a second claim of its own. Truncated rather than wrapped — the rail is a 230px column. */
+.opp-why { font-size: 10.5px; max-width: 15ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .opp-buy { flex: 0 0 auto; background: #14281c; border: 1px solid #2c5238; color: #86efac;
   border-radius: 4px; font-size: 10.5px; padding: 0 7px; cursor: pointer; }
 .opp-buy:hover:not(:disabled) { border-color: #4ad06a; }
@@ -509,7 +528,10 @@ dialog.modal-box::backdrop { background: #000a; }
 .opp-buy.blocked:hover { border-color: #7a3030; }
 
 /* shop table's buy column */
-th.c-buy, td.c-buy { width: 1%; padding: 2px 6px; text-align: center; }
+/* The action column: as wide as its button and no wider, with the same air either side, and the button centred
+   against a row whose height is set by whatever wraps in the text columns beside it. */
+th.c-buy, td.c-buy { width: 1%; padding: 2px 5px; text-align: center; vertical-align: middle; }
+td.c-buy .opp-buy { display: block; margin: 0 auto; }
 .grid-wrap-outer { display: flex; flex-direction: column; gap: 6px; }
 
 /* shop restock countdown — turns amber when a purchase from the current list is about to go stale */
@@ -550,3 +572,46 @@ button.pill-all:disabled, .cat-chip.all:disabled, .chip.all:disabled { opacity: 
 .crash button { padding: .5rem 1rem; cursor: pointer; }
 /* Where it threw. Smaller and dimmer than the message: useful when reporting, noise when reading. */
 .crash-where { font-size: .78rem; color: var(--dim, #8a8a96); max-height: 9rem; overflow: auto; }
+
+/* A row you SOLD here, sitting in the station's own stock. Tinted rather than badged or columned: noticing your
+   own gun at a glance was the requirement, and this grid already scrolls sideways — a column would cost width
+   that the identity and the price need. Amber, which is the colour money going OUT already carries. */
+tr[data-buyback] td { background: #221b0e; }
+tr[data-buyback]:hover td { background: #2b2312; }
+tr[data-buyback] td.c-name::after {
+  content: " sold";
+  color: #c8a24a; font-size: 9px; text-transform: uppercase; letter-spacing: .08em; margin-left: 5px;
+}
+
+/* A Δ line the objective cannot act on. Dimmed rather than hidden: the stat is real and may be exactly what the
+ player wants — what is absent is the app's opinion of it. */
+.git-cmp-row.unpriced span { color: #7c7c88; }
+.git-cmp-note { font-size: 9.5px; margin-top: 3px; letter-spacing: .02em; }
+
+/* A GROUP header inside the dense grid. A row that spans, not a nested table: this grid's filters,
+   selection, draggable widths and windowing all belong to one table, and nesting would cost every one of them. */
+tr.grid-group td {
+  background: #1a1a22; color: #cfe4ff; font-size: 11px; padding: 3px 8px;
+  border-top: 1px solid #2f3d4d; border-bottom: 1px solid #1c1c24; cursor: pointer;
+  position: sticky; left: 0;
+}
+tr.grid-group:hover td { background: #202029; }
+/* The layout bar over a grid sits inside the tab's own flow, not the sell popin's. */
+.grid-wrap-outer > .sl-view { margin: 0 0 6px; }
+
+/* Resonance in the item grid. The BONUS carries the meaning, the percentage says how much of it is being paid,
+   so the two are styled apart rather than run together as one string. Left-aligned despite the numeric class:
+   the bonus is text, and a right-aligned mixed cell reads as a broken number. */
+.res-cell { font-variant-numeric: tabular-nums; display: inline-flex; gap: 5px; align-items: baseline; }
+.res-pct { color: var(--text-dim, #8a8a96); }
+.res-bonus { color: var(--map-salvage, #c07bff); white-space: nowrap; }
+.res-cell.done .res-bonus { font-weight: 600; }
+/* Resonance on the item card: the bonus reads as a stat line, the progress under it as a note. */
+.git-res { margin-top: 4px; }
+.git-res-bonus { color: var(--map-salvage, #c07bff); font-size: 11.5px; }
+
+/* Selling off the inventory grid: the action bar above the table, and the tick column ahead of the name. */
+.grid-sell { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 4px; font-size: 11px; }
+th.c-sel, td.c-sel { width: 1%; padding: 2px 4px; text-align: center; vertical-align: middle; }
+td.c-sel input { margin: 0; cursor: pointer; }
+td.c-sel input:disabled { cursor: not-allowed; opacity: .35; }

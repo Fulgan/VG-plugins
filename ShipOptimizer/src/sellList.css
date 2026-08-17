@@ -49,10 +49,11 @@ dialog.modal-box.sell-pop { width: min(1500px, 97vw); height: 92vh; max-height: 
 /* Open in the editor, and STILL IN EFFECT: the draft below is a proposal, this is the rule the sale
    obeys until it is added. Marked rather than hidden — removing it is how a sale ran without it. */
 .sl-rule.editing { background: #14161d; box-shadow: inset 2px 0 0 #4f7fbf; }
-.sl-rhead { display: grid; grid-template-columns: 14px 1fr auto auto auto; gap: 6px; align-items: start;
+/* The sentence, its count, and the two controls. Track count MUST match the children: a column left over
+   from a removed control takes the sentence's 1fr and renders it one word per line. */
+.sl-rhead { display: grid; grid-template-columns: 1fr auto auto auto; gap: 6px; align-items: start;
   padding: 8px 10px; cursor: pointer; }
 .sl-rhead:hover { background: #16161c; }
-.sl-tw { color: #6a6a78; font-size: 10px; padding-top: 3px; }
 .sl-sent .sl-cl { display: block; font-size: 12.5px; line-height: 1.5; }
 .sl-sent .lead0 { color: #e6e6ee; font-weight: 600; }
 .sl-sent .lead { color: #6a6a78; }
@@ -75,6 +76,30 @@ dialog.modal-box.sell-pop { width: min(1500px, 97vw); height: 92vh; max-height: 
 .sl-sh-box.k-keep { border-color: #2c4030; background: #18211a; }
 .sl-sh-box.k-sell { border-color: #43292c; background: #211719; }
 .sl-note { color: #6a6a78; margin-bottom: 6px; }
+/* a bucket the player folded away: still counted in the header, just not drawn */
+.sl-sh-box { cursor: pointer; font: inherit; color: inherit; }
+.sl-sh-box.off { opacity: .4; }
+
+/* how the result is READ. Deliberately quieter than the rule's own sentence above it — this bar decides
+   nothing, and it must not look like the clauses that do.
+   The SCALE is the bar's own, ⊥ inherited from whatever panel it sits in: these controls were written inside
+   the split's dense monospace box, and the same markup in the review card took the modal's 13px body font and
+   the app's full-size buttons — one row of controls reading as two different components. */
+.sl-view, .sl-bar { font-family: ui-monospace, monospace; font-size: 11.5px; }
+.sl-view .mini, .sl-bar .mini { font-size: 11px; padding: 1px 6px; border-radius: 3px; }
+.sl-view { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; margin-bottom: 6px;
+  padding: 4px 6px; border: 1px solid #26262f; border-radius: 3px; background: #131318; }
+.sl-vchips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.sl-vchip { display: inline-flex; align-items: center; gap: 2px; padding: 1px 4px; border-radius: 3px;
+  border: 1px solid #33333e; background: #1a1a21; font-size: 11px; }
+.sl-vchip button { background: none; border: 0; color: #6a6a78; cursor: pointer; padding: 0 2px; font-size: 11px; }
+.sl-vchip button:hover { color: #fff; }
+.sl-vpop { display: flex; flex-wrap: wrap; gap: 4px; width: 100%; padding-top: 4px;
+  border-top: 1px solid #26262f; }
+.sl-vcol { display: inline-flex; align-items: center; gap: 3px; padding: 1px 4px; font-size: 11px;
+  border: 1px solid #2c2c36; border-radius: 3px; cursor: pointer; }
+.sl-vcol:hover { border-color: #4a4a5a; }
+
 .sl-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 6px; }
 .sl-bar input { flex: 1; min-width: 130px; font-family: system-ui, sans-serif; font-size: 12px; }
 /* both levels scroll, 20 rows each, so one 239-item group cannot own the panel */
@@ -85,9 +110,18 @@ dialog.modal-box.sell-pop { width: min(1500px, 97vw); height: 92vh; max-height: 
 .sl-rows { max-height: calc(20 * 1.45em); overflow-y: auto; padding-left: 12px;
   border-left: 1px solid #2c2c36; margin-left: 4px; }
 
-/* rows stay in the rule's ranking order: the cut between keep and sell is only legible that way, which is
-   why the boundary gets a marker instead of the columns getting sort handles. */
+.sl-rows.bare { padding-left: 0; border-left: 0; margin-left: 0; }
+/* Inside the review list, which IS the scroll container: a box that scrolls within a box that scrolls hides
+   rows behind two thumbs, and the sale acts on every one of them. */
+.sl-rows.flow { max-height: none; overflow: visible; }
+/* the cut marker means "here is where the count fell", which is only true while the rows are in the rule's
+   own order — the header hides it as soon as a sort key is in force. */
 .sl-grid { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 11.5px; }
+.sl-grid th { cursor: pointer; user-select: none; }
+.sl-grid th:hover { color: #fff; }
+/* a row no clause selected: the default decides it, so it reads a shade quieter than a rule's own rows */
+.sl-grid tr.b-ex td { background: #101014; }
+.sl-grid tr.b-ex td.nm { opacity: .8; }
 .sl-grid th { position: sticky; top: 0; z-index: 1; background: #16161c; color: #8a8a96; text-align: left;
   font-weight: 600; font-size: 9.5px; text-transform: uppercase; letter-spacing: .07em;
   padding: 3px 7px; border-bottom: 1px solid #2c2c36; }
@@ -137,8 +171,10 @@ dialog.modal-box.sell-pop { width: min(1500px, 97vw); height: 92vh; max-height: 
 .sl-line .sl-drop { margin-left: auto; }
 @media (max-width: 640px) { .sl-line > .lead { min-width: 0; text-align: left; width: 100%; } }
 .sl-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
-.sl-chip { display: inline-flex; align-items: center; gap: 3px; background: #24303d; border: 1px solid #2f3d4d;
-  color: #cfe4ff; border-radius: 999px; padding: 2px 4px 2px 9px; font-size: 11.5px; }
+/* Wraps: a clause naming four substats is a phrase, and in a 230px rail (or the 440px shopping-list flyout) it
+   has to fold rather than push the chip past the panel. */
+.sl-chip { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 3px; background: #24303d;
+  border: 1px solid #2f3d4d; color: #cfe4ff; border-radius: 999px; padding: 2px 4px 2px 9px; font-size: 11.5px; }
 .sl-chip.neg { background: #3a2326; border-color: #5c3238; color: #f0b8bd; }
 .sl-chip.grp { background: #26302a; border-color: #33463a; color: #bfe0c9; }
 .sl-chip .cw { opacity: .75; }
@@ -146,7 +182,11 @@ dialog.modal-box.sell-pop { width: min(1500px, 97vw); height: 92vh; max-height: 
   cursor: pointer; font-size: 12px; line-height: 1; }
 .sl-chip button:hover { opacity: 1; }
 .sl-chip button.chipword { opacity: 1; text-decoration: underline dotted; text-underline-offset: 2px;
-  font-size: 11.5px; padding: 0; }
+  font-size: 11.5px; padding: 0; text-align: left; }
+/* The clause's VALUES, which are also the way back into the picker that wrote them. A long tick list ("Drone
+   Power or Torpedo Power or none or Shield HP") has to wrap inside the chip rather than push it wider than the
+   panel, and it is the one clickable word that is a phrase, so it keeps the sentence's own weight. */
+.sl-chip button.sl-vals-edit { white-space: normal; text-decoration-color: #6d8fb5; }
 /* A word of the sentence that happens to be a menu. Styled like the other clickable words (dotted underline)
    so the chip still reads as a sentence rather than as a row of form controls. */
 .sl-chip select { background: none; border: none; color: inherit; font: inherit; padding: 0 1px;
@@ -179,9 +219,12 @@ dialog.modal-box.sell-pop { width: min(1500px, 97vw); height: 92vh; max-height: 
   /* Bounded and self-scrolling: it opens inside a popin that is itself inside the viewport, and an unbounded
      list of fields ran off the bottom of both — the last entries were unreachable. `overscroll-behavior`
      keeps a wheel over the picker from scrolling the popin behind it once the list ends. */
-  max-height: min(46vh, 380px); overflow: auto; overscroll-behavior: contain; }
+  max-height: min(46vh, 380px); overflow: auto; overscroll-behavior: contain;
+  /* Never wider than the viewport, whatever it was anchored against: it opens from a 440px flyout pinned to the
+     right edge, and a fixed box positioned from the left is cut there rather than pushed back. */
+  max-width: calc(100vw - 16px); box-sizing: border-box; }
 .sl-pop.narrow { width: min(220px, 92vw); }
-.sl-pk2 { display: grid; grid-template-columns: 232px minmax(0, 1fr); gap: 10px; }
+.sl-pk2 { display: grid; grid-template-columns: minmax(120px, 232px) minmax(0, 1fr); gap: 10px; }
 /* Two columns: sixteen fields in one column needed a scrollbar of its own AND left the values pane beside
    it mostly empty, which is the shape a one-row range editor makes worst. */
 .sl-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; align-content: start;
@@ -194,11 +237,24 @@ dialog.modal-box.sell-pop { width: min(1500px, 97vw); height: 92vh; max-height: 
 .sl-field.used::after { content: " \25CF"; color: #58c26b; font-size: 9px; }
 .sl-vals { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 .sl-vals > input { width: 100%; }
+/* Which clause about the chosen field is being written, when it has more than one. Reads as tabs over the pane
+   below, because that is what they are: the same two panes, aimed at another clause of the same field. */
+.sl-slots { display: flex; flex-wrap: wrap; gap: 3px; align-items: center; }
+.sl-slot { background: none; border: 1px solid #2c2c36; border-radius: 3px; color: #8a8a96;
+  font-size: 10.5px; padding: 1px 6px; max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.sl-slot:hover { color: #e6e6ee; }
+.sl-slot.sel { background: #24303d; border-color: #3a5470; color: #cfe4ff; }
+.sl-slot.add { border-style: dashed; }
 .sl-vlist { display: flex; flex-direction: column; gap: 1px; max-height: 262px; overflow-y: auto; }
 .sl-val { background: none; border: 1px solid transparent; text-align: left; font-size: 11.5px;
   padding: 3px 7px; color: #e6e6ee; }
 .sl-val:hover { background: #1b1b22; }
 .sl-val.on { background: #24303d; border-color: #3a5470; color: #cfe4ff; }
+/* A value the game HAS and this station does not: tickable, since that is what a shopping list is for, but
+   quieter than what is actually in front of the player. */
+.sl-val.away { color: #7a7a86; }
+.sl-val.away.on { color: #cfe4ff; }
 .sl-sub { color: #6a6a78; font-size: 9.5px; text-transform: uppercase; letter-spacing: .08em; margin-top: 5px; }
 .sl-pkrow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 /* The words of the phrase are words, not flex items to be squeezed: "level is" broke across two lines. */
@@ -207,6 +263,16 @@ dialog.modal-box.sell-pop { width: min(1500px, 97vw); height: 92vh; max-height: 
 .sl-pkfoot { display: flex; gap: 10px; align-items: center; border-top: 1px solid #2c2c36; padding-top: 5px;
   font-size: 11px; color: #8a8a96; }
 .sl-pkfoot label { display: flex; gap: 5px; align-items: center; }
+/* The clause being built, as a sentence: `substat  has at least [2] of  3 ticked`. Its select and number box
+   are styled as the chip's are (a word of the sentence, not a form control), so the same reading reads the same
+   in the picker that writes it and in the chip that keeps it. */
+.sl-pkq { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; color: #cfe4ff; font-size: 11.5px; }
+.sl-pkq .cw { opacity: .75; }
+.sl-pkq select { background: none; border: none; color: inherit; font: inherit; padding: 0 1px;
+  text-decoration: underline dotted; text-underline-offset: 2px; cursor: pointer; }
+.sl-pkq select option { background: #16161c; color: #cfe4ff; }
+.sl-pkq input { width: 44px; padding: 0 3px; font-size: 11px; background: #0f1116; text-align: right;
+  border: 1px solid #2f3d4d; border-radius: 2px; color: inherit; }
 .sl-pkclose { display: flex; justify-content: flex-end; border-top: 1px solid #2c2c36; margin-top: 8px;
   padding-top: 7px; }
 .cfg-actions button.danger { background: #3b1d1d; border-color: #7f1d1d; color: #fca5a5; }
@@ -220,6 +286,11 @@ dialog.modal-box.sell-pop { width: min(1500px, 97vw); height: 92vh; max-height: 
 /* The one scroller in the popin: the rows. Windowed against THIS element, so overflow-anchor must be off —
    a resized spacer would otherwise move scrollTop, fire a scroll, resize it again, and run to the end. */
 .sl-rlist { flex: 1 1 auto; min-height: 140px; overflow: auto; overflow-anchor: none; }
+/* A group row in the review list is the same row the split draws, so it carries the same dense scale and the
+   same small controls — full-size buttons in a 43-group list crowd the numbers they act on. */
+.sl-rlist .sl-group { display: flex; align-items: center; gap: 5px;
+  font-family: ui-monospace, monospace; font-size: 11.5px; }
+.sl-rlist .sl-group .mini { font-size: 10px; padding: 0 5px; border-radius: 3px; }
 .sl-rlist td { cursor: pointer; }
 .sl-rlist input[type=checkbox] { cursor: pointer; margin: 0; }
 /* struck off: still listed (so it can come back), plainly not part of the sale */
@@ -238,3 +309,32 @@ dialog.modal-box.sell-pop { width: min(1500px, 97vw); height: 92vh; max-height: 
 /* the file input is the label; a bare one cannot be styled to match a button */
 .sl-imp { cursor: pointer; }
 .sl-imp input[type=file] { display: none; }
+
+/* ---------------------------------------------------------------------------------------------------
+   The shopping list's rules, inline on the shop rail (see WantedRules.tsx). They live in THIS file rather
+   than App.css because what they are made of is chips — `.sl-chip`, `.sl-add` and the popover above — and a
+   second home for the same furniture is how two editors come to look like two features.
+   --------------------------------------------------------------------------------------------------- */
+/* Anchored to the rail's `wanted` button, not laid out inside it: the rail column is ~230px, and a clause
+   naming four substats wrapped over four lines there. Fixed for the same reason `.sl-pop` is — the rail, the
+   layout grid and the page all clip or scroll. Kept BELOW the modal layer (300/301) so the sell list still
+   covers it, and below `.sl-pop` (320) so the field picker opened from inside it lands on top. */
+.want-flyout { position: fixed; z-index: 250; width: min(440px, 92vw);
+  max-height: min(70vh, 560px); overflow: auto; overscroll-behavior: contain;
+  background: #14161b; border: 1px solid #3a3d46; border-radius: 8px; padding: 10px 12px;
+  box-shadow: 0 12px 34px #000c; text-align: left; }
+.want-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+  border-bottom: 1px solid #23252c; padding-bottom: 6px; margin-bottom: 6px; }
+.want-panel { font-size: 12px; }
+.want-panel > .hint { margin: 0 0 6px; }
+.want-rule { padding: 6px 0; }
+.want-rule + .want-rule { border-top: 1px dashed #23252c; }
+/* The sentence is the rule; the chips under it are how it is edited. Same order on screen as in the sell list. */
+.want-say { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; color: #cfe4ff; }
+.want-say button { background: none; border: 0; color: #8a8a96; cursor: pointer; padding: 0 2px; }
+.want-say button:hover { color: #f0b8bd; }
+.want-rule .sl-chips { margin: 4px 0; }
+.want-rule > .hint { margin: 0; }
+.want-add { display: block; width: 100%; margin-top: 6px; background: none; border: 1px dashed #33333e;
+  border-radius: 6px; color: #9fb6d0; font-size: 11.5px; padding: 4px 0; cursor: pointer; }
+.want-add:hover { color: #cfe4ff; background: #16161c; }

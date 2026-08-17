@@ -56,5 +56,32 @@ export function mayKeepEquipped(equipped: Item | null | undefined, size: string,
   return turretFits(equipped, size, f, cats);
 }
 
+/**
+ * Which layers this ship can actually REACH, judged by what it can MOUNT.
+ *
+ * The distinction is the whole point: owning a Core drill proves nothing if it is Large and every hardpoint on the
+ * hull is Small, or if the slot's own filter would refuse it. Measured over the inventory as a whole, a single
+ * unmountable gun made the app demand a balanced build the ship could not possibly field — and a balanced target
+ * scores `min(surface, core)`, so every candidate battery scored 0, nothing ever beat anything, and every slot
+ * reported "kept". That is the exact silence the degrade rule exists to prevent.
+ *
+ * FITTED guns always count: they are mounted, whatever a filter now says.
+ */
+export function reachableLayers(
+  act: string,
+  fitted: ReadonlyArray<Item>,
+  candidates: ReadonlyArray<Item>,
+  slots: ReadonlyArray<{ size: string; filter: GearFilter }>,
+  cats: Record<string, string[]>,
+): { surface: boolean; core: boolean } {
+  const mine = (g: Item) => catOf(g) === act;
+  const mountable = candidates.filter((g) => mine(g) && slots.some((sl) => turretFits(g, sl.size, sl.filter, cats)));
+  const universe = [...fitted.filter(mine), ...mountable];
+  return {
+    surface: universe.some((g) => coversLayer(g, "Surface")),
+    core: universe.some((g) => coversLayer(g, "Core")),
+  };
+}
+
 export const moduleFits = (it: Item, slot: string, size: string) =>
   isModuleItem(it) && it.slotType === slot && (!size || !it.size || it.size === size);

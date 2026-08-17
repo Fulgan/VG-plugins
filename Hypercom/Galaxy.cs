@@ -262,6 +262,14 @@ namespace Hypercom
                 ["systems"] = systems,
                 ["edges"] = edges,
                 ["recent"] = recent,          // most-recent-first: lets the client draw where you've been
+                // TODAY, as the game itself counts it: `MissionBoard.umbralMissionDate` is `DateTime.Now.DayOfYear`
+                // ∴ a client comparing against anything else (UTC, its own idea of a day) reads someone else's day.
+                // The year is for DISPLAY only. Day-of-year WRAPS, and the game stores no year beside it — so a
+                // stored 218 from last year is indistinguishable from today's, for US and for the GAME alike. That
+                // ambiguity is therefore matched rather than papered over: reporting what the game will itself act
+                // on is the only reading that cannot disagree with the board the player walks up to.
+                ["umbralToday"] = DateTime.Now.DayOfYear,
+                ["umbralYear"] = DateTime.Now.Year,
                 ["counts"] = new Dictionary<string, object>
                 {
                     ["systemsGenerated"] = sk.SystemCount, // grows: a region appears when you reach it
@@ -412,6 +420,30 @@ namespace Hypercom
                     st["missionsIn"] = Clock.MissionRefreshIn(board);
                     st["missionsFresh"] = Clock.MissionFresh(board);
                 }
+                // THE UMBRAL DAILY, as FACTS ⊥ as a verdict. The game keeps this itself, per station and in
+                // the save: `MissionBoard.umbralMission` is the offer and `umbralMissionDate` the day-of-year it was
+                // last rolled on, so what a player wants to know — "which station have I not used today" — is a READ
+                // and needs no ledger of ours.
+                //
+                // ⚠ NEVER `GetUmbralMission(bool)`: it ROLLS one when the stored date is stale, so asking would make
+                // this endpoint the author of what it reports. Fields only.
+                //
+                // Presence is a LEVEL, ⊥ a flag: the daily is offered from `Conquest.UmbralControlForMissions` (0.05)
+                // while the umbral SHOP needs 0.5, which is why a station can offer the mission with no shop in
+                // sight. Both consts are read off the build (they are `const` ∴ literal) with the observed value as
+                // the fallback, because a balance number is exactly the kind of thing a patch moves.
+                var umbral = Compat.Num(p, "umbralControlLevel");
+                if (umbral > 0) st["umbralControl"] = umbral;
+                st["umbralMissions"] = umbral >= UmbralControlForMissions;
+                var mboard = Compat.Get(p, "missionBoard");
+                if (mboard != null)
+                {
+                    // The DAY the daily was last rolled (`DateTime.Now.DayOfYear`) and whether one is sitting there
+                    // now. What the pair MEANS is the client's to say — see the galaxy root's `umbralToday`.
+                    var when = Compat.Num(mboard, "umbralMissionDate");
+                    if (when > 0) st["umbralDailyDate"] = (int)when;
+                    st["umbralDailyWaiting"] = Compat.Get(mboard, "umbralMission") != null;
+                }
                 stations.Add(st);
             }
             d["poiKinds"] = kinds;
@@ -473,6 +505,34 @@ namespace Hypercom
         }
 
         // ---- POI ------------------------------------------------------------------------------
+        /// <summary>
+        /// The umbral control a station needs before its mission board offers the DAILY, read off the build.
+        ///
+        /// `Source.Simulation.Story.Conquest.UmbralControlForMissions` is a `const` (0.05 on game 0.8.1.23) and
+        /// `UmbralControlForShop` is 0.5 — a 10× gap, which is why "has an umbral shop" is the WRONG test for
+        /// "offers the daily". Read rather than hardcoded because a balance number is what a patch moves; the
+        /// observed value is the fallback so an unknown build degrades to today's behaviour instead of to zero.
+        /// </summary>
+        private static readonly float UmbralControlForMissions = ConquestConst("UmbralControlForMissions", 0.05f);
+
+        private static float ConquestConst(string name, float fallback)
+        {
+            try
+            {
+                var t = VG.Game.GameMembers.FindType("Source.Simulation.Story.Conquest");
+                var f = t?.GetField(name, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic
+                                        | System.Reflection.BindingFlags.Static);
+                if (f != null && f.IsLiteral)
+                {
+                    var raw = f.GetRawConstantValue();
+                    if (raw is float ff) return ff;
+                    if (raw is double dd) return (float)dd;
+                }
+            }
+            catch (Exception ex) { Plugin.Log.LogWarning($"{name} unreadable, using {fallback}: {ex.Message}"); }
+            return fallback;
+        }
+
         private static readonly string[] ShopFields =
         {
             "generalShopInventory", "miningShopInventory", "salvageShopInventory", "bountyShopInventory",

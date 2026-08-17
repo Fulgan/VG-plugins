@@ -47,6 +47,18 @@ const NONE: AspectValue = { kind: "other", damageFraction: 0, overTime: false, c
 //   "5% chance on hit to trigger a plasma explosion, dealing 200% damage to nearby
 //    enemies."                                                                           chance-gated AoE
 const EXTRA_DAMAGE = /(?:additional|dealing)\s+([\d.]+)\s*%(?:\s+\w+)?\s+damage/i;
+// "Deals 40% BONUS damage to targets above 90% total HP" — a second phrasing, and it cost `Opening Blow` its
+// whole value: it states its number and scored 0 because the pattern above wants `additional|dealing` first.
+const BONUS_DAMAGE = /([\d.]+)\s*%\s+bonus\s+damage/i;
+// A bonus gated on the TARGET'S REMAINING HEALTH pays only while the target is above that mark, so it is worth
+// its UPTIME and nothing like its headline. The player's own reading, and it is the right one: a weak target
+// dies before the gate closes and the difference never shows; a real one spends a sliver of the fight above 90%
+// ∴ ~4% of a fight's damage at the very most, halved again to be safe. 40% x 0.05 = 2%.
+//
+// Stated here rather than folded into a magic 0.02, so the two halves stay arguable separately: the gate's
+// uptime is a judgement, the 40% is read off the prefab (`BossFirstHitPayload.damageMultiplier 1.4`).
+const HP_GATED = /above\s+[\d.]+\s*%\s*(?:total\s*)?HP/i;
+const HP_GATE_UPTIME = 0.05;
 // A leading "N% chance on hit" gates the whole effect, so the expected value is chance x magnitude. Reading
 // the magnitude alone credits Hugged By Flames with 50% instead of 10% — five times too much.
 const CHANCE = /([\d.]+)\s*%\s*chance/i;
@@ -60,7 +72,7 @@ const STACKS = /stacks? up to\s+(\d+)/i;
 
 export function aspectValue(description: string | null | undefined): AspectValue {
   if (!description) return NONE;
-  const m = EXTRA_DAMAGE.exec(description);
+  const m = EXTRA_DAMAGE.exec(description) ?? BONUS_DAMAGE.exec(description);
   if (!m) return NONE;
   const pct = Number(m[1]);
   if (!Number.isFinite(pct) || pct <= 0) return NONE;
@@ -73,7 +85,10 @@ export function aspectValue(description: string | null | undefined): AspectValue
   return {
     kind: "extraDamage",
     // Expected value per hit. Area effects report their magnitude but contribute nothing single-target.
-    damageFraction: area ? 0 : (pct / 100) * (Number.isFinite(chance) ? chance : 1),
+    // Chance and HP-gate uptime both scale the headline, and they compose: an effect that must both roll AND
+    // catch the target high is worth the product.
+    damageFraction: area ? 0
+      : (pct / 100) * (Number.isFinite(chance) ? chance : 1) * (HP_GATED.test(description) ? HP_GATE_UPTIME : 1),
     overTime: OVER_TIME.test(description),
     chance: Number.isFinite(chance) ? chance : 1,
     area,

@@ -1,0 +1,26 @@
+<Project>
+
+  <!-- Where the game is, and what the plugins compile against.
+
+       MSBuild imports this automatically for every project below this directory, so no .csproj imports it by
+       hand and none of them repeat these paths.
+
+       The game's own assemblies are NOT redistributable, so they are not in this repository: the plugins
+       reference them straight out of your installation. Build with:
+
+           dotnet build -c Release
+
+       and if Steam is somewhere else, say so on the command line:
+
+           dotnet build -c Release -p:GameDir="D:\SteamLibrary\steamapps\common\Vanguard Galaxy"
+
+       You need the game installed with BepInEx 5 in it. `ManagedDir` holds the Unity and game assemblies,
+       `BepInExCore` holds BepInEx.dll and 0Harmony.dll; both are derived from `GameDir` and can be overridden
+       on their own if your layout differs (-p:ManagedDir=… / -p:BepInExCore=…). -->
+  <PropertyGroup>
+    <GameDir Condition="'$(GameDir)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Vanguard Galaxy</GameDir>
+    <ManagedDir Condition="'$(ManagedDir)' == ''">$(GameDir)\VanguardGalaxy_Data\Managed</ManagedDir>
+    <BepInExCore Condition="'$(BepInExCore)' == ''">$(GameDir)\BepInEx\core</BepInExCore>
+  </PropertyGroup>
+
+</Project>

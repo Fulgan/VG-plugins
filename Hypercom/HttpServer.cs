@@ -399,14 +399,23 @@ namespace Hypercom
         {
             "/status", "/inventories", "/shops", "/loadout", "/ships", "/officers", "/recruits", "/log", "/events",
             "/loadout/presets", "/loadout/presets/orphans", "/loadout/presets/export",
-            "/catalog/equipment", "/catalog/types", "/ship/layout", "/ship/vitals", "/stat/sources", "/skills", "/reputation", "/reputation/log", "/client/state", "/galaxy", "/cycles", "/materials", "/ledger",
+            "/catalog/equipment", "/catalog/types", "/catalog/prefabs", "/catalog/ships", "/catalog/aspects", "/ship/layout", "/ship/vitals", "/stat/sources", "/skills", "/reputation", "/reputation/log", "/client/state", "/galaxy", "/cycles", "/materials", "/ledger",
+            "/missions/log", "/arena/probe", "/arena/vectors", "/ship/turrets/attack", "/combat/log",
         };
+        /// <summary>
+        /// Whether a GET is an API call at all — and therefore the SECOND place every GET endpoint is registered.
+        ///
+        /// ⚠ A path missing here never reaches `Route`: it is treated as a UI path, and the SPA fallback answers an
+        /// extension-less unknown route with `index.html` and a 200. So the failure of forgetting this list is an
+        /// endpoint that returns the app shell instead of JSON — no error anywhere, and a client that "works" until
+        /// it parses the body. Add a GET route in BOTH places.
+        /// </summary>
         private static bool IsApiGet(string path) => ApiGetPaths.Contains(path);
 
         // Set from the hidden Debug/EnableDebugEndpoints config flag. When false, debug endpoints 404
         // exactly like unknown paths — invisible in the public plugin.
         internal static bool DebugEnabled;
-        private static readonly HashSet<string> DebugPaths = new HashSet<string> { "/catalog/equipment" };
+        private static readonly HashSet<string> DebugPaths = new HashSet<string> { "/catalog/equipment", "/catalog/prefabs", "/catalog/ships", "/catalog/aspects", "/arena/probe", "/arena/vectors", "/ship/turrets/attack", "/combat/log" };
 
         private static Api.Result Route(string method, string path, string query, string body)
         {
@@ -419,14 +428,32 @@ namespace Hypercom
                     case "GET /status": return Api.Status();
                     case "GET /inventories": return Api.Inventories(QueryParam(query, "fresh") != null);
                     case "GET /shops": return Api.Shops(QueryParam(query, "buyback") != null, QueryParam(query, "fresh") != null);
+                    // The mission history. `since` is an ISO timestamp ∴ a client polls for what it has not
+                    // seen rather than re-reading a playthrough's whole log (the `/ledger` scoping, one param over).
+                    case "GET /missions/log":
+                    {
+                        var mpt = QueryParam(query, "playthrough");
+                        var mscope = mpt == "all" ? null : (string.IsNullOrEmpty(mpt) ? Api.CurrentPlaythrough() : mpt);
+                        return Api.Result.Ok(MissionLog.Dto(QueryParam(query, "since"), mscope,
+                            int.TryParse(QueryParam(query, "limit"), out var ml) ? ml : 500));
+                    }
                     case "GET /loadout": return Api.Loadout();
                     case "GET /ships": return Api.Ships();
                     case "GET /officers": return Api.Officers();
                     case "GET /recruits": return Api.Recruits();
                     case "GET /catalog/equipment": return Api.EquipmentCatalog();
                     case "GET /catalog/types": return Api.CatalogTypes();
+                    case "GET /catalog/prefabs": return Api.CatalogPrefabs();
+                    case "GET /catalog/aspects": return Catalog.AspectsDto();
+                    case "GET /catalog/ships": return Api.CatalogShips();
+                    case "GET /arena/probe":
+                        return Arena.Probe(QueryParam(query, "hull"), QueryParam(query, "type"), QueryParam(query, "amount"), QueryParam(query, "rank"), QueryParam(query, "level"));
                     case "GET /ship/layout": return Api.ShipLayout(QueryParam(query, "guid"));
                     case "GET /ship/vitals": return Api.Vitals();
+                    case "GET /arena/vectors":
+                        return Arena.Vectors(QueryParam(query, "hull"), QueryParam(query, "amount"));
+                    case "GET /ship/turrets/attack": return TurretAttack.Dto();
+                    case "GET /combat/log": return CombatLog.Dto(QueryParam(query, "clear") != null);
                     case "GET /stat/sources": return Api.StatSources(QueryParam(query, "stat"));
                     case "GET /skills": return Api.Skills();
                     case "GET /reputation": return Reputation.Dto();

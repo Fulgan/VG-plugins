@@ -17,15 +17,35 @@ import { api, loadConn } from "./api";
 // quota is hit these get sacrificed so the small, irreplaceable preference keys can still be written.
 // Owned here (rather than by their consumers) so the eviction order and the config export agree.
 export const SNAPSHOT_KEY = "shipoptimizer.snapshot";
+// What the gear panel is currently showing — the plan, its figures, its verdict — published for diagnosis so
+// `GET /client/state` answers "what does the player actually see" without a screenshot and without a second
+// derivation that can drift from the panel. DISPOSABLE: it describes a moment, never a preference.
+export const PLAN_KEY = "shipoptimizer.lastPlan";
+// The most of any ONE defensive layer a suggested plan may spend, as a fraction of what the ship already has
+//. A preference about how the player wants to fly, not a fact about a window or a ship, so it is
+// pushed with the playthrough and deliberately global — the answer to "don't gut my shields" does not change
+// per hull.
+export const LAYER_CAP_KEY = "shipoptimizer.layerCap";
 export const LOG_KEY = "shipoptimizer.summaryLog";
 // Dragged widths of the grid's text columns, keyed by column id. Per browser, not per playthrough: it answers
 // "how wide is my screen", which no save can know.
 export const COL_W_KEY = "shipoptimizer.colWidths";
+/** How each inventory-tab grid is laid out — grouping and which columns show, per grid id. */
+export const GRID_VIEW_KEY = "shipoptimizer.gridViews";
+// Which question the galaxy map is answering (its layer). Pushed to the bridge, ⊥ local: what you are tracking —
+// ownership, an Umbral daily, where your materials are — is a way of playing this save, and it should be the same
+// on any browser you open it in. The layer is validated on load: a value from another build must not leave the
+// map painting nothing.
+export const MAP_LAYER_KEY = "shipoptimizer.mapLayer";
 
 // Keys that must NEVER leave the browser: the connection settings are how we reach the bridge in the
 // first place (a bad round-trip would lock you out), and the station/playthrough markers exist purely
 // to invalidate the LOCAL cache.
-const LOCAL_ONLY = new Set(["shipoptimizer.conn", "shipoptimizer.station", "shipoptimizer.playthrough"]);
+// Never pushed: what this BROWSER is looking at, which no save can know — a screen's column widths and the way
+// its grids are grouped belong to the window, not to the playthrough (V51, and `colWidths` was already listed as
+// local in while the code pushed it — drift fixed here).
+const LOCAL_ONLY = new Set(["shipoptimizer.conn", "shipoptimizer.station", "shipoptimizer.playthrough",
+                            "shipoptimizer.colWidths", "shipoptimizer.gridViews"]);
 
 // Keys stored per SHIP bridge-side. Only the snapshot needs it: every other per-ship preference already
 // carries the ship dimension inside its value (FiltersByShip, prio/forced/profile keyed by guid) or in
@@ -77,7 +97,7 @@ export function load<T>(key: string, fallback: T): T {
 
 // Eviction order for a full store, and the set that decides whether a failed write is worth telling the
 // player about. ONE owner: `reclaim`, `writeLocal` and `save` all read it.
-const DISPOSABLE: readonly string[] = [SNAPSHOT_KEY, LOG_KEY];
+const DISPOSABLE: readonly string[] = [SNAPSHOT_KEY, LOG_KEY, PLAN_KEY];
 const isDisposable = (key: string) => DISPOSABLE.includes(key);
 
 // The largest cache entry worth attempting, in UTF-16 chars. Origin quotas are commonly ~5M chars, and the

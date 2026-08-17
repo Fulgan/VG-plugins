@@ -133,6 +133,61 @@ namespace VG.Game
             return null;
         }
 
+        /// <summary>
+        /// `Inventory.Remove(item, amount)` — by name, because the overload that takes an `InventoryItemType`
+        /// gained a trailing `bool skipFavourited = false` parameter and older builds do not have it.
+        ///
+        /// An optional argument is baked into the CALL SITE: `inv.Remove(type, n)` compiles to a reference to
+        /// the two-argument method, which the newer build does not have, and the reference is resolved when the
+        /// CALLING method is JIT-compiled. So the failure is a `MissingMethodException` that takes out the whole
+        /// method — the sale, the restock, the loadout apply — before its own try/catch can run. Both shapes must
+        /// stay reachable from one binary, ∴ neither may be named at compile time.
+        ///
+        /// `item` may be an `InventoryItemType` or an `Inventory.InventoryItem` entry: the overload is chosen by
+        /// what the first parameter accepts, so the two are not interchangeable by arity alone (both are 2-arg).
+        /// Returns the count the game reports removed, or 0 when nothing could be called.
+        /// </summary>
+        public static int RemoveItems(object inventory, object item, int amount)
+        {
+            if (inventory == null || item == null || amount <= 0) return 0;
+            var m = RemoveOverload(inventory.GetType(), item.GetType());
+            if (m == null) return 0;
+            try
+            {
+                var args = m.GetParameters().Length == 2
+                    ? new[] { item, (object)amount }
+                    : new[] { item, (object)amount, false };
+                var r = m.Invoke(inventory, args);
+                return r is int n ? n : amount;
+            }
+            catch { return 0; }
+        }
+
+        private static readonly ConcurrentDictionary<string, MethodInfo> Removers = new ConcurrentDictionary<string, MethodInfo>();
+
+        // Shortest parameter list first: the two-argument form is the one both branches share, and it leaves the
+        // build's own default for any parameter beyond it rather than asserting a value for it.
+        private static MethodInfo RemoveOverload(Type inventory, Type itemType)
+        {
+            var key = inventory.FullName + "|" + itemType.FullName;
+            if (Removers.TryGetValue(key, out var hit)) return hit;
+            MethodInfo best = null;
+            try
+            {
+                foreach (var m in inventory.GetMethods(BindingFlags.Public | BindingFlags.Instance))
+                {
+                    if (m.Name != "Remove") continue;
+                    var ps = m.GetParameters();
+                    if (ps.Length < 2 || !ps[0].ParameterType.IsAssignableFrom(itemType)) continue;
+                    if (ps[1].ParameterType != typeof(int)) continue;
+                    if (best == null || ps.Length < best.GetParameters().Length) best = m;
+                }
+            }
+            catch { best = null; }
+            Removers[key] = best;
+            return best;
+        }
+
         /// <summary>A public instance method by name and arity, or null.</summary>
         public static MethodInfo Method(Type type, string name, int argCount = -1)
         {

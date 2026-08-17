@@ -16,32 +16,23 @@ export interface Design {
 }
 
 // `classic` is the current look and owns no CSS file — it IS the base stylesheet with no overrides. Keep it
-// first so it stays the default when nothing is stored.
+// first: it is what `DEFAULT_DESIGN` resolves to, and every caller passes that.
 export const DESIGNS: Design[] = [
   { id: "classic", label: "Classic", hint: "The current dark UI" },
   { id: "graphite", label: "Graphite", hint: "Flatter, higher contrast, tighter rows" },
 ];
 
 export const DEFAULT_DESIGN = DESIGNS[0].id;
-const KEY = "shipoptimizer.design";
 
 export const isDesign = (id: string | null | undefined): boolean => !!id && DESIGNS.some((d) => d.id === id);
 
-export function loadDesign(): string {
-  try {
-    const v = localStorage.getItem(KEY);
-    return isDesign(v) ? v! : DEFAULT_DESIGN;
-  } catch {
-    return DEFAULT_DESIGN;   // storage blocked (private mode / embedded webview)
-  }
-}
-
 // Applied to <html> rather than a React wrapper so the whole document — including anything portalled or
 // rendered outside the app root — is covered by the same design.
+//
+// Nothing is PERSISTED: with no picker there is no choice to remember, and a stored id is the one thing that
+// could strand a browser in a look it has no control to leave. The caller passes the id it wants.
 export function applyDesign(id: string): void {
-  const chosen = isDesign(id) ? id : DEFAULT_DESIGN;
-  document.documentElement.dataset.design = chosen;
-  try { localStorage.setItem(KEY, chosen); } catch { /* not worth failing a theme change over */ }
+  document.documentElement.dataset.design = isDesign(id) ? id : DEFAULT_DESIGN;
 }
 
 import "./tokens.css";

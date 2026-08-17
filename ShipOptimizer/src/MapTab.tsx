@@ -3,7 +3,10 @@ import { api, type Conn } from "./api";
 import type { Galaxy, GalaxyFaction, GalaxySector, GalaxySystem, Materials } from "./types";
 import { useCursorTip, useHoverIntent } from "./useCursorTip";
 import { reachFrom } from "./route";
-import { MAP_EMPTY, STATIONS_FULL, mapRamp } from "./mapRamp";
+import { MAP_LAYER_KEY, load as loadPref, save as savePref } from "./storage";
+import { INK_LIGHT, MAP_EMPTY, STATIONS_FULL, factionFill, factionPalette, faint, ink, mapRamp } from "./mapRamp";
+import { MapSparks, type Lane } from "./mapSpark";
+import { MapStars } from "./mapStars";
 import StandingPanels from "./StandingPanels";
 import FactionMark from "./FactionMark";
 import "./map.css";
@@ -18,7 +21,7 @@ import "./map.css";
 // Two zoom levels mirroring the game's own breadcrumb: quadrant → subsector → (hover) system detail.
 // Quadrants come from the payload rather than being hardcoded, so a third map would appear on its own.
 
-type Layer = "owner" | "materials" | "level" | "recency" | "stations";
+type Layer = "owner" | "materials" | "level" | "recency" | "stations" | "umbral";
 
 // The game's quadrant ids (0 Prologue, 1 Frontier, 2 Conquest). Only the conquest one needs naming: its
 // presence in the payload is what tells us the conquest map is open to this save.
@@ -30,7 +33,50 @@ const LAYERS: { id: Layer; label: string; hint: string }[] = [
   { id: "level", label: "Level", hint: "System level against the conquest cap" },
   { id: "recency", label: "Recency", hint: "How recently you were there" },
   { id: "stations", label: "Stations", hint: "Systems with docks, by owner count" },
+  { id: "umbral", label: "Umbral daily", hint: "Where an Umbral daily is still unclaimed today — they reset at your own midnight, once per station" },
 ];
+
+/**
+ * What a station's Umbral daily is, as the player needs it: somewhere to GO, somewhere already USED, or a station
+ * that never offers one.
+ *
+ * The game keeps this itself, per station and in the save (`MissionBoard.umbralMission` + `umbralMissionDate`), so
+ * this reads its state rather than remembering our own — and the semantics follow from how the board behaves: a
+ * date that is not today means the board will roll a fresh one when you arrive, a date of today with a mission
+ * still on it means it is there for the taking, and a date of today with none means you have had it.
+ */
+type UmbralState = "away" | "waiting" | "spent" | "none";
+
+export function umbralStateOf(
+  st: { umbralMissions?: boolean; umbralDailyDate?: number; umbralDailyWaiting?: boolean },
+  today: number | undefined,
+): UmbralState {
+  if (!st.umbralMissions) return "none";
+  if (today == null || st.umbralDailyDate == null) return "away";   // never rolled here, or no clock to compare
+  if (st.umbralDailyDate !== today) return "away";
+  return st.umbralDailyWaiting ? "waiting" : "spent";
+}
+
+/**
+ * Whether ANY station here carries the umbral virus at all.
+ *
+ * `umbralControl` is the station's infection as a fraction, sent only when it is above zero. A different question
+ * from the daily: the board offers a mission at 0.05 and the umbral shop opens at 0.5, so a station can be
+ * infected and offer neither — which is exactly the state worth marking, because it is where the virus is
+ * spreading before it has any consequence you could otherwise see.
+ */
+export const umbralInfected = (stations: { umbralControl?: number }[] | undefined): boolean =>
+  (stations ?? []).some((st) => (st.umbralControl ?? 0) > 0);
+
+/** The best state among a system's stations: one unclaimed daily is a reason to fly there. */
+export function umbralSystemState(
+  stations: { umbralMissions?: boolean; umbralDailyDate?: number; umbralDailyWaiting?: boolean }[] | undefined,
+  today: number | undefined,
+): UmbralState {
+  const states = (stations ?? []).map((st) => umbralStateOf(st, today));
+  for (const want of ["away", "waiting", "spent"] as const) if (states.includes(want)) return want;
+  return "none";
+}
 
 // Faction colours come from the payload (`Faction.conquestColor`, the value the game paints territory with),
 // keyed by the faction's stable identifier — the display name is per-playthrough ("Gold" → "Mindus Holdings")
@@ -43,9 +89,38 @@ const hueOf = (s: string) => {
 };
 const fallbackColor = (f?: string | null) => (f ? `hsl(${hueOf(f)} 62% 58%)` : MAP_EMPTY);
 
+// The palette is derived from the whole table (see `factionPalette`), so it is computed per table and cached on
+// its identity: every call site — nodes, legend dots, tooltips — must get the SAME fill for a faction, and the
+// map disagreeing with its own legend is the defect a second derivation causes.
+let paletteCache: { list: GalaxyFaction[] | undefined; map: Map<string, string> } | undefined;
+function paletteOf(factions: GalaxyFaction[] | undefined): Map<string, string> {
+  if (paletteCache && paletteCache.list === factions) return paletteCache.map;
+  const map = factionPalette((factions ?? [])
+    .map((f) => ({ id: f.id, color: f.conquestColor ?? f.color ?? "" }))
+    .filter((f) => f.color !== ""));
+  paletteCache = { list: factions, map };
+  return map;
+}
+
 // Resolve a faction's colour from the payload's table, keyed by identifier. Module-level (not a closure) so
 // the tooltip components can use it too — they get the table passed in rather than re-deriving it.
-function colorFor(factions: GalaxyFaction[] | undefined, factionId?: string | null, faction?: string | null): string {
+export function colorFor(factions: GalaxyFaction[] | undefined, factionId?: string | null, faction?: string | null): string {
+  const fill = factionId ? paletteOf(factions).get(factionId) : undefined;
+  return fill ?? factionFill(fallbackColor(faction));
+}
+
+/**
+ * The faction's colour EXACTLY as the game paints it, unnormalised.
+ *
+ * `colorFor` is the fill, and a fill has to be legible: it gets a capped saturation and a brightness the palette
+ * chooses. That is the right trade for an area and the wrong one for a hair-thin line, which cannot be
+ * unreadable and can carry the game's own value — so the node's rim uses this and the node's body uses that.
+ * Two owners for one fact would be drift; two DELIBERATE readings of it, each named for what it is used for, are
+ * the point.
+ */
+export function rawColorFor(
+  factions: GalaxyFaction[] | undefined, factionId?: string | null, faction?: string | null,
+): string {
   const f = factionId ? factions?.find((x) => x.id === factionId) : undefined;
   return f?.conquestColor ?? f?.color ?? fallbackColor(faction);
 }
@@ -78,6 +153,10 @@ const poly = (cx: number, cy: number, r: number, sides: number, rot: number) =>
 const hexagon = (cx: number, cy: number, r: number) => poly(cx, cy, r, 6, -Math.PI / 2);
 const diamond = (cx: number, cy: number, r: number) => poly(cx, cy, r, 4, -Math.PI / 2);
 
+/** How much of its layer colour an UNVISITED node is filled with: enough to hold a digit, little enough to still
+    read as an outline rather than a reading. */
+const HOLLOW_FILL = 0.16;
+
 
 function classify(s: GalaxySystem): Special | null {
   if (!s.pocket) return null;
@@ -99,7 +178,13 @@ export default function MapTab({ conn, docked, standingBump = 0 }: {
   const [err, setErr] = useState<string | null>(null);
   const [quadrant, setQuadrant] = useState<number | null>(null);
   const [sector, setSector] = useState<string | null>(null); // null = quadrant overview
-  const [layer, setLayer] = useState<Layer>("owner");
+  // The layer the player last chose, so the map opens on the question they were asking. Validated against the
+  // picker's own list: a layer this build does not have would paint every node MAP_EMPTY with no way back.
+  const [layer, setLayer] = useState<Layer>(() => {
+    const saved = loadPref<Layer>(MAP_LAYER_KEY, "owner");
+    return LAYERS.some((l) => l.id === saved) ? saved : "owner";
+  });
+  const chooseLayer = useCallback((id: Layer) => { setLayer(id); savePref(MAP_LAYER_KEY, id); }, []);
   const [focus, setFocus] = useState<string | null>(null);  // system guid -> in-system view
   const [q, setQ] = useState("");
   const [onlySpecial, setOnlySpecial] = useState<Special | null>(null);
@@ -214,6 +299,10 @@ export default function MapTab({ conn, docked, standingBump = 0 }: {
     // hollow node, a faint dot — so the fill says the same "no reading" every other layer's zero says.
     if (s.knowledge === "known" && layer !== "owner") return MAP_EMPTY;
     switch (layer) {
+      // Already the palette's fill: `colorFor` normalises the game's colours over the whole table (hue kept,
+      // brightness the map's to set), so nothing further happens to it here. Re-normalising a palette fill would
+      // undo the one thing the table-wide pass exists for — the brightness spread that keeps two hue-adjacent
+      // factions apart.
       case "owner": return factionColor(s);
       case "materials": {
         const v = (s.materials?.volume ?? 0) / scale.maxVolume;
@@ -229,6 +318,22 @@ export default function MapTab({ conn, docked, standingBump = 0 }: {
       case "stations": {
         const n = s.stations?.length ?? 0;
         return n === 0 ? MAP_EMPTY : mapRamp("stations", n / STATIONS_FULL);
+      }
+      case "umbral": {
+        // Three readings, ⊥ two: a station that offers one and has it UNCLAIMED is where to go, one already used
+        // today is not, and "no umbral presence" is a different fact from either (V48 — an absence must not read
+        // as a verdict). An unvisited system falls through to MAP_EMPTY above, which is honest: its board state is
+        // not knowable from here.
+        switch (umbralSystemState(s.stations, g?.umbralToday)) {
+          case "away": return mapRamp("umbral", 1);      // rolls fresh when you arrive
+          case "waiting": return mapRamp("umbral", 0.75); // sitting on the board now
+          // SPENT is drawn as the backdrop itself, ⊥ as the ramp's dim end: today it is not a place to go, and
+          // a dark core says that at a glance where a dim amber still reads as "some amber, therefore something".
+          // ⊥ the same as `MAP_EMPTY`, which means "no reading": this is a reading, and the node keeps an outline
+          // (`.u-spent`) so a spent station stays visibly a station.
+          case "spent": return "var(--map-void)";
+          default: return MAP_EMPTY;
+        }
       }
     }
   };
@@ -320,7 +425,7 @@ export default function MapTab({ conn, docked, standingBump = 0 }: {
         ))}
         <span className="spacer" />
         {LAYERS.map((l) => (
-          <button key={l.id} className={`asp-chip${layer === l.id ? " on" : ""}`} title={l.hint} onClick={() => setLayer(l.id)}>{l.label}</button>
+          <button key={l.id} className={`asp-chip${layer === l.id ? " on" : ""}`} title={l.hint} onClick={() => chooseLayer(l.id)}>{l.label}</button>
         ))}
         {(["warzone", "motherlode", "graveyard"] as Special[]).map((k) => (
           <button key={k} className={`asp-chip${onlySpecial === k ? " on" : ""}`}
@@ -506,7 +611,8 @@ export default function MapTab({ conn, docked, standingBump = 0 }: {
       ) : (
         <>
           <SectorGraph galaxy={g} systems={shown} tint={tint} onHover={show} onLeave={hide}
-            onOpen={(guid) => setFocus(guid)} highlight={onlySpecial} />
+            onOpen={(guid) => setFocus(guid)} highlight={onlySpecial}
+            umbral={layer === "umbral" ? (sys) => umbralSystemState(sys.stations, g.umbralToday) : undefined} />
 
           {/* Status strip, as in the design — but only figures we actually have. No bearing (meaningless for
               a galaxy map) and no light-year scale (the coordinates are the game's own layout units). */}
@@ -552,12 +658,15 @@ export default function MapTab({ conn, docked, standingBump = 0 }: {
 // One subsector as a node graph. Positions come from the game's own layout (`x`/`y`), normalised to the
 // viewport so a wide chain and a tight cluster both fill the space.
 function SectorGraph({
-  galaxy, systems, tint, onHover, onLeave, onOpen, highlight,
+  galaxy, systems, tint, onHover, onLeave, onOpen, highlight, umbral,
 }: {
   galaxy: Galaxy; systems: GalaxySystem[]; tint: (s: GalaxySystem) => string;
   onHover: (h: { sys: GalaxySystem; x: number; y: number }) => void; onLeave: () => void;
   onOpen: (guid: string) => void;
   highlight: Special | null;
+  /** A system's Umbral daily state while THAT layer is showing, and undefined otherwise: the glow and the dark
+      core are statements about the daily, so on a materials or recency map they would contradict the fill. */
+  umbral?: (s: GalaxySystem) => UmbralState;
 }) {
   const W = 1000, H = 420, PAD = 46;
   const pos = useMemo(() => {
@@ -576,20 +685,31 @@ function SectorGraph({
     return m;
   }, [systems]);
 
-  const inSector = new Set(systems.map((s) => s.guid));
-  // One line per gate pair, not two: the same link exists as a POI on both sides.
-  const seen = new Set<string>();
-  const edges = galaxy.edges.filter((e) => {
-    if (!inSector.has(e.from)) return false;
-    const key = [e.from, e.to ?? "out:" + e.gate].sort().join("|");
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  const edges = useMemo(() => {
+    const inSector = new Set(systems.map((s) => s.guid));
+    // One line per gate pair, not two: the same link exists as a POI on both sides.
+    const seen = new Set<string>();
+    return galaxy.edges.filter((e) => {
+      if (!inSector.has(e.from)) return false;
+      const key = [e.from, e.to ?? "out:" + e.gate].sort().join("|");
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [galaxy.edges, systems]);
+
+  // The lines a spark may travel: drawn edges, both ends placed, and PASSABLE — a dot running down a locked gate
+  // would say traffic goes through something the player has been told it cannot. Memoised because a new array
+  // identity restarts the spark timer.
+  const lanes = useMemo<Lane[]>(() => edges.flatMap((e) => {
+    const a = pos.get(e.from), b = e.to ? pos.get(e.to) : null;
+    return !a || !b || e.usable === false ? [] : [{ key: e.gate, x1: a.x, y1: a.y, x2: b.x, y2: b.y }];
+  }), [edges, pos]);
 
   return (
     <div className="map-graph">
       <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet">
+        <MapStars w={W} h={H} />
         {/* Coordinate ruler along the top, from the game's own layout units. */}
         <g className="map-ruler">
           <line x1={PAD} y1={14} x2={W - PAD} y2={14} />
@@ -615,14 +735,21 @@ function SectorGraph({
             </line>
           );
         })}
+        <MapSparks lanes={lanes} />
         {systems.map((s) => {
           const p = pos.get(s.guid);
           if (!p) return null;
           const r = 9;                       // uniform: varying it by station count read as noise
           const kind = classify(s);
           const muted = highlight != null && kind !== highlight;
+          const fill = tint(s);
+          const hollow = s.knowledge === "known";
+          // Only while the Umbral layer is up: `waiting` earns a glow (the mission is ON the board right now) and
+          // `spent` a dark core with an outline. `away` gets neither — it is the brightest fill on that ramp and
+          // says "you can still get one here" without a second mark.
+          const daily = umbral?.(s);
           return (
-            <g key={s.guid} className={`map-node${s.knowledge === "known" ? " known" : ""}${s.guid === galaxy.currentSystem ? " here" : ""}${muted ? " muted" : ""}`}
+            <g key={s.guid} className={`map-node${s.knowledge === "known" ? " known" : ""}${s.guid === galaxy.currentSystem ? " here" : ""}${muted ? " muted" : ""}${daily && daily !== "none" ? " u-" + daily : ""}`}
               onMouseEnter={(ev) => onHover({ sys: s, x: ev.clientX, y: ev.clientY })} onMouseLeave={onLeave}
               onClick={() => onOpen(s.guid)}>
               {/* Colour carries the active layer; shape carries what you'd change course for:
@@ -636,19 +763,54 @@ function SectorGraph({
               {/* Visited systems are SOLID, never-visited ones are hollow with a thin outline. Not an opacity
                   difference: a faded node reads as a rendering artefact rather than a fact about the galaxy —
                   you cannot tell "I haven't been here" from "this is drawn badly". */}
+              {/* Backdrop first, in the graph's own background colour: it OCCLUDES the routes. Without it a
+                  gate line runs visibly through the node — under a hollow node, which has no fill, and through
+                  the gap inside every outline drawn around one — and a system then reads as a crossing rather
+                  than a place. Sized past the outermost ring any node can carry (the HQ hexagon at r+4). */}
+              <polygon className="map-back" points={hexagon(p.x, p.y, r + 5.5)} />
               {(() => {
                 const shape = kind ? diamond(p.x, p.y, r + 1) : hexagon(p.x, p.y, r);
                 // The fill goes through `style`, not the `fill` attribute: a tint can be a `var()` and an
-                // inline declaration resolves one everywhere, a presentation attribute not reliably.
-                return s.knowledge === "known"
-                  ? <polygon className="map-shape hollow" points={shape} fill="none" style={{ stroke: tint(s) }} />
-                  : <polygon className="map-shape" points={shape} style={{ fill: tint(s) }} />;
+                // inline declaration resolves one everywhere, a presentation attribute not reliably. `color`
+                // rides along because the glow (a `drop-shadow` in the stylesheet) takes `currentColor` — so
+                // each node's halo is its own colour without the stylesheet knowing any of them.
+                return (
+                  <>
+                    {hollow
+                      ? <polygon className="map-shape hollow" points={shape}
+                          style={{ fill: faint(fill, HOLLOW_FILL), stroke: fill, color: fill }} />
+                      : <polygon className="map-shape" points={shape} style={{ fill, color: fill }} />}
+                    {/* A hair-thin rim in the faction's OWN colour, on top of the body. The fill is normalised so
+                        it can carry a digit, which costs it the game's exact value; a 1px line cannot be
+                        unreadable ∴ it can be that value, and the node then says both — which faction, in the
+                        palette's terms, and the faction's real colour at its edge. Only where a faction holds
+                        the system: an unowned node has no colour to be. */}
+                    {(s.factionId || s.faction) && (
+                      <polygon className="map-rim" points={shape}
+                        style={{ stroke: rawColorFor(galaxy.factions, s.factionId, s.faction) }} />
+                    )}
+                  </>
+                );
               })()}
               {s.conquest?.headquarters && (
-                <rect className="map-hq" x={p.x - r - 3} y={p.y - r - 3} width={(r + 3) * 2} height={(r + 3) * 2}
-                  style={{ stroke: tint(s) }}>
+                // Concentric HEXAGONS, not a box: the node's own outline repeated twice, which reads as one
+                // emphasised system rather than a second kind of object (a square around a hexagon did not).
+                // Struck in a pale ink of their own, ⊥ the faction colour — the mark says "this one matters",
+                // and the fill underneath already says whose it is.
+                <g className="map-hq">
+                  <polygon points={hexagon(p.x, p.y, r + 3.5)} />
+                  <polygon points={hexagon(p.x, p.y, r + 6)} />
                   <title>{s.faction} headquarters</title>
-                </rect>
+                </g>
+              )}
+              {umbralInfected(s.stations) && (
+                // The virus, where it is present at ALL — drawn rather than lettered: at 9px a glyph font cannot
+                // be relied on for an eye, and this reads at node scale.
+                <g className="map-eye" transform={`translate(${p.x + r + 3} ${p.y - r - 1})`}>
+                  <path d="M -4.2 0 Q 0 -3.6 4.2 0 Q 0 3.6 -4.2 0 Z" />
+                  <circle className="map-eye-pupil" cx={0} cy={0} r={1.35} />
+                  <title>Umbral infection present</title>
+                </g>
               )}
               {s.guid === galaxy.currentSystem && (
                 // Where you are: the design's targeting reticle — two wide concentric rings plus crosshair
@@ -675,9 +837,12 @@ function SectorGraph({
               {/* Level stays on the node — the one number worth reading without hovering, and it costs no
                   extra space sitting inside the shape. Names don't: those are in the tooltip. */}
               {s.level != null && (
-                // Dark digits sit on a filled node; a hollow one has no fill to sit on, so they take its colour.
-                <text className={`map-lvl${s.knowledge === "known" ? " on-hollow" : ""}`} x={p.x} y={p.y + 3.5}
-                  textAnchor="middle" style={s.knowledge === "known" ? { fill: tint(s) } : undefined}>{s.level}</text>
+                // The digit's colour is MEASURED against what is behind it, per node: `ink` picks whichever of the
+                // two inks contrasts with this fill. An unvisited node is barely filled, so its digit always takes
+                // the light ink — and the layer's colour stays on the outline, where it is not competing with a
+                // number for the same pixels.
+                <text className="map-lvl" x={p.x} y={p.y + 3.5} textAnchor="middle"
+                  style={{ fill: hollow ? INK_LIGHT : ink(fill) }}>{s.level}</text>
               )}
             </g>
           );

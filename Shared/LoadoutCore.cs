@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using Behaviour.Equipment;
@@ -309,7 +309,7 @@ namespace VG.Loadout
                 if (e.status != "equip" || e.chosen == null) continue;
                 try
                 {
-                    e.source?.Remove(e.chosen, 1);
+                    VG.Game.GameMembers.RemoveItems(e.source, e.chosen, 1);
                     var displaced = EquipToData(ship, e.slot, e.chosen);
                     if (displaced != null) armory?.Add(displaced, 1);
                     changed++;
@@ -382,7 +382,7 @@ namespace VG.Loadout
                     try
                     {
                         var prior = SetSlot(ship, e.slot, e.chosen);
-                        e.source?.Remove(e.chosen, 1);
+                        VG.Game.GameMembers.RemoveItems(e.source, e.chosen, 1);
                         if (prior != null) armory?.Add(prior, 1);
                         t.gear.Add(new SlotPrior { slot = e.slot, prior = prior });
                         changed++;
@@ -450,7 +450,7 @@ namespace VG.Loadout
             {
                 try
                 {
-                    if (g.prior != null) armory?.Remove(g.prior, 1); // apply put it here; take it back onto the ship
+                    if (g.prior != null) VG.Game.GameMembers.RemoveItems(armory, g.prior, 1); // apply put it here; take it back onto the ship
                     var applied = SetSlot(ship, g.slot, g.prior);    // prior null → unequip
                     if (applied != null) armory?.Add(applied, 1);
                     restored++;
@@ -498,7 +498,7 @@ namespace VG.Loadout
                     var ls = new LoadoutSlot { kind = d.kind, slot = d.kind == "Module" ? (d.slotName ?? "") : d.slot.ToString() };
                     var prior = SetSlot(ship, ls, d.item);
                     if (prior == d.item) continue; // already in this slot — no-op
-                    d.source?.Remove(d.item, 1);
+                    VG.Game.GameMembers.RemoveItems(d.source, d.item, 1);
                     if (prior != null) armory?.Add(prior, 1);
                     t.gear.Add(new SlotPrior { slot = ls, prior = prior });
                     changed++;

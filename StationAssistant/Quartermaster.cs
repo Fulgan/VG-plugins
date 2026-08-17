@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using Behaviour.Item;
@@ -300,7 +300,7 @@ namespace StationAssistant
                 try
                 {
                     dst.Add(e.item, take);
-                    src.Remove(e, take);
+                    VG.Game.GameMembers.RemoveItems(src, e, take);
                     moved += take;
                     amount -= take;
                 }

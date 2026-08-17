@@ -116,11 +116,15 @@ export default function StandingPanels({ conn, conquestUnlocked = false, bump = 
     const ats = (rep?.levels ?? []).map((l) => l.at);
     return ats.length ? { lo: Math.min(...ats), hi: Math.max(...ats) } : null;
   }, [rep]);
-  const conqTop = useMemo(() => {
-    const top = rep?.topRankAt ?? Math.max(0, ...(rep?.ranks ?? []).map((r) => r.at));
-    const highest = Math.max(0, ...conqRows.map((f) => f.conquest?.contribution ?? 0));
-    return Math.max(top, highest) || null;
-  }, [rep, conqRows]);
+  // The contribution scale ends where the GAME stops counting: `topRankAt` (`MaxConquestContribution`, 4,500 —
+  // the top rank's own threshold). Contribution keeps climbing past it, and stretching the scale to the largest
+  // figure on screen — which is what this did — rescales every other faction's bar to one faction's overshoot and
+  // makes the ranks the bar is supposed to show land in a different place on every visit. Past the top the bar is
+  // full and the row says so.
+  const conqTop = useMemo(
+    () => rep?.topRankAt ?? (Math.max(0, ...(rep?.ranks ?? []).map((r) => r.at)) || null),
+    [rep],
+  );
 
   if (err) return <div className="std-wrap"><div className="err">{err}</div></div>;
   if (!rep) return <div className="std-wrap"><div className="muted">Loading standing…</div></div>;
@@ -164,7 +168,7 @@ export default function StandingPanels({ conn, conquestUnlocked = false, bump = 
             ))}
           </div>
           <ChangeLog conn={conn} title="Conquest contribution" entries={entries} ladder="conquest" onClear={clear}
-            watching={sampler ? sampler.watchingConquest : null} sampler={sampler} />
+            watching={sampler ? sampler.watchingConquest : null} sampler={sampler} cap={conqTop} />
         </section>
       )}
     </div>
@@ -229,15 +233,29 @@ function ConqRow({ conn, f, top, expanded, onToggle }: {
 }) {
   const c = f.conquest!;
   const fill = c.contribution != null && top ? Math.max(0, Math.min(1, c.contribution / top)) : 0;
+  // Contribution is not capped in the SAVE — it keeps climbing past the top rank's threshold — but the game
+  // considers nothing above it, so the panel shows the figure TRIMMED to that maximum with a `+` saying it was.
+  // The raw number stays in the title, ⊥ discarded: it is what the save holds, and a display that quietly
+  // replaces a value it disagrees with is how a reader stops trusting the ones it does not.
+  const over = c.contribution != null && top != null && c.contribution > top;
+  const shown = over && top != null ? top : c.contribution;
 
   return (
     <div className={"std-row" + (expanded ? " open" : "")}>
       <button className="std-main" onClick={onToggle} aria-expanded={expanded}>
         <FactionMark conn={conn} id={f.id} name={f.name} color={f.color} size={15} />
-        <span className="std-bar">
+        <span className={"std-bar" + (over ? " over" : "")}>
           <i style={{ width: pct(fill), background: c.color ?? "#c07bff" }} />
         </span>
-        <span className="std-val">{c.contribution?.toLocaleString() ?? "—"}</span>
+        {/* `value / ceiling`, the shape the game's own Conquest tab uses (V29: where the game puts a number on
+            screen, that display is the oracle) — and the shape the reputation row beside it already had, so the
+            two panels read alike. The `+` is the one thing added to it: it says the save holds more than the
+            ceiling, which the game does not show and a player who earned it would otherwise think was lost. */}
+        <span className="std-val" title={over
+          ? `${c.contribution?.toLocaleString()} earned — the game counts no further than ${top?.toLocaleString()}`
+          : undefined}>
+          {shown?.toLocaleString() ?? "—"}{over && "+"}{top != null && <em> / {top.toLocaleString()}</em>}
+        </span>
         <span className="std-rankcell">
           {rankNum(c.rank) && <span className="std-rank" style={{ background: c.color ?? undefined }}>{rankNum(c.rank)}</span>}
           <span className="std-title">{c.rankName ?? (c.rank === "None" ? "Unranked" : c.rank)}</span>
@@ -282,9 +300,11 @@ function emptyReason(watching: number | null, sampler: Sampler | null): string {
 }
 
 // One ladder's history, newest first, at the bottom of its own panel.
-function ChangeLog({ conn, title, entries, ladder, onClear, watching, sampler }: {
+function ChangeLog({ conn, title, entries, ladder, onClear, watching, sampler, cap = null }: {
   conn: Conn; title: string; entries: StandingEntry[]; ladder: StandingEntry["ladder"];
   onClear: () => void; watching: number | null; sampler: Sampler | null;
+  /** The figure this ladder counts no further than, where it has one. Reputation does not. */
+  cap?: number | null;
 }) {
   const mine = useMemo(
     () => entries.filter((e) => e.ladder === ladder).slice().reverse(),
@@ -314,10 +334,20 @@ function ChangeLog({ conn, title, entries, ladder, onClear, watching, sampler }:
                 <FactionMark conn={conn} id={e.factionId} name={e.faction} size={12} />
               </span>
               <span className="std-log-d">{signed(e.delta)}</span>
-              <span className="std-log-v">{e.value.toLocaleString()}</span>
-              {/* A band crossing is the part worth seeing; an unchanged tier is noise. */}
-              {e.tier && e.tier !== e.tierWas && <span className="std-log-tier">{e.tierWas} → {e.tier}</span>}
-              {e.at && <span className="std-log-at">{e.at}</span>}
+              {/* Trimmed to the ladder's own maximum, like the row above it — a log that kept counting past a
+                  panel that stops would read as the two disagreeing about the same faction. */}
+              <span className="std-log-v" title={cap != null && e.value > cap
+                ? `${e.value.toLocaleString()} earned — the game counts no further than ${cap.toLocaleString()}`
+                : undefined}>
+                {(cap != null ? Math.min(e.value, cap) : e.value).toLocaleString()}{cap != null && e.value > cap && "+"}
+              </span>
+              {/* Both in ONE cell: the row's columns come from the list (subgrid), so a row must contribute the
+                  same number of cells as every other or the tracks stop meaning one thing.
+                  A band crossing is the part worth seeing; an unchanged tier is noise. */}
+              <span className="std-log-end">
+                {e.tier && e.tier !== e.tierWas && <span className="std-log-tier">{e.tierWas} → {e.tier}</span>}
+                {e.at && <span className="std-log-at">{e.at}</span>}
+              </span>
             </li>
           ))}
         </ol>

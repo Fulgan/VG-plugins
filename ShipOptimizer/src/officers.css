@@ -275,7 +275,15 @@
 
 /* booster card resonance bits */
 .bcard { min-height: 70px; }
-.bres { flex: 0 0 auto; font-size: 8.5px; font-weight: 700; letter-spacing: .03em; color: #0d0d10; background: #c07bff; border-radius: 3px; padding: 1px 3px; }
+/* The resonance chip is a CONTROL (it blacklists the bonus on this ship), so it is a button — dim while the
+   bonus is only partly earned, solid once finished, struck through when the player has told it to stop. */
+.bres { flex: 0 0 auto; font-size: 8.5px; font-weight: 700; letter-spacing: .03em; color: #0d0d10;
+  background: #8a5fb0; border: 0; border-radius: 3px; padding: 1px 3px; cursor: pointer; }
+.bres.done { background: #c07bff; }
+.bres.off { background: #2a2a30; color: #6f6f78; text-decoration: line-through; }
+/* A slot whose best booster is already fitted shows nothing to change — the gear tab's own paradigm. */
+.bslot-same { font-size: 10.5px; color: var(--text-faint, #6a6a78); text-align: center; padding: 10px 0 2px;
+  border-top: 1px dashed var(--border-faint, #23232b); margin-top: 6px; }
 .bprog { height: 4px; background: #101014; border: 1px solid #26262e; border-radius: 3px; overflow: hidden; }
 .bprog-fill { height: 100%; background: #c07bff; }
 .bicon-sm { display: inline-block; width: 11px; height: 11px; border-radius: 3px; vertical-align: -1px; margin-right: 4px; }
@@ -366,7 +374,18 @@
 .gt-warn { font-size: 10.5px; line-height: 1.45; margin-top: 7px; border-radius: 4px; padding: 5px 7px; }
 .gt-warn.bad { background: #2a1a1a; border: 1px solid #5a3232; color: #f0c0c0; }
 .gt-warn.good { background: #16241a; border: 1px solid #2b3a24; color: #b8e6c0; }
-.gear-ship-wrap { position: relative; display: inline-block; }
+/* THE POSITIONING CONTEXT FOR THE MOUNT DOTS, and it must be the IMAGE's box and nothing wider.
+   Each dot is placed at `left: u%` / `top: v%`, and a percentage resolves against this element — so the moment
+   this box is wider than the picture, every dot drifts right by the difference. That is what happened in the wide
+   layout, where `.gear-ship` becomes a column with `align-items: stretch` and stretched this wrapper across the
+   whole left column while the image kept its own width: five dots in a vertical line beside the ship, none on a
+ mount, and worse the wider the window.
+   `align-self: start` refuses the stretch, and `width: max-content` means no parent can size this box at all —
+   the pair is deliberate, since only the second survives a layout that positions this some other way. */
+.gear-ship-wrap {
+  position: relative; display: inline-block;
+  align-self: start; width: max-content; max-width: 100%;
+}
 .gear-img { display: block; max-width: 100%; image-rendering: pixelated; background: #0c0e12; border: 1px solid #23252c; border-radius: 8px; }
 .gear-mount { position: absolute; transform: translate(-50%, -50%); pointer-events: none; }
 .gear-mount-dot { display: block; width: 10px; height: 10px; border-radius: 50%; border: 2px solid #86b0ff88; background: #86b0ff33; box-shadow: 0 0 4px #0008; }
@@ -435,7 +454,11 @@
 
 /* Aspect badges as a right-hand cluster in a slot card: pushed off the name/stat block by `auto`, wrapping
    into a second row at two per line so a 3-aspect item grows DOWNWARD rather than squeezing the name. */
-.gear-vig-asps { flex: 0 1 auto; margin-left: auto; align-self: center; max-width: 42px; overflow: hidden; }
+/* The marks to the right of a vignette's text — aspect pips on a turret, the RES chip on a booster. A fixed
+   42px ceiling with `overflow: hidden` cut the last pip in half and clipped the chip, which reads as a broken
+   image rather than as a full row. They size to their content and the NAME gives way instead: it already
+   ellipsises, and half a word is legible where half an icon is not. */
+.gear-vig-asps { flex: 0 0 auto; margin-left: auto; align-self: center; }
 /* The badge row is inline-flex and would overflow rather than stack, so it wraps explicitly here. */
 .gear-vig-asps .asp-marks { display: flex; flex-wrap: nowrap; justify-content: flex-end; gap: 3px; }
 .gear-arrow { align-self: center; color: #4ad06a; flex: 0 0 auto; }
@@ -718,3 +741,77 @@
   flex: 0 0 auto; font-size: 9.5px; font-weight: 700; white-space: nowrap;
   background: #2a2418; border: 1px solid #5a4a24; color: #ffcf70; border-radius: 9px; padding: 1px 6px;
 }
+
+/* The per-ship resonance blocklist: a visible, reversible home for what the RES chips switch off. */
+.bblock { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; position: relative;
+  margin: 4px 0 2px; font-size: 11px; }
+
+/* What the chosen ranking mode cannot answer — stated where the suggestions are, not in a tooltip nobody opens. */
+.gear-modenote { margin: 2px 0 8px; font-size: 11.5px; color: var(--warn, #ffb020); }
+
+/* Choosing the booster for a slot by hand. The list itself is the GEAR TAB'S — `.gear-list-popin` and its rows,
+   defined once above — so only the anchoring is booster-specific: it hangs off the slot head, over the grid
+   rather than pushing it. */
+/* Refusing the proposal, beside the lock in the slot head. Red on hover because it takes a booster out of the
+   optimizer's reach until the player puts it back — reversible, but not nothing. */
+.slot-refuse { background: none; border: 1px solid #3a3a42; border-radius: 3px; color: #7d7d86; font-size: 10px;
+               padding: 1px 5px; cursor: pointer; flex: 0 0 auto; }
+.slot-refuse:hover { border-color: #a04a4a; color: #ff9b9b; }
+
+/* The resonance order is the OFFICER TAB'S priority list (`.prio-list`/`.prio-row`), so it needs no look of its
+   own — only the row that adds to it, which the officer tab keeps in a separate panel. */
+.prio-add { position: relative; padding: 4px 2px 0; }
+
+/* The booster tab is laid out like the officer tab and reuses its `.opt-grid`: what you RANK on the left, what
+   the ranking produced on the right. These two rules are the whole difference — the left panel stacks its
+   controls, and the right column is a plain flow so the slot grid, the totals and the owned list keep the
+   spacing they already had. */
+/* Narrower than the officer tab's 340px: a priority skill there carries a name AND its effect sentence, while a
+   resonance row is just a stat name and the ▲▼× column, so the same width left half the panel empty and took
+   the space off the slot grid — which is the thing actually being read. */
+.boosters .opt-grid { grid-template-columns: 232px minmax(0, 1fr); }
+@media (max-width: 900px) { .boosters .opt-grid { grid-template-columns: 1fr; } }
+.bres-panel { display: flex; flex-direction: column; gap: 8px; }
+/* One ranked list per booster type, in a 232px column. Collapsed by default for a type the ship's slots do not
+   use, because nine expanded lists are taller than the grid they are meant to be read beside. The count stays
+   on the header so a collapsed section still says whether it holds a ranking. */
+.bres-order { display: flex; flex-direction: column; gap: 4px; }
+.bres-sect { border: 1px solid #26262c; border-radius: 4px; overflow: hidden; }
+.bres-head { display: flex; align-items: center; gap: 6px; width: 100%; padding: 5px 7px;
+             background: #17171b; border: 0; color: #c8c8d0; font: inherit; font-size: 12px;
+             text-align: left; cursor: pointer; }
+.bres-head:hover { background: #1e1e24; }
+.bres-head.open { border-bottom: 1px solid #26262c; }
+.bres-caret { color: #5a5a62; font-size: 9px; width: 9px; flex: none; }
+.bres-type { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bres-count { color: #7d7d86; font-variant-numeric: tabular-nums; flex: none; }
+.bres-sect .prio-list { padding: 6px; }
+.bres-main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+/* A slot card holds CURRENT and NEW side by side, so it needs the width the gear tab gives it. At 190px the two
+   vignettes were ~85px each and every booster name truncated to "C… Co…" while the kept-verdict sentence wrapped
+   over five lines — the layout was right and the column was wrong. Wide enough for two readable vignettes, and
+   `auto-fit` so six slots use whatever the screen allows rather than insisting on six columns. */
+.bres-main .bslot-grid { grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); }
+
+/* The two lines a booster card carries without being hovered: where the booster lives, and where its resonance
+   sits in the order this ship states. The full detail is in the shared hover card, so this stays to one row. */
+.bcard-foot { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 10.5px; }
+.bcard-foot .dim { color: #6f6f78; }
+.brank { color: #c07bff; font-weight: 600; }
+.brank.un { color: #6f6f78; font-weight: 400; }
+.brank-n { color: #c07bff; margin-right: 3px; }
+/* Refusing a suggestion is destructive-ish (the booster stops being offered) so it does not look like a verb
+   the player is being invited to press — it reads only on hover, beside the card it applies to. */
+.brefuse { margin-left: auto; background: none; border: 1px solid #3a3a42; border-radius: 3px; color: #7d7d86;
+           font-size: 10px; padding: 1px 5px; cursor: pointer; }
+.brefuse:hover { border-color: #a04a4a; color: #ff9b9b; }
+.bblock.border-top { border-top: 1px solid #26262c; padding-top: 6px; margin-top: 2px; }
+.sl-vchip .x[disabled] { opacity: 0.3; cursor: default; }
+
+/* How much of a defensive layer a suggestion may spend. Sits with the ranking controls because it is part of the
+   same question — what "better" means for this ship — and reads as a sentence rather than a bare field, since a
+   number with no unit beside a percentage sign is the one thing a player cannot check at a glance. */
+.gear-cap { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: #9a9aa4; white-space: nowrap; }
+.gear-cap input { width: 52px; background: #1b1b1f; border: 1px solid #333; border-radius: 4px; color: #dbeafe;
+                  padding: 3px 6px; font-size: 12.5px; text-align: right; }
+.gear-cap input:focus { outline: none; border-color: #3a4a63; }

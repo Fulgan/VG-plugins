@@ -35,12 +35,62 @@
 .map-edge.locked { stroke: var(--map-edge-locked); stroke-dasharray: 5 4; }  /* canUseJumpGate == false */
 .map-edge.cross { stroke: var(--map-gate); stroke-width: 1.6; stroke-dasharray: 6 4; opacity: .9; }  /* leaves the subsector */
 
+/* The starfield behind the graph. Per-star duration, delay and opacity are inline (each one has its own cycle);
+   the stylesheet owns only the colour and the shape of the twinkle. Opacity is animated as a MULTIPLE of the
+   star's own — hence the same keyframes for every star at a different base brightness. */
+.map-stars { pointer-events: none; }
+.map-stars circle { fill: var(--map-star); animation: mapstar ease-in-out infinite alternate; }
+/* `--o` is the star's own brightness, set inline; the twinkle swings between a third of it and all of it, so one
+   set of keyframes serves stars of every brightness. Opacity only — no transform: a scale on an SVG circle is
+   about the viewBox origin, not the circle, so it would slide the star across the map instead of pulsing it. */
+@keyframes mapstar {
+  from { opacity: calc(var(--o) * 0.33); }
+  to { opacity: var(--o); }
+}
+@media (prefers-reduced-motion: reduce) { .map-stars circle { animation: none; } }
+
+/* A dot of traffic running down one gate line. Blue-white with a halo, and small: it should register at the edge
+   of attention and never be mistaken for a node or a marker. Fades in and out at the ends so it does not appear
+   from nothing on top of a system. Duration and path are per-spark and set inline. */
+.map-spark {
+  fill: var(--map-spark); pointer-events: none;
+  filter: drop-shadow(0 0 2.5px var(--map-spark-glow));
+  animation: mapspark linear 1 both;
+}
+/* Peak opacity is well under 1: several of these are in flight at once, and a dot as bright as a node pulls the
+   eye off whatever the map was asked to show. */
+@keyframes mapspark {
+  from { offset-distance: 0%; opacity: 0; }
+  18% { opacity: .55; }
+  82% { opacity: .55; }
+  to { offset-distance: 100%; opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) { .map-spark { display: none; } }
+
+/* The routes stop at a node rather than crossing it — this is painted in the graph's own background colour. */
+.map-back { fill: var(--map-void); pointer-events: none; }
+
 .map-node text { fill: var(--map-label); font-size: 11px; pointer-events: none; }
-/* level reads off the node itself: dark digits over the node's fill */
-.map-node .map-lvl { fill: var(--map-void); font-size: 9px; font-weight: 700; font-family: ui-monospace, "JetBrains Mono", Menlo, monospace; }
+/* Level reads off the node itself. The digit's COLOUR is chosen per node by `mapRamp.ink`, measured against that
+   node's own fill, and arrives inline — so no colour here: a fill declaration would win against the inline one
+   on specificity for exactly the nodes that need the other ink. No outline either; a measured ink needs none. */
+.map-node .map-lvl {
+  font-size: 9px; font-weight: 700;
+  font-family: ui-monospace, "JetBrains Mono", Menlo, monospace;
+}
 /* NB no `.map-node circle` rule: a node is a polygon, and the only circles under a node are the reticle and
    the special ring, which own their own stroke. A descendant selector here out-specifies theirs. */
-.map-hq { fill: none; stroke-width: 1.8; }   /* conquest headquarters — one box per faction */
+/* Conquest headquarters: the node's hexagon repeated outward, in a pale ink of its own — the fill already says
+   which faction, so the mark only has to say "this one". The outer ring is thinner, which reads as one emphasis
+   rather than two outlines. */
+.map-hq polygon { fill: none; stroke: var(--map-hq-ring); stroke-width: 1.5; }
+.map-hq polygon + polygon { stroke-width: 1; opacity: .6; }
+
+/* Umbral infection, marked wherever the virus is present at all — a drawn eye, so it does not depend on a font
+   having a glyph for one at 9px. */
+.map-eye { pointer-events: none; }
+.map-eye path { fill: var(--map-eye); }
+.map-eye .map-eye-pupil { fill: var(--map-eye-pupil); }
 
 /* ---- recency rail: "where was I?", which the in-game map doesn't answer at all ---- */
 .map-recent { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; }
@@ -160,8 +210,23 @@
 
 
 /* ---- map: node and edge treatment ---- */
-.map-shape { stroke: none; cursor: pointer; }   /* a near-black outline on a dark map reads as a dirty fringe */
+/* A faint halo in the node's OWN colour (`currentColor`, set inline with the fill): it lifts the node off the
+   backdrop and softens the hard polygon edge without adding a second colour to read. Kept on the shape, not the
+   group, so the level digit inside it stays sharp. */
+.map-shape { stroke: none; cursor: pointer; filter: drop-shadow(0 0 2.5px); }
 .map-shape.hollow { stroke-width: 1.6; }   /* never visited: outline only, no opacity tricks */
+/* The faction's own colour as a rim. Deliberately thin and unfilled: it rides ON the node body, so any width
+   here starts eating the fill the level digit sits on. No glow — the body under it already casts one. */
+.map-rim { fill: none; stroke-width: 1; pointer-events: none; }
+
+/* ---- the Umbral daily, on its own layer only (see SectorGraph's `umbral` prop) ---- */
+/* A daily SITTING ON THE BOARD carries a purple halo — the Umbral colour, dark so it reads as an aura around the
+   node rather than a second node. Replaces the node's own `currentColor` glow rather than adding to it: two
+   drop-shadows at one radius make a muddy ring. */
+.map-node.u-waiting .map-shape { filter: drop-shadow(0 0 6px var(--map-umbral-glow)) drop-shadow(0 0 2px var(--map-umbral-glow)); }
+/* ALREADY DONE TODAY: the fill is the backdrop itself (set inline), so the node is a hole. The outline is what
+   keeps it a place you can see — without it a spent station is indistinguishable from empty space. */
+.map-node.u-spent .map-shape { stroke: var(--map-umbral-dim); stroke-width: 1.2; filter: none; }
 .map-ruler line { stroke: var(--map-ruler); stroke-width: 1; }
 .map-ruler text { fill: var(--map-ruler-text); font-size: 8px; font-family: ui-monospace, "JetBrains Mono", Menlo, monospace; letter-spacing: .08em; }
 

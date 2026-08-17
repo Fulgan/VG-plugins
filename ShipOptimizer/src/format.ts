@@ -12,6 +12,19 @@ export const RARITY_RANK: Record<string, number> = { Standard: 0, Enhanced: 1, H
 
 // Compact number: ≥1000 → locale grouping, no decimals; smaller → 1 decimal. Stats / power / deltas.
 export const num = (n: number) => (n >= 1000 ? n.toLocaleString(undefined, { maximumFractionDigits: 0 }) : Number(n.toFixed(1)).toString());
+
+/** The mark credits are shown with, app-wide. The game has no registry item for credits, so there is no icon to
+ *  fetch — this IS the icon, and one owner keeps the item card, the officer tab and the wallet saying it once. */
+export const CREDIT_MARK = "¢";
+
+/**
+ * A currency name in the plural, for "23,118 Vanguard Marks".
+ *
+ * Deliberately naive — add an `s` unless it already ends in one — and safe only because the subject is a CLOSED
+ * set of a few currency names the bridge reports in the singular. Anything with real inflection to do belongs in
+ * a port of `Shared/Say.cs`, not here; this exists so a tooltip stops reading "23,118 Vanguard Mark".
+ */
+export const pluralName = (name: string) => (/s$/i.test(name) ? name : name + "s");
 // Like `num` but 2 decimals for small values — booster magnitudes and other finer readouts.
 export const fmt = (n: number) => (n >= 1000 ? n.toLocaleString(undefined, { maximumFractionDigits: 0 }) : Number(n.toFixed(2)).toString());
 
@@ -73,14 +86,29 @@ export function mainVal(it: Item): number | null {
   return best != null && Math.abs(best - shown) <= Math.abs(shown) * 0.02 + 1 ? best : shown;
 }
 
+/**
+ * One stat's totals on an item, with the WEAPON-LOCAL half kept separate.
+ *
+ * `add`/`mul` are what reaches the ship's pool; `localAdd`/`localMul` are what an aspect folds into that weapon
+ * only. A reader that wants "everything this item carries" — a card, a comparison — wants `shownAdd`/`shownMul`;
+ * a reader that is composing a POOL must use `add`/`mul` alone, or a weapon-local bonus is credited to every gun.
+ */
+export interface StatTotal { add: number; mul: number; percent: boolean; localAdd: number; localMul: number }
+
+/** Everything the item carries for display: pooled and weapon-local together. */
+export const shownAdd = (t: StatTotal): number => t.add + t.localAdd;
+export const shownMul = (t: StatTotal): number => t.mul * t.localMul;
+
 // Additive + multiplier totals per stat name, folding in EVERY line carrying that name. Items really
 // do repeat a name: a Hull Kit lists "Hull HP" twice — once as its headline multiplier (×149.6) and
 // once as an additive bonus line (+2,997) — and `statVal` only ever saw the first of the two.
-export function statTotals(it: Item): Map<string, { add: number; mul: number; percent: boolean }> {
-  const out = new Map<string, { add: number; mul: number; percent: boolean }>();
-  const bump = (name: string, add: number, mul: number, percent = false) => {
-    const cur = out.get(name) ?? { add: 0, mul: 1, percent: false };
-    out.set(name, { add: cur.add + add, mul: cur.mul * mul, percent: cur.percent || percent });
+export function statTotals(it: Item): Map<string, StatTotal> {
+  const out = new Map<string, StatTotal>();
+  const bump = (name: string, add: number, mul: number, percent = false, local = false) => {
+    const cur = out.get(name) ?? { add: 0, mul: 1, percent: false, localAdd: 0, localMul: 1 };
+    out.set(name, local
+      ? { ...cur, localAdd: cur.localAdd + add, localMul: cur.localMul * mul, percent: cur.percent || percent }
+      : { ...cur, add: cur.add + add, mul: cur.mul * mul, percent: cur.percent || percent });
   };
   for (const s of it.stats ?? []) {
     if (s.multiplier && s.multiplier !== 1) bump(s.stat, 0, s.multiplier, s.percent);
@@ -89,10 +117,16 @@ export function statTotals(it: Item): Map<string, { add: number; mul: number; pe
   // Stats an ASPECT grants count as the item's own: they are not in `stats[]` (the aspect is a separate stat
   // source on the unit), but they arrive with the item and leave with it, so any comparison that ignores them
   // undervalues a fitted aspect — a reactor's "+10% reactor energy" against a plainly bigger reactor.
+  //
+  // SPLIT BY SCOPE, because the two are different quantities and summing them overstates the second by the whole
+  // battery: a `BoostStat` line pools at the unit, a `TurretBoostStat` line is folded into that weapon alone
+  // (`Critical Attenuation`, +25% critical strike damage, is one). A line with no scope is treated as pooled —
+  // that is what an older bridge's payload means, and what every non-aspect line is.
   for (const a of it.aspects ?? [])
     for (const s of a.stats ?? []) {
-      if (s.multiplier && s.multiplier !== 1) bump(s.stat, 0, s.multiplier, s.percent);
-      else bump(s.stat, s.amount, 1, s.percent);
+      const local = s.scope === "weapon";
+      if (s.multiplier && s.multiplier !== 1) bump(s.stat, 0, s.multiplier, s.percent, local);
+      else bump(s.stat, s.amount, 1, s.percent, local);
     }
   // Some items keep their headline out of `stats` altogether (a Tractor Beam's "12 Tractor Beams"),
   // which made it invisible to comparisons — fold the parsed main stat in when it's missing.
@@ -130,6 +164,33 @@ export function compareStats(a: Item, b: Item): { stat: string; d: number; perce
   return rows
     .filter((r) => (r.percent ? Math.round(r.d * 1e4) !== 0 : Math.round(r.d * 10) !== 0))
     .sort((r1, r2) => r1.stat.localeCompare(r2.stat));
+}
+
+/**
+ * Headline stats whose worth SATURATES: past the named figure, more of it does nothing the player can feel.
+ *
+ * A count is not a magnitude, and this is where the two part company. A tractor beam's headline is `Tractor
+ * Beams` — 6, 10 — and beyond about five the extra beams only gather loot marginally faster (player-reported on
+ * game 0.8.1.23, `the internal notes`). Priced as a magnitude it dominates every comparison it enters:
+ * `compareModules` reads the headline FIRST, so a 10-beam module beat a 6-beam one that was better at everything
+ * else, which is a swap the player would undo by hand.
+ *
+ * A JUDGEMENT, and narrow on purpose: only stats whose ceiling is known go in here, and the ceiling is the point
+ * beyond which the game itself stops paying — not a taste about how much the stat matters.
+ */
+export const STAT_SATURATION: Record<string, number> = { "Tractor Beams": 5 };
+
+/**
+ * The headline as a DECISION reads it: `effectiveMainVal`, clamped where the stat saturates.
+ *
+ * Every comparison of two modules goes through this; the raw figure stays what the CARD shows and what the pools
+ * are folded from, because a saturated stat is still really there — it just cannot win an argument.
+ */
+export function saturatedMainVal(it: Item): number | null {
+  const v = effectiveMainVal(it);
+  if (v == null) return null;
+  const cap = it.mainStat ? STAT_SATURATION[it.mainStat.name] : undefined;
+  return cap == null ? v : Math.min(v, cap);
 }
 
 // Main stat *including item bonuses on that same stat* — a turret whose headline is Combat Power and

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using Behaviour.Equipment.Turret;
@@ -260,7 +260,7 @@ namespace StationAssistant
                 try
                 {
                     ctx.Armory.Add(e.item, count);
-                    ctx.Cargo.Remove(e, count);
+                    VG.Game.GameMembers.RemoveItems(ctx.Cargo, e, count);
                     stowed += count;
                     MoveLog.Add(log?.Stowed, Util.ItemName(e.item), count);
                 }
@@ -280,7 +280,7 @@ namespace StationAssistant
             try
             {
                 ctx.Armory.Add(ammo, excess);
-                ctx.Cargo.Remove(ammo, excess);
+                VG.Game.GameMembers.RemoveItems(ctx.Cargo, ammo, excess);
                 r.Stowed += excess;
                 MoveLog.Add(r.Moves?.Stowed, Util.ItemName(ammo), excess);
             }
@@ -304,7 +304,7 @@ namespace StationAssistant
                 {
                     try
                     {
-                        ctx.Armory.Remove(ammo, take);
+                        VG.Game.GameMembers.RemoveItems(ctx.Armory, ammo, take);
                         ctx.Cargo.Add(ammo, take);
                         r.Pulled += take;
                         MoveLog.Add(r.Moves?.Pulled, Util.ItemName(ammo), take);

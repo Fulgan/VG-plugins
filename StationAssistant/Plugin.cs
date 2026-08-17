@@ -6,6 +6,7 @@ using System.Reflection;
 using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Logging;
+using VG.Shared;
 using Behaviour.Item;
 using Behaviour.Item.Usable;
 using Behaviour.UI.Spacestation;
@@ -23,7 +24,7 @@ namespace StationAssistant
 {
     internal enum SellTrigger { Manual, OnDock, OnUndock }
 
-    [BepInPlugin(Guid, "Station Assistant", "1.1.1")]
+    [BepInPlugin(Guid, "Station Assistant", "1.1.2")]
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "fulgan.vanguardgalaxy.stationassistant";
@@ -155,6 +156,18 @@ namespace StationAssistant
         {
             ToggleKey = file.Bind("UI", "ToggleKey", new KeyboardShortcut(KeyCode.F7),
                 "Key to open/close the in-game settings window.");
+
+            // HIDDEN developer flag, off by default: times each dock/undock step and logs the ones that held the
+            // frame long enough to feel. A player's log is for what
+            // went wrong, ⊥ for measurements, so this is invisible in the settings window and has to be set in the
+            //.cfg — the same treatment Hypercom gives its debug endpoints. Removal is tracked as.
+            var logSlow = file.Bind("Debug", "LogSlowSteps", false,
+                new ConfigDescription(
+                    "Log a warning when an on-dock/undock automation step holds the game's frame for more than 50ms. "
+                    + "Developer diagnostic — leave off for normal play.",
+                    null, new ConfigurationManagerAttributes { Browsable = false, IsAdvanced = true }));
+            VG.Shared.Stall.Enabled = logSlow.Value;
+            logSlow.SettingChanged += (_, __) => VG.Shared.Stall.Enabled = logSlow.Value;
 
             Enabled = file.Bind("DecoyTransponder", "Enabled", true,
                 "Master switch for decoy (Umbral) transponder automation on undock.");
@@ -399,14 +412,21 @@ namespace StationAssistant
                 // Quartermaster restock (after the decoy is activated, so the deployed one gets replaced).
                 // OnUndock is the default: it targets the ship you actually leave in — switching ships in a
                 // station still leaves stocked.
+                //
+                // TIMED, all three: this body runs inside a Harmony patch, so the game is frozen for exactly as
+                // long as it takes, and the cost grows with the playthrough (one ammo pass moved 1,269 items on a
+                // reported save). A freeze nobody can attribute is what these lines exist to prevent.
                 if (cfg.Enabled.Value && cfg.QmMode.Value == SellTrigger.OnUndock)
-                    Plugin.Window.ShowLastQm(Quartermaster.Restock(cfg));
+                    Stall.Timed(say => { var r = Quartermaster.Restock(cfg); Plugin.Window.ShowLastQm(r); say($"stowed {r.Stowed}, pulled {r.Pulled}, bought {r.Bought}"); },
+                                "undock quartermaster", Plugin.Log.LogWarning);
 
                 // Sell / gunner can run on undock too — acts on the ship you actually leave in.
                 if (cfg.SellEnabled.Value && cfg.SellMode.Value == SellTrigger.OnUndock)
-                    Plugin.Window.ShowLastSell(AutoSell.SellNow(cfg));
+                    Stall.Timed(say => { var r = AutoSell.SellNow(cfg); Plugin.Window.ShowLastSell(r); say($"{r.Items} item(s) sold"); },
+                                "undock auto-sell", Plugin.Log.LogWarning);
                 if (cfg.AmmoEnabled.Value && cfg.AmmoMode.Value == SellTrigger.OnUndock)
-                    Plugin.Window.ShowLastAmmo(Gunner.RunNow(cfg));
+                    Stall.Timed(say => { var r = Gunner.RunNow(cfg); Plugin.Window.ShowLastAmmo(r); say($"stowed {r.Stowed}, pulled {r.Pulled}, bought {r.Bought}"); },
+                                "undock ammo valet", Plugin.Log.LogWarning);
             }
             catch (Exception ex)
             {
@@ -431,7 +451,7 @@ namespace StationAssistant
             // OnUse returns true when a charge is consumed.
             if (transponder != null && transponder.OnUse())
             {
-                cargo.Remove(entry, 1);
+                VG.Game.GameMembers.RemoveItems(cargo, entry, 1);
                 Plugin.Log.LogInfo("Decoy transponder activated.");
                 return true;
             }
@@ -519,12 +539,16 @@ namespace StationAssistant
             try
             {
                 var cfg = Plugin.Cfg;
+                // Timed for the same reason the undock path is: the frame is held for the whole body.
                 if (cfg.Enabled.Value && cfg.QmMode.Value == SellTrigger.OnDock)
-                    Plugin.Window.ShowLastQm(Quartermaster.Restock(cfg));
+                    Stall.Timed(say => { var r = Quartermaster.Restock(cfg); Plugin.Window.ShowLastQm(r); say($"stowed {r.Stowed}, pulled {r.Pulled}, bought {r.Bought}"); },
+                                "dock quartermaster", Plugin.Log.LogWarning);
                 if (cfg.SellEnabled.Value && cfg.SellMode.Value == SellTrigger.OnDock)
-                    Plugin.Window.ShowLastSell(AutoSell.SellNow(cfg));
+                    Stall.Timed(say => { var r = AutoSell.SellNow(cfg); Plugin.Window.ShowLastSell(r); say($"{r.Items} item(s) sold"); },
+                                "dock auto-sell", Plugin.Log.LogWarning);
                 if (cfg.AmmoEnabled.Value && cfg.AmmoMode.Value == SellTrigger.OnDock)
-                    Plugin.Window.ShowLastAmmo(Gunner.RunNow(cfg));
+                    Stall.Timed(say => { var r = Gunner.RunNow(cfg); Plugin.Window.ShowLastAmmo(r); say($"stowed {r.Stowed}, pulled {r.Pulled}, bought {r.Bought}"); },
+                                "dock ammo valet", Plugin.Log.LogWarning);
             }
             catch (Exception ex)
             {

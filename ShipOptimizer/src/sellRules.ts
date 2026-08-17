@@ -11,6 +11,8 @@
 import type { Item } from "./types";
 import { effectiveMainVal } from "./format";
 import { catOf, isTurret } from "./itemKind";
+// The game's own resonance fraction, so a filter and the booster optimizer agree on what "in progress" means.
+import { resonanceLive } from "./booster";
 
 export type Kind = "keep" | "sell";
 export type Dir = "asc" | "desc";
@@ -38,6 +40,12 @@ export interface FieldDef {
   get: (it: Item, ctx: FieldCtx) => string | number | string[] | null | undefined;
   /** Counts read "most/fewest" where magnitudes read "highest/lowest". */
   counting?: boolean;
+  /**
+   * A range field with ONE reading: a floor. Per the user, "no need for a comparison picker, it's always at
+   * least" — and it is not only convenience: a CEILING on the figure an item is chosen for says "give me a
+   * weaker one", so the picker offers no comparison and the chip has no side to flip.
+   */
+  onlyMin?: boolean;
   /** Ordering by a pooled power figure is only meaningful inside one unit. */
   pooled?: boolean;
 }
@@ -46,6 +54,14 @@ export interface FieldCtx {
   cats: Cats;
   /** The player's own level, for "level vs mine". */
   myLevel: number;
+  /**
+   * How many of each item NAME the player already holds, for the shopping list's `copies owned` clause.
+   *
+   * Absent on the sell side, where it reads 0 for everything — which is also what keeps the field out of the
+   * sell list's picker without that picker having to know the field is buy-side: it offers only fields whose
+   * value VARIES across the items in front of it.
+   */
+  owned?: Record<string, number>;
 }
 
 /** A booster's real identity is its MAIN STAT: the DTO reports `type: "Booster"` for every one of them, so
@@ -79,11 +95,44 @@ export const FIELDS: Record<string, FieldDef> = {
   cat:  { label: "category",      kind: "multi", get: catsOf },
   dt:   { label: "damage",        kind: "set",   get: (it) => it.damageType },
   ms:   { label: "main stat",     kind: "set",   get: (it) => it.mainStat?.name ?? null },
+  // WHAT the headline is worth, beside `ms`'s WHICH it is — "any Large gun over 11K Combat Power" is the plainest
+  // want there is and had no clause. The EFFECTIVE figure, ⊥ the printed one: `mainVal` reads a display string
+  // rounded to three significant figures, and `effectiveMainVal` folds the aspect-granted lines the card already
+  // shows, which is the number the player is comparing against.
+  mv:   { label: "main stat amount", kind: "range", onlyMin: true, get: (it) => effectiveMainVal(it) ?? 0 },
   sub:  { label: "substat",       kind: "multi", get: (it) => (it.substats ?? []).map((x) => x.stat).filter(Boolean) },
+  // HOW MANY bonus lines, as opposed to WHICH ones (`sub`) — the pair `asp`/`aspN` already is, ticked the same
+  // way: the counts a roll actually comes with are a short list, so several ticked read as OR ("2 or 3 of them,
+  // whatever they are"). Named `substats count` because "substat" and "substats" one line apart in the picker
+  // is two fields the player has to guess between.
+  subN: { label: "substats count", kind: "set", counting: true, get: (it) => (it.substats ?? []).length },
   asp:  { label: "aspect",        kind: "multi", get: (it) => aspectNames(it) },
   aspN: { label: "aspect slots",  kind: "set",   get: (it) => it.aspectSlots ?? 0, counting: true },
   aspE: { label: "empty slots",   kind: "set",   counting: true,
           get: (it) => Math.max(0, (it.aspectSlots ?? 0) - aspectNames(it).length) },
+  // Shop-floor fields. An owned item has no price and its owned count is not reported here, so both read a
+  // constant on the sell side and the picker leaves them out of a sell rule by itself.
+  //
+  // A BARTER offer leaves `cost` null and prices itself in goods, so it is INFINITELY far outside any credit
+  // cap rather than free: "price at most 200,000" must not quietly claim an offer whose price is 12 marks.
+  p:    { label: "price",         kind: "range", get: (it) => (it.costItem ? Number.POSITIVE_INFINITY : it.cost ?? 0) },
+  own:  { label: "copies owned",  kind: "range", counting: true, get: (it, c) => c.owned?.[it.name] ?? 0 },
+  // RESONANCE — resonant boosters only, and the feature is BETA-ONLY on the game side (`ResonantBooster` is
+  // absent from the release build, so the bridge sends `resonance: null` for everything). Every clause here
+  // therefore reads the same on a release build ∴ `fieldVaries` drops all four from the picker by itself, with
+  // no build check to keep in sync — the same mechanism that keeps `price` out of a list of things you own.
+  res:  { label: "resonance",     kind: "set", get: (it) => (it.resonance
+            ? (it.resonance.unlocked ? "finished" : resonanceLive(it.resonance) > 0 ? "in progress" : "unstarted")
+            : "none") },
+  // The stat the bonus grants, which is what a player chases or blocks — ⊥ the booster's own headline (`ms`).
+  resS: { label: "resonance bonus", kind: "set", get: (it) => it.resonance?.bonusStat ?? null },
+  // What it wants DONE. A `kills` threshold on a hauler never progresses, so this is how a shopping list says
+  // "only boosters my ship can actually finish".
+  resU: { label: "resonance needs", kind: "set", get: (it) => it.resonance?.unit ?? null },
+  // How far along, as a PERCENTAGE: thresholds differ by orders of magnitude between units (1 per kill against a
+  // credit count), so raw progress is not comparable across boosters and the fraction is the only honest figure.
+  resP: { label: "resonance progress %", kind: "range",
+          get: (it) => (it.resonance ? Math.round(resonanceLive(it.resonance) * 100) : 0) },
 };
 
 /**
@@ -191,10 +240,133 @@ export const rankVal = (it: Item, f: string): number =>
 // ---------------------------------------------------------------------------------------------------
 // The rule
 // ---------------------------------------------------------------------------------------------------
-export interface SetCond { values: string[]; not?: boolean }
+export interface SetCond {
+  values: string[];
+  /** Inverts whatever the clause selects. What that MEANS depends on `need`, so read `setQOf`, not this. */
+  not?: boolean;
+  /**
+   * HOW MANY of the ticked values the item needs. Absent = 1, i.e. any of them.
+   *
+   * A number is a threshold ("at least 2 of these three aspects"); `"all"` tracks the LIST rather than a count,
+   * so ticking a fourth value still means every one — storing `4` there would silently become "at least 4 of 5".
+   *
+   * Only a `multi` field can hold several values at once (aspects, substats, activities, categories), so a
+   * threshold is offered there alone: a `set` field answers with ONE value, and "size is Small and Large"
+   * matches nothing.
+   */
+  need?: number | "all";
+  /** The earlier stored spelling of `need: "all"`. Read so a saved rule keeps meaning what it said. */
+  all?: boolean;
+}
+
+/** `need` as a number, against the clause's own list. Absent = 1: any one of them. */
+export const needCount = (c: SetCond): number => {
+  const n = c.need ?? (c.all ? "all" : 1);
+  return n === "all" ? Math.max(1, c.values.length) : Math.max(1, Math.min(n, c.values.length || 1));
+};
+
+/**
+ * Every reading a ticked list has, as the ONE list its control offers — the same shape `RelQ` gives the
+ * relative-level clause, and for the same reason: the chip, the picker and the sentence must not word a clause
+ * three ways.
+ *
+ * These are the words the player sees. `not` and a threshold are what the RULE stores, and the pairing is not
+ * something to make anyone work out: "has none of" is `not` over a threshold of one, while "is missing at least
+ * one of" is `not` over ALL — the same tick with `not` set, selecting a completely different set of items.
+ */
+export type SetQ = "any" | "all" | "atLeast" | "none" | "notAll" | "fewer";
+/** Order shown: the two plain readings, then the counted ones, then the three negatives. */
+export const SET_QS: SetQ[] = ["any", "all", "atLeast", "none", "notAll", "fewer"];
+/** Readings a field can offer at all: a one-value field (a size, a quality) can only be one of them or not. */
+export const SET_QS_ONE: SetQ[] = ["any", "none"];
+export const setQNeedsNumber = (q: SetQ) => q === "atLeast" || q === "fewer";
+
+/** Which reading a stored clause IS. */
+export function setQOf(c: SetCond): SetQ {
+  const all = (c.need ?? (c.all ? "all" : 1)) === "all";
+  const n = needCount(c);
+  if (c.not) return all && c.values.length > 1 ? "notAll" : n > 1 ? "fewer" : "none";
+  return all && c.values.length > 1 ? "all" : n > 1 ? "atLeast" : "any";
+}
+
+/** The clause a reading writes over the values already ticked. `n` is used only by the counted readings. */
+export function setCondFor(q: SetQ, c: SetCond, n = 2): SetCond {
+  const values = c.values;
+  switch (q) {
+    case "any":     return { values, not: false, need: 1 };
+    case "all":     return { values, not: false, need: "all" };
+    case "atLeast": return { values, not: false, need: Math.max(2, n) };
+    case "none":    return { values, not: true, need: 1 };
+    case "notAll":  return { values, not: true, need: "all" };
+    case "fewer":   return { values, not: true, need: Math.max(2, n) };
+  }
+}
+
+/**
+ * A reading in words, for a control. `several` is false for a field that answers with one value, where "has any
+ * of" would be a promise the data cannot keep — a turret has one size, so the question is only which.
+ *
+ * `one` shortens the two readings a single ticked value has: "is Legendary" beats "is one of Legendary".
+ */
+export function setQWords(q: SetQ, several: boolean, one = false): string {
+  if (!several) return q === "none" ? (one ? "is not" : "is none of") : (one ? "is" : "is one of");
+  switch (q) {
+    case "any":     return one ? "has" : "has any of";
+    case "all":     return "has all of";
+    case "atLeast": return "has at least";
+    case "none":    return one ? "does not have" : "has none of";
+    case "notAll":  return "is missing at least one of";
+    case "fewer":   return "has fewer than";
+  }
+}
 export interface RangeCond { min?: number | null; max?: number | null }
 export type Cond = SetCond | RangeCond;
+
+/**
+ * The clauses of one rule, keyed by CLAUSE: a field id for the first clause about that field, `field#n` for a
+ * further one.
+ *
+ * Clauses are ANDed and the values inside one clause are ORed, so two clauses over one field say an AND of two
+ * lists — "has any of Crit Chance or Crit Damage AND has any of Fire Rate or Damage" — which no single ticked
+ * list says at any threshold: `need` counts across ONE list, and `all` demands every value in it.
+ *
+ * Iteration is INSERTION order, since no key is an array index: that is the order the clauses were written and
+ * the order `whereFail` reports them in.
+ */
 export type Where = Record<string, Cond>;
+
+/** The field a clause key names. Every `FIELDS` lookup from a `where` key goes through this. */
+export const fieldOf = (key: string): string => {
+  const i = key.indexOf("#");
+  return i < 0 ? key : key.slice(0, i);
+};
+
+/** Every clause about one field, as keys, in the order the rule holds them. */
+export const clauseKeys = (where: Where, field: string): string[] =>
+  Object.keys(where).filter((k) => fieldOf(k) === field);
+
+export const hasField = (where: Where, field: string): boolean =>
+  Object.keys(where).some((k) => fieldOf(k) === field);
+
+/**
+ * Does this field tell the rows in front of us APART?
+ *
+ * A field every row answers the same way says nothing about them — and it is what keeps the two SHOP-FLOOR
+ * fields out of a sell rule and out of a sell list's columns with no buy-side flag anywhere in the code: an
+ * owned item has no `cost` and reports no owned count, so `p` and `own` are one value over an armory and
+ * nineteen over a shop floor. A clause or column ALREADY in force is offered regardless.
+ */
+export const fieldVaries = (items: Item[], field: string, ctx: FieldCtx): boolean =>
+  new Set(items.flatMap((it) => {
+    const v = FIELDS[field]?.get(it, ctx);
+    return v == null ? [] : Array.isArray(v) ? v : [v];
+  })).size > 1;
+
+/** Where a NEW clause about this field goes, leaving the clauses already there untouched. */
+export function freeKey(where: Where, field: string): string {
+  if (!(field in where)) return field;
+  for (let n = 2; ; n++) if (!(`${field}#${n}` in where)) return `${field}#${n}`;
+}
 
 export interface Take { mode: "only" | "except"; n: number }
 export interface Having { op: "gt" | "lt"; n: number }
@@ -276,41 +448,58 @@ export const valueLabel = (field: string, v: string): string =>
   : field === "a" && v === "Other" ? "no activity (modules, boosters)"
   : v;
 
-const asList = (v: string | number | string[] | null | undefined): string[] => {
+export const asList = (v: string | number | string[] | null | undefined): string[] => {
   if (v == null) return [NO_VALUE];
   const xs = Array.isArray(v) ? v.map(String) : [String(v)];
   return xs.length ? xs : [NO_VALUE];
 };
 
-export function matchesWhere(it: Item, where: Where, ctx: FieldCtx): boolean {
+/**
+ * The FIRST clause this item fails, as its clause key — null when the item matches the whole filter.
+ *
+ * The matcher answers "which", and `matchesWhere` asks it for "whether". A filter that only reports a boolean
+ * leaves the split with a count and no reason, and the only way to learn which clause dropped an item is to
+ * take the clause off and watch the number move.
+ *
+ * Clauses are tested in the order the rule stores them, so the named one is the first the player wrote that
+ * this item fails — not the only one it fails.
+ */
+export function whereFail(it: Item, where: Where, ctx: FieldCtx): string | null {
   for (const [k, cond] of Object.entries(where)) {
-    const F = FIELDS[k];
+    const F = FIELDS[fieldOf(k)];
     if (!F) continue; // a rule may name a field this build does not have — inert, never a throw
     if (F.kind === "range") {
       const c = cond as RangeCond;
       // A half-written comparison matches everything on purpose, rather than nothing.
       if (c.min == null && c.max == null) continue;
       const v = Number(F.get(it, ctx) ?? 0);
-      if (c.min != null && v < c.min) return false;
-      if (c.max != null && v > c.max) return false;
+      if (c.min != null && v < c.min) return k;
+      if (c.max != null && v > c.max) return k;
     } else {
       const c = cond as SetCond;
       if (!c.values?.length) continue;
       const have = asList(F.get(it, ctx));
-      const hit = c.values.some((v) => have.includes(String(v)));
-      if (c.not ? hit : !hit) return false;
+      // ONE test for every reading: count the ticked values the item carries and compare against what the clause
+      // needs. `not` then inverts it, which is why the two negatives are different sets — below one is "none of
+      // them", below all is "missing at least one" — and why the sentence has to say which (see `setQOf`).
+      const got = c.values.reduce((n, v) => n + (have.includes(String(v)) ? 1 : 0), 0);
+      const hit = got >= needCount(c);
+      if (c.not ? hit : !hit) return k;
     }
   }
-  return true;
+  return null;
 }
+
+export const matchesWhere = (it: Item, where: Where, ctx: FieldCtx): boolean =>
+  whereFail(it, where, ctx) === null;
 
 /** Does a ranking by this measure mean anything for this rule? Power is a number only inside ONE unit:
  *  grouping by type, activity or main stat pins one, and so does filtering down to a single one. */
 export function pinsUnit(rule: Rule): boolean {
-  const single = (k: string) => {
-    const c = rule.where[k] as SetCond | undefined;
+  const single = (k: string) => clauseKeys(rule.where, k).some((key) => {
+    const c = rule.where[key] as SetCond | undefined;
     return !!c?.values && c.values.length === 1 && !c.not;
-  };
+  });
   return ["a", "t", "ms"].some((k) => rule.group.includes(k) || single(k));
 }
 
@@ -337,10 +526,14 @@ export interface Group {
   nIn: number;
   nOut: number;
 }
+/** An item no clause selected, WITH the clause that turned it away — see `whereFail`. `k` is null only for a
+ *  rule with no clauses at all, which selects everything and excludes nothing. */
+export interface Excluded { it: Item; k: string | null }
+
 export interface Explain {
   groups: Group[];
   /** Selected by no filter — they take the default stance. */
-  excluded: Item[];
+  excluded: Excluded[];
   /** Removed before matching: the game will not sell them at all. */
   protected: Item[];
   /** Indices into the input list that this rule acts on. */
@@ -349,13 +542,14 @@ export interface Explain {
 
 export function explain(rule: Rule, items: Item[], ctx: FieldCtx): Explain {
   const cand: { it: Item; i: number }[] = [];
-  const excluded: Item[] = [];
+  const excluded: Excluded[] = [];
   const prot: Item[] = [];
   items.forEach((it, i) => {
     // Protected items are out of the question entirely — not candidates, not "out", not "not selected".
     if (cantSell(it)) { prot.push(it); return; }
-    if (matchesWhere(it, rule.where, ctx)) cand.push({ it, i });
-    else excluded.push(it);
+    const k = whereFail(it, rule.where, ctx);
+    if (k === null) cand.push({ it, i });
+    else excluded.push({ it, k });
   });
 
   const buckets = new Map<string, { it: Item; i: number }[]>();
@@ -428,15 +622,41 @@ export const groupLabel = (g: string[]) => "each " + groupWords(g.map((k) => FIE
 export const dirWord = (dir: Dir, f: string) =>
   ORDERS[f]?.counting ? (dir === "desc" ? "most" : "fewest") : dir === "desc" ? "highest" : "lowest";
 
+/**
+ * One set clause as a phrase, in the SAME reading the control shows (`setQOf`). Each caller supplies the two
+ * prepositions that fit its own field — "carrying" reads wrong over categories, "in" reads wrong over aspects —
+ * and the counted and negated readings are built from them here so no caller can word one differently.
+ *
+ * A threshold joins its values with "or" (any 2 OF THESE), an "all" with "and" (this one AND that one): the
+ * conjunction is part of what the clause means, not decoration.
+ */
+const setPhrase = (c: SetCond, yes: string, no: string, notAll: string) => {
+  const q = setQOf(c);
+  const n = needCount(c);
+  switch (q) {
+    case "any":     return `${yes} ${listWords(c.values)}`;
+    case "all":     return `${yes} ${groupWords(c.values)}`;
+    case "atLeast": return `${yes} at least ${n} of ${listWords(c.values)}`;
+    case "none":    return `${no} ${listWords(c.values)}`;
+    case "notAll":  return `${notAll} ${groupWords(c.values)}`;
+    case "fewer":   return `${yes} fewer than ${n} of ${listWords(c.values)}`;
+  }
+};
+
 /** A canonical clause order, so the sentence reads the same however the filters were added — and so the
  *  absolute level clause always precedes the relative one that leans on it for its noun. */
-const PHRASE_ORDER = ["c", "st", "a", "s", "r", "t", "cat", "dt", "ms", "l", "lrel", "v", "aspN", "aspE", "asp", "sub"];
+const PHRASE_ORDER = ["c", "st", "a", "s", "r", "t", "cat", "dt", "ms", "mv", "l", "lrel", "v", "p", "own", "subN", "aspN", "aspE", "asp", "sub"];
 
-export function subjectPhrase(where: Where): string {
+/** `everything` is what the phrase says when no clause narrows it: the sell list speaks of what you own, the
+ *  shopping list of what is on offer, and the same clauses read either way round. */
+export function subjectPhrase(where: Where, everything = "everything I own"): string {
   const adj: string[] = [], rel: string[] = [];
+  // Clauses about one field keep the order the rule holds them in: the sort is stable, and their shared field
+  // gives them one place in the canonical order.
   const ordered = Object.entries(where).sort(
-    (x, y) => ((PHRASE_ORDER.indexOf(x[0]) + 1) || 99) - ((PHRASE_ORDER.indexOf(y[0]) + 1) || 99));
-  for (const [k, cond] of ordered) {
+    (x, y) => ((PHRASE_ORDER.indexOf(fieldOf(x[0])) + 1) || 99) - ((PHRASE_ORDER.indexOf(fieldOf(y[0])) + 1) || 99));
+  for (const [key, cond] of ordered) {
+    const k = fieldOf(key);
     const F = FIELDS[k];
     if (!F) continue;
     if (k === "lrel") {
@@ -454,7 +674,14 @@ export function subjectPhrase(where: Where): string {
         p.push(`${t.q} ${t.n} ${t.dir} my level`);
       }
       // No "whose level is" when the absolute clause has already said it, and one when it has not.
-      if (p.length) rel.push(("l" in where ? "" : "whose level is ") + p.join(" and "));
+      if (p.length) rel.push((hasField(where, "l") ? "" : "whose level is ") + p.join(" and "));
+    } else if (k === "own") {
+      // A holding is something you HAVE, not a property of the offer: "whose copies owned is at most 1" reads as
+      // a fact about the item on the shelf, and the clause is about the shelf at home.
+      const c = cond as RangeCond, p: string[] = [];
+      if (c.max != null) p.push("at most " + c.max);
+      if (c.min != null) p.push("at least " + c.min);
+      if (p.length) rel.push(`that I already own ${p.join(" and ")} of`);
     } else if (F.kind === "range") {
       const c = cond as RangeCond, p: string[] = [];
       if (c.min != null) p.push("at least " + c.min);
@@ -463,14 +690,35 @@ export function subjectPhrase(where: Where): string {
     } else {
       const c = cond as SetCond;
       if (!c.values?.length) continue;
-      if (k === "asp") rel.push(`${c.not ? "without" : "carrying"} ${listWords(c.values)}`);
-      else if (k === "sub") rel.push(`${c.not ? "without" : "with"} ${listWords(c.values)}`);
-      else if (k === "cat") rel.push(`${c.not ? "outside" : "in"} ${listWords(c.values)}`);
+      if (k === "asp") rel.push(setPhrase(c, "carrying", "without", "not carrying all of"));
+      else if (k === "sub") rel.push(setPhrase(c, "with", "without", "missing at least one of"));
+      else if (k === "cat") rel.push(setPhrase(c, "in", "outside", "not in all of"));
+      // The field is called `substats count` so the picker cannot be mistaken for `substat`, but a sentence
+      // counts the things themselves: "with 2 or 3 substats", never "with 2 or 3 substats count".
+      else if (k === "subN")
+        rel.push(`${c.not ? "without" : "with"} ${listWords(c.values)} substat${c.values.length === 1 && c.values[0] === "1" ? "" : "s"}`);
       else if (F.counting) rel.push(`${c.not ? "without" : "with"} ${listWords(c.values)} ${F.label}`);
-      else adj.push(`${c.not ? "not " : ""}${listWords(c.values.map((v) => valueLabel(k, v)))}`);
+      else {
+        // These read as ADJECTIVES on the subject — "everything Legendary, Large" — which only the two plain
+        // readings fit. A counted one ("at least 2 of Mining, Combat") is a fact about a list, so it moves to a
+        // relative clause instead of being forced into the noun phrase.
+        const labelled = { ...c, values: c.values.map((v) => valueLabel(k, v)) };
+        const q = setQOf(c);
+        const several = F.kind === "multi";
+        // The adjective form cannot say AND: two clauses over one field, both read as adjectives, give
+        // "everything Legendary, Exotic" — which is what ONE clause's own OR already reads as. So a field
+        // carrying several clauses names itself in each of them.
+        if (clauseKeys(where, k).length > 1)
+          rel.push(`whose ${F.label} ` + setPhrase(labelled,
+            several ? "has" : "is", several ? "has none of" : "is not",
+            several ? "is missing at least one of" : "is not all of"));
+        else if (q === "any") adj.push(listWords(labelled.values));
+        else if (q === "none") adj.push("not " + listWords(labelled.values));
+        else rel.push(setPhrase(labelled, "with", "without", "missing at least one of"));
+      }
     }
   }
-  let out = adj.length ? "everything " + adj.join(", ") : "everything I own";
+  let out = adj.length ? "everything " + adj.join(", ") : everything;
   if (rel.length) out += " " + rel.join(" and ");
   return out;
 }
@@ -530,10 +778,9 @@ export interface SellListFile {
   cats: Cats;
 }
 
-const setValues = (rule: Rule, field: string): string[] => {
-  const c = rule.where[field] as SetCond | undefined;
-  return c?.values ?? [];
-};
+/** Every value the rule's clauses about this field name — across all of them, since a field can carry several. */
+const setValues = (rule: Rule, field: string): string[] =>
+  clauseKeys(rule.where, field).flatMap((k) => (rule.where[k] as SetCond | undefined)?.values ?? []);
 /** Every category name the rules mention, whether or not this browser defines it. */
 export const referencedCats = (rules: Rule[]): string[] =>
   [...new Set(rules.flatMap((r) => setValues(r, "cat")))].sort();

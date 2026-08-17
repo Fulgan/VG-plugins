@@ -1,4 +1,4 @@
-import type { ApplyRequest, ApplyResult, CatalogTypes, Galaxy, Inventories, Item, LedgerDto, Loadout, LoadoutPresetInfo, Logs, Materials, Officers, Recruits, Reputation, ShipLayout, Ships, Shops, StandingLog, Status, UndoResult, Vitals } from "./types";
+import type { ApplyRequest, ApplyResult, CatalogTypes, Galaxy, Inventories, Item, LedgerDto, Loadout, LoadoutPresetInfo, Logs, Materials, Officers, Recruits, Reputation, ShipLayout, Ships, Shops, StandingLog, Status, UndoResult, Vitals, MissionLog } from "./types";
 
 // Connection settings, persisted to localStorage.
 export interface Conn {
@@ -146,6 +146,10 @@ export const api = {
   standingLog: (c: Conn, since = 0) => get<StandingLog>(c, `/reputation/log?since=${since}`),
   catalogTypes: (c: Conn) => get<CatalogTypes>(c, "/catalog/types"),
   log: (c: Conn) => get<Logs>(c, "/log"),
+  // The mission history the bridge watches for. `since` is an ISO timestamp — a client asks for what it
+  // has not seen rather than re-reading a playthrough's whole log.
+  missionsLog: (c: Conn, since?: string, limit = 500) =>
+    get<MissionLog>(c, `/missions/log?limit=${limit}` + (since ? `&since=${encodeURIComponent(since)}` : "")),
   // loadout transient (apply/undo/pending)
   loadoutApply: (c: Conn, body: ApplyRequest) => send<ApplyResult>(c, "POST", "/loadout/apply", body),
   loadoutUndo: (c: Conn) => send<UndoResult>(c, "POST", "/loadout/undo"),

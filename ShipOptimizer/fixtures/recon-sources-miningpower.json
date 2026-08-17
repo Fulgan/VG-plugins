@@ -1,0 +1,81 @@
+{
+ "stat": "MiningPower",
+ "shipGuid": "68db8f14-7095-4f2e-aa6c-88b6914afeaa",
+ "shipType": "Loxagar",
+ "total": 11418.0586,
+ "multiplier": 1.75115907,
+ "additiveSum": 6330.286071777344,
+ "multiplierProduct": 1.3826475161516476,
+ "sources": [
+  {
+   "source": "Reactor",
+   "amount": 2316.68042,
+   "multiplier": 1,
+   "via": "MiningPower"
+  },
+  {
+   "source": "Engine",
+   "amount": 1635.15833,
+   "multiplier": 1,
+   "via": "Power"
+  },
+  {
+   "source": "Tractor Beam",
+   "amount": 800.7033,
+   "multiplier": 1,
+   "via": "Power"
+  },
+  {
+   "source": "Hangar Bay",
+   "amount": 694.105835,
+   "multiplier": 1,
+   "via": "Power"
+  },
+  {
+   "source": "Salvage Grinder",
+   "amount": 883.6382,
+   "multiplier": 1,
+   "via": "Power"
+  },
+  {
+   "source": "Operational Reserves",
+   "amount": 0,
+   "multiplier": 1.02,
+   "via": "Power"
+  },
+  {
+   "source": "Operational Reserves",
+   "amount": 0,
+   "multiplier": 1.02,
+   "via": "Power"
+  },
+  {
+   "source": "Operational Reserves",
+   "amount": 0,
+   "multiplier": 1.02,
+   "via": "Power"
+  },
+  {
+   "source": "Precision Module",
+   "amount": 0,
+   "multiplier": 1.01,
+   "via": "MiningPower"
+  },
+  {
+   "source": "@MiningMastery",
+   "amount": 0,
+   "multiplier": 1.28999972,
+   "via": "MiningPower"
+  }
+ ],
+ "context": {
+  "gameVersion": "0.8.1.24",
+  "shipType": "Loxagar",
+  "role": "Salvaging",
+  "equivalentTurrets": 0,
+  "equivalentTurretsMining": 0,
+  "equivalentTurretsSalvage": 7,
+  "poolCombatPower": 7216.21,
+  "poolCombatPowerMult": 1.76172459
+ }
+}

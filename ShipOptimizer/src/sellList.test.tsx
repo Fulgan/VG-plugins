@@ -9,6 +9,7 @@ import { createRoot, type Root } from "react-dom/client";
 import SellList from "./SellList";
 import { api, ApiError } from "./api";
 import type { Cats, Kind, Rule, SellListFile } from "./sellRules";
+import { emptyView, type ViewState } from "./sellView";
 import type { Item } from "./types";
 
 const item = (over: Partial<Item>): Item => ({
@@ -20,7 +21,9 @@ const item = (over: Partial<Item>): Item => ({
 
 const ITEMS: Item[] = [
   item({ key: 1, name: "Cutter Mk.X", level: 10, sellValue: 100 }),
-  item({ key: 2, name: "Cutter Mk.XI", level: 20, sellValue: 200 }),
+  // Large, so one field tells the two proposed rows apart: a view control is only offered where it says
+  // something, and every other fact about these two is identical.
+  item({ key: 2, name: "Cutter Mk.XI", level: 20, sellValue: 200, size: "Large" }),
   item({ key: 3, name: "Favourite Laser", level: 15, sellValue: 500, favourite: true }),
 ];
 const CATS: Cats = { "mining tools": ["Mining Laser"] };
@@ -31,18 +34,29 @@ const RULE: Rule = {
 };
 
 let host: HTMLDivElement, root: Root;
-beforeEach(() => { host = document.createElement("div"); document.body.appendChild(host); root = createRoot(host); });
+// The view is the component's own layout state, held here the way the app holds it: a control that changes it
+// re-renders with the new value, so a test can click a header and read what moved.
+let view: ViewState;
+beforeEach(() => { view = emptyView(); host = document.createElement("div"); document.body.appendChild(host); root = createRoot(host); });
 afterEach(() => { act(() => root.unmount()); host.remove(); });
+
+type Args = [Rule[], (n: { defaultKind: Kind; rules: Rule[] }) => void, Record<string, SellListFile>,
+             (n: Record<string, SellListFile>) => void, (c: Cats) => void];
+
+// The view is state the app owns, so the harness owns it too: a view control re-renders with the new value
+// in place, which is what lets a test click a column header and read what moved.
+const tree = (...[rules, onChange, lists, onLists, onCats]: Args) => (
+  <SellList open onClose={() => {}} conn={{ host: "h", port: 1, token: "t" } as never}
+    docked items={ITEMS} cats={CATS} myLevel={20} defaultKind="keep" rules={rules}
+    onChange={onChange} lists={lists} onLists={onLists} onCats={onCats} onSold={() => {}}
+    view={view} onView={(v) => { view = v; root.render(tree(rules, onChange, lists, onLists, onCats)); }} />
+);
 
 function render(rules: Rule[], onChange: (n: { defaultKind: Kind; rules: Rule[] }) => void = vi.fn(),
                 lists: Record<string, SellListFile> = {},
                 onLists: (n: Record<string, SellListFile>) => void = vi.fn(),
                 onCats: (c: Cats) => void = vi.fn()) {
-  act(() => {
-    root.render(<SellList open onClose={() => {}} conn={{ host: "h", port: 1, token: "t" } as never}
-      docked items={ITEMS} cats={CATS} myLevel={20} defaultKind="keep" rules={rules}
-      onChange={onChange} lists={lists} onLists={onLists} onCats={onCats} onSold={() => {}} />);
-  });
+  act(() => { root.render(tree(rules, onChange, lists, onLists, onCats)); });
 }
 
 const buttons = () => [...host.querySelectorAll("button")];
@@ -285,7 +299,7 @@ describe("the review step", () => {
 
   it("strikes every row off at once, which disables the sale", () => {
     render([RULE]);
-    click(button("tick none"), "tick none");
+    click(button("sell none"), "sell none");
     expect(ticks().every((t) => !t.checked)).toBe(true);
     expect(button("Sell 0")?.hasAttribute("disabled")).toBe(true);
   });
@@ -293,7 +307,7 @@ describe("the review step", () => {
   it("brings a struck-off item back", () => {
     render([RULE]);
     click(ticks()[0], "the first tick");
-    click(button("tick all"), "tick all");
+    click(button("sell all"), "sell all");
     expect(ticks().every((t) => t.checked)).toBe(true);
     expect(button("Sell 2")).toBeTruthy();
   });
@@ -346,5 +360,96 @@ describe("saved lists (V38)", () => {
     await act(async () => {});
     expect(onCats).toHaveBeenCalledWith({ "mining tools": ["Mining Laser"], EMP: ["Ion Cannon"] });
     expect(host.querySelector(".sum-msg")!.textContent).toContain("EMP");
+  });
+});
+
+describe("the split, as the editor's evidence", () => {
+  // Keeps the Lv 10 Cutter and turns the Lv 20 one away, so the rule has a row in every bucket.
+  const NARROW: Rule = { ...RULE, where: { l: { min: null, max: 15 } } };
+  const edit = () => click(host.querySelector(".sl-rhead")!, "the rule header");
+  const rows = () => [...host.querySelectorAll(".sl-split .sl-grid tbody tr")].filter((r) => !r.classList.contains("sl-cut"));
+  const names = () => rows().map((r) => r.querySelector("td.nm")?.textContent?.trim() ?? "");
+
+  // A saved rule is prose and a count. Its own rows answer "did that clause say what I meant", which is a
+  // question about a rule being WRITTEN — the list that decides what sells is the one at the foot.
+  it("is drawn only while the rule is being edited", () => {
+    render([NARROW]);
+    expect(host.querySelector(".sl-split")).toBeNull();
+    edit();
+    expect(host.querySelector(".sl-split")).toBeTruthy();
+  });
+
+  it("lists the rows no clause selected, each naming the clause that turned it away", () => {
+    render([NARROW]);
+    edit();
+    const away = rows().find((r) => r.textContent?.includes("Cutter Mk.XI"));
+    expect(away).toBeTruthy();                                  // it is ON SCREEN, not just counted
+    expect(away!.textContent).toContain("no match: level");     // and it says WHY, without amputating a clause
+  });
+
+  it("folds a bucket away on request, and starts with none folded", () => {
+    render([NARROW]);
+    edit();
+    expect(names()).toContain("Cutter Mk.XI");
+    click([...host.querySelectorAll(".sl-sh-box")].at(-1)!, "the not-selected box");
+    expect(names()).not.toContain("Cutter Mk.XI");
+  });
+});
+
+describe("the review list, as the grid the player drives (V58)", () => {
+  const rows = () => [...host.querySelectorAll(".sl-rlist .sl-grid tbody tr")].filter((r) => !r.classList.contains("sl-cut"));
+  const names = () => rows().map((r) => r.querySelector("td.nm")?.textContent?.trim() ?? "");
+  const header = (label: string) =>
+    [...host.querySelectorAll(".sl-rlist .sl-grid th")].find((th) => th.textContent?.toLowerCase().startsWith(label));
+  const groupHead = () => host.querySelector(".sl-rlist .sl-branch .sl-group");
+
+  it("sorts on a column header without changing what will sell", () => {
+    render([RULE]);
+    expect(names()).toEqual(["Cutter Mk.X", "Cutter Mk.XI"]);   // the order the rules produced
+    click(header("sell value"), "the value header");
+    expect(names()).toEqual(["Cutter Mk.XI", "Cutter Mk.X"]);   // the biggest loss first
+    expect(button("Sell 2")).toBeTruthy();                      // and the sale is the same two rows
+  });
+
+  it("groups the rows the way the player asks, and strikes a whole group off", () => {
+    render([RULE]);
+    click(button("+ group by…"), "the group picker");
+    click(button("size"), "the group field");
+    expect(groupHead()!.textContent).toContain("Large");        // sorted by label, so the Mk.XI's group leads
+    expect(groupHead()!.textContent).toContain("1 of 1 selling");
+    click([...groupHead()!.querySelectorAll("button")].find((b) => b.textContent === "sell none"), "the group's sell none");
+    expect(button("Sell 1")).toBeTruthy();                     // the other group is untouched
+    expect(groupHead()!.textContent).toContain("0 of 1 selling");
+  });
+
+  // V52: an armory is as big as the playthrough. Every row stays in the list and in the sale; only the slice
+  // the scroller can show is in the DOM, which is what a `show all` over 10,000 rows cannot be.
+  it("holds a 10,000-row proposal without drawing 10,000 rows", () => {
+    const many = Array.from({ length: 10_000 }, (_, i) => item({ key: i + 100, name: `Gun ${i}`, sellValue: 10 + i }));
+    act(() => {
+      root.render(
+        <SellList open onClose={() => {}} conn={{ host: "h", port: 1, token: "t" } as never}
+          docked items={many} cats={CATS} myLevel={20} defaultKind="keep" rules={[RULE]}
+          onChange={vi.fn()} lists={{}} onLists={vi.fn()} onCats={vi.fn()} onSold={() => {}}
+          view={view} onView={vi.fn()} />);
+    });
+    // The thousands separator follows the browser locale, so the label is built the way the app builds it.
+    expect(button(`Sell ${(10_000).toLocaleString()}`)).toBeTruthy();   // the sale is the whole proposal
+    expect(rows().length).toBeLessThan(200);             // the DOM is not
+    expect(rows().length).toBeGreaterThan(0);            // and a window that draws nothing looks broken
+  });
+
+  // A column that reads the same on every row says nothing about them, and the two SHOP-FLOOR fields read a
+  // constant over an armory: `price` was a column of zeros, which reads as a broken number.
+  it("offers no column that cannot tell these rows apart, and drops one that is stored", () => {
+    view = { ...emptyView(), cols: ["l", "p"] };
+    render([RULE]);
+    const heads = [...host.querySelectorAll(".sl-rlist .sl-grid th")].map((th) => th.textContent?.trim());
+    expect(heads).toContain("level");
+    expect(heads).not.toContain("price");
+    click(button("columns…"), "the column picker");
+    const offered = [...host.querySelectorAll(".sl-vcol")].map((l) => l.textContent?.trim());
+    expect(offered).toContain("level");
+    expect(offered).not.toContain("copies owned");
   });
 });

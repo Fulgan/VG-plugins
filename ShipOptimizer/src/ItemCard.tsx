@@ -3,7 +3,9 @@ import type { Item } from "./types";
 import { RARITY_COLOR, num, statPct, subFmt, effectiveMainVal, compareStats, priceLabel } from "./format";
 import { aspectDamageFraction, damageAspects, aspectValue } from "./aspect";
 import { isRoleStat } from "./roleStats";
-import { activityLabel, isTurret } from "./itemKind";
+import { resonanceLive, unlockBonusText } from "./booster";
+import { activityLabel, isTurret, kindOf } from "./itemKind";
+import { moduleStatChannel, pricesModuleStat } from "./fleetDps";
 import AspectMark from "./AspectMark";
 import Price from "./Price";
 import PowerPie from "./PowerPie";
@@ -21,6 +23,9 @@ export function ItemCard({ it, conn, imgUrl, cmp, cmpLabel, tag, pieStat, maxPow
   // Store items resolve by handle; equipped ones (no handle) by their ship slot — see Item.slotKey.
   const img = imgUrl !== undefined ? imgUrl : itemIcon(conn, it);
   const deltas = cmp && cmp !== it ? compareStats(it, cmp) : [];
+  // A TURRET's own lines are priced through `setDps` (its damage, its firing cycle), so the priced/unpriced mark
+  // is a module question: one hardcoded list for both kinds would be wrong on one of them.
+  const isModule = kindOf(it) === "Module";
   // `cmp` (the hovered item) is only passed to comparison cards, so its absence marks the hovered one.
   // "Better" = beats the hovered item on the SAME main stat; across different main stats there's nothing
   // meaningful to rank.
@@ -66,6 +71,31 @@ export function ItemCard({ it, conn, imgUrl, cmp, cmpLabel, tag, pieStat, maxPow
         {it.powerUsage != null && <span title="power use">⚡ {num(it.powerUsage)}</span>}
       </div>
       {(it.substats?.length ?? 0) > 0 && <div className="git-subs">{(it.substats ?? []).map((s, i) => <div key={i} className={`git-sub${isRoleStat(role, s.stat) ? " role" : ""}`}>{subFmt(s)}</div>)}</div>}
+      {it.resonance && (() => {
+        // RESONANCE, where an item is actually read. The bonus is the game's own formatted line (percent stats are
+        // stored fractionally, so rebuilding the string by hand is wrong) and it is the FULL bonus — what the
+        // booster pays today is that times its progress, which is stated beside it rather than left to be guessed.
+        const r = it.resonance;
+        const pct = Math.round(resonanceLive(r) * 100);
+        return (
+          <div className="git-res">
+            {/* Both lines, the way the game's own tooltip reads: what it pays NOW and what it pays at full. The
+                current figure comes from the game (`bonusNow`) rather than being rescaled here — a percent line is
+                stored fractionally, so only its own formatter can print it correctly. An older bridge sends no
+                `bonusNow`, and then the fraction is stated in words instead. */}
+            {r.bonusNow
+              ? <div className="git-res-bonus">{r.bonusNow}<span className="dim"> · max {unlockBonusText(r)}</span></div>
+              : <div className="git-res-bonus">{unlockBonusText(r) || r.bonusStat}<span className="dim"> · paying {pct}% of it</span></div>}
+            <div className="git-line dim">
+              {r.unlocked ? "resonance finished" : `${pct}% earned`}
+              {" · "}{Math.round(r.progress).toLocaleString()} / {Math.round(r.threshold).toLocaleString()} {r.unit}
+              {/* WHICH pool it lifts: a multiplier line scales the ship's whole total for that stat, ⊥ this
+                  booster's own contribution, and that is the difference between a small bonus and a large one. */}
+              {(r.bonusMultiplier ?? 1) !== 1 && <> · scales the ship's whole {r.bonusStat} pool</>}
+            </div>
+          </div>
+        );
+      })()}
       {it.ammo && <div className="git-line dim">Requires {it.ammo} Ammo{it.ammoPerMin != null ? ` · ~${Math.round(it.ammoPerMin)}/min` : ""}</div>}
       {(it.aspects ?? []).map((a, i) => (
         // The badge beside the name, so the tooltip and the list row identify an aspect the same way.
@@ -83,9 +113,31 @@ export function ItemCard({ it, conn, imgUrl, cmp, cmpLabel, tag, pieStat, maxPow
       {cmp && cmp !== it && (
         <div className="git-cmp">
           <div className="git-cmp-head">{cmpLabel ?? "Δ vs hovered"}</div>
-          {deltas.length ? deltas.map((r) => (
-            <div key={r.stat} className="git-cmp-row"><span>{r.stat}</span><span className={r.d > 0 ? "up" : "down"}>{r.d > 0 ? "+" : ""}{r.percent ? statPct(r.d) : num(r.d)}</span></div>
-          )) : <div className="git-cmp-row dim">identical stats</div>}
+          {/* WHICH lines the objective can act on. `MODULE_POOLS` is the whole set a module swap moves, so a
+              stat outside it changes the score by nothing — and a panel listing "+3,892 Torpedo Power" beside
+              "−1,220 Precision" as though they weighed against each other is why an offer could look absurd and
+ be correct, or look reasonable and be wrong. Unpriced is ⊥ worthless: it means the objective
+              has no opinion and the call is the player's, which is what the note says. */}
+          {deltas.length ? deltas.map((r) => {
+            const channel = isModule ? moduleStatChannel(r.stat) : "pool";
+            const priced = channel !== null;
+            // A stat priced through the BRACKET says so: capacity and draw move the reactor load, which scales every
+            // pool on the ship — the heaviest thing a module can do, and it used to be marked "not scored".
+            const why = channel === "bracket"
+              ? `${r.stat} is scored through the reactor bracket — it moves the load every pool is scaled by`
+              : channel === null
+                ? `${r.stat} does not enter the score — the optimizer has no opinion on it`
+                : undefined;
+            return (
+              <div key={r.stat} className={`git-cmp-row${priced ? "" : " unpriced"}`} title={why}>
+                <span>{r.stat}{priced ? "" : " *"}</span>
+                <span className={r.d > 0 ? "up" : "down"}>{r.d > 0 ? "+" : ""}{r.percent ? statPct(r.d) : num(r.d)}</span>
+              </div>
+            );
+          }) : <div className="git-cmp-row dim">identical stats</div>}
+          {isModule && deltas.some((r) => !pricesModuleStat(r.stat)) && (
+            <div className="git-cmp-note dim">* not scored — your call</div>
+          )}
         </div>
       )}
       <div className="git-foot">

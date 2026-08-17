@@ -8,6 +8,16 @@ export interface StatLine {
   // The game's own `EquipStat.IsPercentageStat`: `amount` is a FRACTION, so 0.0141 means +1.41%. Decided by
   // ranges over the game's enum and therefore not reproducible here — it must arrive from the bridge.
   percent?: boolean;
+  // WHOSE stat this line moves, on an ASPECT's line only (an item's own lines always pool — V16).
+  //
+  //   "ship"    a `BoostStat`, an `IEquipStatSource` registered on the UNIT ∴ it joins the pool and lifts every
+  //             gun, exactly like a module's line.
+  //   "weapon"  a `TurretBoostStat`, folded by `AbstractEquipment.GetStat` into THAT WEAPON alone — what
+  //             `CalculateDamage` reads as `sourceTurret.GetStat(...)`.
+  //
+  // Pooling a "weapon" line overstates it by the whole battery, so scoring must keep them apart. Absent on an
+  // older bridge, where every aspect line was assumed pooled.
+  scope?: "ship" | "weapon";
 }
 
 export interface Aspect {
@@ -25,7 +35,16 @@ export interface Resonance {
   progress: number;
   threshold: number;
   unit: string; // kills | boardings | ore | scrap | profit | absorbed
-  bonus?: string; // game-formatted unlock bonus, e.g. "+2.22% Reload Speed"
+  bonus?: string; // game-formatted unlock bonus at FULL progress, e.g. "+2.22% Reload Speed"
+  /** What it pays TODAY, formatted by the game (`GetScaledUnlockBonus`). Absent on an older bridge. */
+  bonusNow?: string;
+  /**
+   * The numbers behind the line, because the two kinds are worth entirely different things: `bonusAmount` ADDS to
+   * the ship's pool for that stat, while `bonusMultiplier` scales the WHOLE pool — every gun, booster and hull
+   * contribution to it (`AbstractUnitData.ApplyStatSourceLines`). One of the two is always the identity.
+   */
+  bonusAmount?: number;
+  bonusMultiplier?: number;
   bonusStat: string;
 }
 
@@ -232,7 +251,10 @@ export interface Status {
   energyUsed?: number | null;
   energyUsage?: number | null;
   reactorBonus?: number | null;
-  reactorCombatBonus?: number | null; // extra CombatPower from the skill tree, only while usage <= 50%
+  // The same skill-tree increase `combatReactorOutputCP` carries. Two names for one value, kept for clients
+  // written against either; this one is UNREAD here, because the client resolves the whole budget once through
+  // `poolsFromStatus` and everything downstream projects it out of the pools.
+  reactorCombatBonus?: number | null;
   playthrough?: string | null; // stable per-save id — web drops stale cache when it changes
   playthroughName?: string | null; // user-chosen pretty name for the playthrough (null = unnamed)
 }
@@ -353,7 +375,19 @@ export interface GalaxySystem {
   x: number; y: number; sx: number; sy: number;
   lastVisited?: number; unlocked?: boolean; jumpgateOpen?: boolean;
   poiKinds?: Record<string, number>;
-  stations?: { name: string; faction: string | null; factionId?: string | null; kind: string; shops?: string[]; refreshTime?: number; refreshInterval?: number; due?: boolean | null; recruitsIn?: number | null; missionsIn?: number | null; missionsFresh?: boolean | null }[];
+  stations?: {
+    name: string; faction: string | null; factionId?: string | null; kind: string; shops?: string[];
+    refreshTime?: number; refreshInterval?: number; due?: boolean | null; recruitsIn?: number | null;
+    missionsIn?: number | null; missionsFresh?: boolean | null;
+    /** Umbral control at this station, 0..1. The DAILY is offered above 0.05, the umbral shop only above 0.5. */
+    umbralControl?: number;
+    /** Whether that level clears the daily's threshold — both consts are read off the build. */
+    umbralMissions?: boolean;
+    /** `DateTime.Now.DayOfYear` when this board last rolled its daily. Compare against `umbralToday`. */
+    umbralDailyDate?: number;
+    /** Whether a daily is sitting on the board right now. */
+    umbralDailyWaiting?: boolean;
+  }[];
   missions?: { name: string; description?: string; storyId?: string; complete?: boolean }[];
   materials?: { volume: number; distinct: number; items: string[] };   // "Materials stored: 1,764m3"
   conquest?: {
@@ -383,6 +417,14 @@ export interface Galaxy {
   // only where you are. This is the board of the station named in `station` — the one you would fly back to —
   // and `fresh` says it has already come due, so it rerolls the moment you dock.
   missionRestock?: { nextIn?: number | null; interval?: number | null; station?: string | null; fresh?: boolean | null } | null;
+  /**
+   * TODAY as the game counts it — `DateTime.Now.DayOfYear` — because that is what a mission board stores against
+   * its daily. Comparing against anything else (UTC, a locally computed day) reads someone else's day, and the
+   * reset is the MACHINE's midnight. `umbralYear` is for display: the game keeps no year beside the day, so a
+ * stored day from a year ago is ambiguous for the game as much as for us.
+   */
+  umbralToday?: number;
+  umbralYear?: number;
   // Faction identity + the GAME's own colours, so territory shading matches the in-game map.
   factions?: GalaxyFaction[];
 }
@@ -546,4 +588,46 @@ export interface LedgerDto {
   earned: number;
   net: number;
   barters: number;         // purchases paid in goods — a real cost that no credit total can show
+}
+
+/** One reward line a mission carried, as the game itself words it. */
+export interface MissionRewardEntry {
+  /** The reward class: `Credits`, `Experience`, `Item`, `Reputation`, `ConquestStrength`, `Officer`, … */
+  kind?: string | null;
+  /** The game's own sentence for it, e.g. "1,250 credits". */
+  text?: string | null;
+  /** Absent where a reward's worth is not a number (map coordinates, a follow-up mission) — ⊥ zero. */
+  amount?: number;
+  /** The game keeps some rewards off the board; recorded and marked rather than dropped. */
+  hidden?: boolean;
+}
+
+/**
+ * The mission history (`GET /missions/log`).
+ *
+ * `event` is what the bridge's watcher concluded when a mission LEFT the player's list: `completed` and `failed`
+ * come from the game's own flags, `abandoned` is what remains when neither was set. A poll sees the state either
+ * side of the moment, never the moment — so the word is a reading, and the row says which reading it is.
+ */
+export interface MissionLogEntry {
+  at: string;
+  event: "accepted" | "completed" | "failed" | "abandoned";
+  name?: string | null;
+  category?: string | null;
+  storyId?: string | null;
+  /** The board or contact it came from, translated — the game stores it as a localisation key. */
+  from?: string | null;
+  faction?: string | null;
+  level?: number;
+  difficulty?: string | null;
+  station?: string | null;
+  playthrough?: string | null;
+  /** What the job paid. Absent on a row written by a bridge that predates the reward read. */
+  rewards?: MissionRewardEntry[];
+}
+
+export interface MissionLog {
+  playthrough: string | null;
+  count: number;
+  entries: MissionLogEntry[];
 }

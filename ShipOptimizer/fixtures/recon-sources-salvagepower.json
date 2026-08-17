@@ -1,0 +1,177 @@
+{
+ "stat": "SalvagePower",
+ "shipGuid": "68db8f14-7095-4f2e-aa6c-88b6914afeaa",
+ "shipType": "Loxagar",
+ "total": 225304.016,
+ "multiplier": 4.1675663,
+ "additiveSum": 53468.796447753906,
+ "multiplierProduct": 3.0032686122479735,
+ "sources": [
+  {
+   "source": "Hull Upgrades",
+   "amount": 0,
+   "multiplier": 1.43999994,
+   "via": "SalvagePower"
+  },
+  {
+   "source": "Engine",
+   "amount": 1635.15833,
+   "multiplier": 1,
+   "via": "Power"
+  },
+  {
+   "source": "Scanner",
+   "amount": 2442.4314,
+   "multiplier": 1,
+   "via": "SalvagePower"
+  },
+  {
+   "source": "Tractor Beam",
+   "amount": 800.7033,
+   "multiplier": 1,
+   "via": "Power"
+  },
+  {
+   "source": "Armor Plating",
+   "amount": 1731.85889,
+   "multiplier": 1,
+   "via": "SalvagePower"
+  },
+  {
+   "source": "Hangar Bay",
+   "amount": 694.105835,
+   "multiplier": 1,
+   "via": "Power"
+  },
+  {
+   "source": "Booster",
+   "amount": 1871.54749,
+   "multiplier": 1,
+   "via": "SalvagePower"
+  },
+  {
+   "source": "Booster",
+   "amount": 1882.54773,
+   "multiplier": 1,
+   "via": "SalvagePower"
+  },
+  {
+   "source": "Booster",
+   "amount": 2024.89722,
+   "multiplier": 1,
+   "via": "SalvagePower"
+  },
+  {
+   "source": "Booster",
+   "amount": 1742.72253,
+   "multiplier": 1,
+   "via": "SalvagePower"
+  },
+  {
+   "source": "Booster",
+   "amount": 1962.66443,
+   "multiplier": 1,
+   "via": "SalvagePower"
+  },
+  {
+   "source": "Booster",
+   "amount": 0,
+   "multiplier": 1.05479014,
+   "via": "SalvagePower"
+  },
+  {
+   "source": "Booster",
+   "amount": 1688.0094,
+   "multiplier": 1,
+   "via": "SalvagePower"
+  },
+  {
+   "source": "Salvage Laser",
+   "amount": 10375.6855,
+   "multiplier": 1,
+   "via": "SalvagePower"
+  },
+  {
+   "source": "Salvage Laser",
+   "amount": 11433.585,
+   "multiplier": 1,
+   "via": "SalvagePower"
+  },
+  {
+   "source": "Salvage Laser",
+   "amount": 2519.77148,
+   "multiplier": 1,
+   "via": "SalvagePower"
+  },
+  {
+   "source": "Salvage Grinder",
+   "amount": 9764.47,
+   "multiplier": 1,
+   "via": "SalvagePower"
+  },
+  {
+   "source": "Salvage Grinder",
+   "amount": 883.6382,
+   "multiplier": 1,
+   "via": "Power"
+  },
+  {
+   "source": "Operational Reserves",
+   "amount": 0,
+   "multiplier": 1.02,
+   "via": "Power"
+  },
+  {
+   "source": "Operational Reserves",
+   "amount": 0,
+   "multiplier": 1.02,
+   "via": "Power"
+  },
+  {
+   "source": "Operational Reserves",
+   "amount": 0,
+   "multiplier": 1.02,
+   "via": "Power"
+  },
+  {
+   "source": "Salvage Hull",
+   "amount": 0,
+   "multiplier": 1.3,
+   "via": "SalvagePower"
+  },
+  {
+   "source": "Scavenger",
+   "amount": 0,
+   "multiplier": 1.05,
+   "via": "SalvagePower"
+  },
+  {
+   "source": "Enhanced Beams",
+   "amount": 0,
+   "multiplier": 1.05,
+   "via": "SalvagePower"
+  },
+  {
+   "source": "Enhanced Beams",
+   "amount": 15,
+   "multiplier": 1,
+   "via": "SalvagePower"
+  },
+  {
+   "source": "@SalvagingMastery",
+   "amount": 0,
+   "multiplier": 1.29999971,
+   "via": "SalvagePower"
+  }
+ ],
+ "context": {
+  "gameVersion": "0.8.1.24",
+  "shipType": "Loxagar",
+  "role": "Salvaging",
+  "equivalentTurrets": 0,
+  "equivalentTurretsMining": 0,
+  "equivalentTurretsSalvage": 7,
+  "poolCombatPower": 7216.21,
+  "poolCombatPowerMult": 1.76172459
+ }
+}

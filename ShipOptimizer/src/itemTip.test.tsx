@@ -94,3 +94,75 @@ describe("the item tooltip renders", () => {
     expect(h.textContent).toContain("Empty");
   });
 });
+
+//: the Δ panel lists lines the objective CANNOT act on beside ones it can, and a player weighing
+// "+3,892 Torpedo Power" against "−1,220 Precision" has no way to know which of the two the app scored.
+describe("which Δ lines the objective prices", () => {
+  const module_ = (name: string, lines: { stat: string; amount: number }[]): Item => ({
+    key: 1, name, rarity: "HighGrade", level: 63, size: "Medium", type: "Hangar Bay", slotType: "HangarBay",
+    category: "Module", mainStat: { name: "Hangar Slots", amount: "5" },
+    stats: lines.map((l) => ({ ...l, multiplier: 1 })), substats: lines.map((l) => ({ ...l, multiplier: 1 })),
+    aspects: [], aspectSlots: 0,
+  } as unknown as Item);
+
+  it("marks the unscored ones and says so once", () => {
+    const a = module_("a", [{ stat: "Precision", amount: 1_220 }, { stat: "Torpedo Power", amount: 3_892 }]);
+    const b = module_("b", [{ stat: "Precision", amount: 0 }, { stat: "Torpedo Power", amount: 0 }]);
+    mount(<ItemCard it={a} cmp={b} conn={conn as never} />);
+    const rows = [...host!.querySelectorAll(".git-cmp-row")].map((r) => [r.textContent, r.className]);
+    const torpedo = rows.find(([t]) => t?.includes("Torpedo Power"))!;
+    const precision = rows.find(([t]) => t?.includes("Precision"))!;
+    expect(torpedo[1]).toContain("unpriced");     // MODULE_POOLS has no Torpedo Power
+    expect(precision[1]).not.toContain("unpriced");
+    expect(host!.textContent).toContain("not scored — your call");
+  });
+
+  it("says nothing of the sort when every line is scored", () => {
+    const a = module_("a", [{ stat: "Precision", amount: 1_220 }]);
+    const b = module_("b", [{ stat: "Precision", amount: 10 }]);
+    mount(<ItemCard it={a} cmp={b} conn={conn as never} />);
+    expect(host!.querySelector(".git-cmp-row.unpriced")).toBeNull();
+    expect(host!.textContent).not.toContain("not scored");
+  });
+});
+
+// Resonance on the card, because it was nowhere a player reads an item: the booster tab put the bonus in a
+// TOOLTIP on a chip, so "what does this resonance actually give me" had no answer on the item itself.
+describe("resonance on the card", () => {
+  const withRes = (r: Item["resonance"]) =>
+    mount(<ItemCard it={spitter(0.014, 1000, { category: "Booster", type: "Booster", resonance: r })} conn={conn} imgUrl={null} />);
+
+  it("states the bonus, and how much of it is being paid", () => {
+    const el = withRes({ unlocked: false, progress: 25, threshold: 100, unit: "kills",
+                         bonus: "+2.22% Reload Speed", bonusStat: "Reload Speed" });
+    // No `bonusNow` from this (older) bridge ∴ the full bonus with the fraction said in words.
+    expect(el.textContent).toContain("+2.22% Reload Speed");
+    expect(el.textContent).toContain("paying 25% of it");
+    expect(el.textContent).toContain("25 / 100 kills");
+  });
+
+  it("says a finished one is finished rather than showing 100% of something", () => {
+    const el = withRes({ unlocked: true, progress: 100, threshold: 100, unit: "ore",
+                         bonus: "+180 Cargo Capacity", bonusStat: "Cargo Capacity" });
+    expect(el.textContent).toContain("+180 Cargo Capacity");
+    expect(el.textContent).toContain("resonance finished");
+  });
+
+  // The game's own tooltip shows both figures, and so does this: what it pays today comes from the game
+  // (`GetScaledUnlockBonus`), because a percent line is stored fractionally and cannot be rescaled from its text.
+  it("shows what it pays now beside the max, when the bridge sends both", () => {
+    const el = withRes({ unlocked: false, progress: 221, threshold: 5864, unit: "ore",
+                         bonus: "+4.72% Mining Power", bonusNow: "+0.18% Mining Power",
+                         bonusAmount: 0, bonusMultiplier: 1.0472, bonusStat: "Mining Power" });
+    expect(el.textContent).toContain("+0.18% Mining Power");
+    expect(el.textContent).toContain("max +4.72% Mining Power");
+    expect(el.textContent).toContain(`221 / ${(5864).toLocaleString()} ore`);
+    // and it says WHICH pool a multiplier lifts, which is the whole ship's, not this booster's own
+    expect(el.textContent).toContain("scales the ship's whole Mining Power pool");
+  });
+
+  it("says nothing at all about resonance on an item that has none", () => {
+    const el = mount(<ItemCard it={spitter(0.014, 1000)} conn={conn} imgUrl={null} />);
+    expect(el.querySelector(".git-res")).toBeNull();
+  });
+});

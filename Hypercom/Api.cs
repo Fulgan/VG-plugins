@@ -173,6 +173,22 @@ namespace Hypercom
                 // crit chance), and the unit is briefly absent around scene changes — a client that re-scores
                 // on a fallback reshuffles its whole ranking for a beat. Says which, so it can hold instead.
                 ["statsLive"] = LiveShip(p) != null,
+                // `statsLive` says the unit EXISTS. These say its numbers have SETTLED, which is a different
+                // question and the one that bites during a gear swap: `MarkStatsDirty` sets `statsDirty` and
+                // the recalc lands in a later `Update`, so a read taken in between reports a half-built ship
+                // with `statsLive` still true. Measured live: mid-swap, `equivalentTurrets` read 0 while guns
+                // were fitted — and `GetNormalizedPower` returns the UNDIVIDED pool when that count is 0, so a
+                // torpedo figure computed from such a snapshot is inflated by the turret count. Reported
+                // rather than resolved: forcing `CalculateStats` from a read would author the state it
+                // describes, and a client that knows the numbers are in flight can simply wait for the next.
+                ["statsDirty"] = ShipStats.Dirty(LiveShip(p)),
+                ["statsCalculating"] = ShipStats.Calculating(LiveShip(p)),
+                // How many torpedoes the hull can have in the air, which caps sustained torpedo output at
+                // `latches / reloadSpeed` — below the bay's own `fireRate` cadence whenever latches are few.
+                // ⚠ A property of the SHIP, not the bay: `SetDoorMechanismAndLatchPoints` walks
+                // `parent.GetComponentsInChildren<DoorMechanism>()` ∴ the same bay fitted to two hulls can
+                // sustain different rates, and this cannot be served from `/catalog/prefabs`.
+                ["torpedoLatches"] = TorpedoLatchCount(p),
                 ["critChance"] = ShipStat(p, EquipStat.CriticalChance, "BaseCritChance"),
                 // `GetStat(CriticalChance)` is `(0.03 + GetPrecisionCrit() + additive lines) * multiplier`, so
                 // the reported figure alone cannot be split back into "what Precision explains" and "what it
@@ -277,6 +293,24 @@ namespace Hypercom
         // holding templates with pre-equipment stats. Reading a stat off one yields a plausible wrong number.
         private static object LiveShip(GamePlayer p) => Compat.Get(p?.currentSpaceShip, "unit");
 
+        /// <summary>
+        /// Latch points on the hull, or null when there is no torpedo bay fitted.
+        ///
+        /// Read off the LIVE bay's `doorLatchDict`, which `SetDoorMechanismAndLatchPoints` fills at `Awake`
+        /// from the PARENT's `DoorMechanism` children — so the count belongs to the ship, not the module, and
+        /// the same bay on a different hull can sustain a different rate. Null and not 0 when there is no bay:
+        /// "no bay" and "a bay with nowhere to launch from" are different builds, and 0 would read as the
+        /// second.
+        /// </summary>
+        private static int? TorpedoLatchCount(GamePlayer p)
+        {
+            var bay = Compat.Get(LiveShip(p), "torpedoBayModule");
+            if (bay == null) return null;
+            var dict = Compat.GetPrivate(bay, "doorLatchDict");
+            var n = Compat.Num(dict, "Count");
+            return n == null ? null : (int?)n.Value;
+        }
+
 
         // Does the docked station offer a facility? Named rather than typed so no enum typeref lands on a path
         // served unconditionally. Undocked → false: nothing is on offer out there.
@@ -372,6 +406,16 @@ namespace Hypercom
                         ["row"] = Compat.Num(node, "row"),
                         ["maxPoints"] = Compat.Num(node, "maxSkillPoints"),
                         ["invested"] = Compat.AsNumber(Compat.Call(node, "CurrentCommanderPoints")),
+                        // What the node is actually WORTH, which is not what was invested in it.
+                        // `SkilltreeNode.currentPoints` is `investedPoints` plus one per OFFICER aboard
+                        // carrying the same node, and `currentIncrease` is that total times the node's
+                        // per-point value. So `maxPoints` caps INVESTMENT, not effect — a maxed node can
+                        // still be worth more — and because the sum reads
+                        // `GamePlayer.current.currentSpaceShip.officers`, the SAME captain has different
+                        // effective skills on different ships. A consumer that reads `invested` and stops
+                        // is reading half the value.
+                        ["effective"] = Compat.Num(node, "currentPoints"),
+                        ["increase"] = Compat.Num(node, "currentIncrease"),
                         ["requiredPointsInTree"] = Compat.Num(node, "requiredPointsInTree"),
                         ["requiredPointsTotal"] = Compat.Num(node, "requiredPointsTotal"),
                         ["conquestLocked"] = Compat.Get<bool>(node, "conquestLocked", false),
@@ -560,6 +604,23 @@ namespace Hypercom
         {
             try { return Result.Ok(Catalog.TypesDto()); }
             catch (Exception ex) { return Result.Err(500, "catalog types failed: " + ex.Message); }
+        });
+
+        // Prefab constants the roll never touches — armor resist/weakness, shield recharge, torpedo cadence,
+        // turret firing cycles. Template reads ∴ no ship need be loaded and the answer is the same in every
+        // save, including for equipment the player does not own.
+        internal static Result CatalogPrefabs() => MainThread.Run(() =>
+        {
+            try { return Result.Ok(Catalog.PrefabsDto()); }
+            catch (Exception ex) { return Result.Err(500, "prefab catalog failed: " + ex.Message); }
+        });
+
+        // Every hull with its slots and the fields `Faction.GetNPCShipTypes` filters on, so the enemy pool can
+        // be reproduced rather than guessed at.
+        internal static Result CatalogShips() => MainThread.Run(() =>
+        {
+            try { return Result.Ok(Catalog.ShipsDto()); }
+            catch (Exception ex) { return Result.Err(500, "ship catalog failed: " + ex.Message); }
         });
 
         // Render a ship's sprite to PNG bytes (null → 404), from the game itself so it always matches the
@@ -1144,7 +1205,7 @@ namespace Hypercom
                 return Result.Err(400, "no space in destination");
 
             dst.Add(entry.item, n);
-            src.Remove(entry, n);
+            VG.Game.GameMembers.RemoveItems(src, entry, n);
             return Result.Ok(new Dictionary<string, object> { ["moved"] = n });
         });
 
@@ -1261,7 +1322,7 @@ namespace Hypercom
 
             var back = Buyback(item, n);
 
-            inv.Remove(entry, n);
+            VG.Game.GameMembers.RemoveItems(inv, entry, n);
             var name = Stores.Text(item.displayName);
             // A sale moves money too, so it gets the same in-game notice and log line as a purchase.
             if (!quiet) Notify.Transaction("sell", $"sold {n}x {name} for {value:N0} cr.");

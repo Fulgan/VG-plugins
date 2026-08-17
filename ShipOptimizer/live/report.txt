@@ -1,0 +1,75 @@
+SHIP  Monsoon · Combat · game 0.8.1.24
+      docked=false statsLive=true equivalentTurrets=15
+
+MOUNTED — hardpoints
+  [0] Small  Plasma Spitter Mk.XVII Lv66 Q20  draw 0
+        Combat Power 3,417, Power 491, Precision 918, Reload Speed 0
+  [1] Small  Plasma Spitter Mk.XVI Lv63  draw 374
+        Combat Power 2,689, Precision 572, Shield HP 578, Critical Damage 0
+  [2] Large  Plasma Cannon Mk.XVIII Lv72 Q15  draw 2,093
+        Combat Power 13,254, Armor HP 2,842, Combat Power 2,325
+  [3] Large  Plasma Cannon Mk.XIX Lv74  draw 0
+        Combat Power 15,246, Attack Speed 0, Reload Speed 0
+  [4] Large  Plasma Cannon Mk.XVIII Lv70 Q15  draw 1,688
+        Combat Power 12,076, Weapon Range 0, Attack Speed 0
+  [5] Medium Plasma Cannon Mk.XVIII Lv69 Q20  draw 1,181
+        Combat Power 8,155, Armor HP 1,525, Combat Power 1,505, Shield HP 1,481
+  [6] Medium Plasma Repeater Mk.XIX Lv74 Q15  draw 1,474
+        Combat Power 10,440, Combat Power 2,016, Critical Damage 0
+MOUNTED — modules
+  Reactor      Reactor Mk.XVIII Lv71 Q20  draw 0
+        Energy 18,739, Precision 2,878, Hull HP 2,637, Shield HP 3,010
+  Engine       Engine Mk.XVI Lv64 Q25  draw 0
+        Thrust 42,974, Salvage Power 1,964, Shield HP 2,061, Cold Resistance 0, Side Thrust 21,197, Rotational Thrust 124,078
+  Scanner      Scanner Mk.XVIII Lv72 Q20  draw 2,158
+        Precision 11,286, Power 1,662, Combat Power 3,341, Armor HP 3,354
+  TractorBeam  Tractor Beam Mk.XVIII Lv71 Q20  draw 0
+        Shield HP 2,827, Hull HP 2,799, Precision 2,924
+  Hull         Hull Kit Mk.XVIII Lv72 Q20  draw 0
+        Hull HP ×149.645233, Hull HP 2,998, Power 2,265, Armor HP 3,396
+  ShieldGenerator Shield Mk.XIX Lv74 Q15  draw 0
+        Shield HP ×158.145172, Power 2,176, Drone Power 2,782
+
+TAB STATE  25 keys loaded from /client/state
+PUBLISHED — what the player's tab last drew (ship b9ce41c1-38dc-4719-9bb6-634495bd954f, expanded)
+  Plasma Repeater Mk.XIX Lv74 Q15  →  Plasma Cannon Mk.XVIII Lv69
+     main 10.4K → 8,067   draw 1,474 → 1,004
+     aspects [Firestarter] → [Firestarter, Gamma Ward]
+    DPS index                   409,593 →        414,825  (+1.28%)
+    combatPower                 341,785 →        324,915  (-4.94%)
+    precision                    18,579 →         19,871  (+6.95%)
+    critChance                    57.1% →          58.5%  (+2.35%)
+    load                          39.6% →          37.5%  (-5.24%)
+    hull                      3,872,747
+    armor                        25,842
+    shield                    6,585,000
+
+PROPOSED (Suggest whole ship, expanded)
+  (nothing — the objective proposes no change)
+
+PREDICTED — current → planned
+  DPS index (tier 2)            409,593
+  Combat power                  341,785
+  Precision                      18,579
+  Crit chance                     57.1%
+  Mining power                   10,406
+  Salvage power                  13,382
+  Energy used                     8,969
+  Reactor capacity               22,675
+  Load                            39.6%
+  Reactor bonus                   20.0%
+  Hull (game)                 3,872,747
+  Armor (game)                   25,842
+  Shield (game)               6,585,000
+
+  VERDICT  worthSwitching = false   rank 409593.4 → 409593.4  (+0.00%)
+  loadAsRead(now) = 39.6%   loadAsRead(proj) = 39.6%   (must be equal — V73)
+
+RECONCILE — the game's own sources vs the model
+  Combat Power   total      341,785  mult 3.8440  additive     88,156 of     88,914  (short 0.85%)  via: CombatPower, Power
+  Mining Power   total       10,406  mult 1.5650  additive      6,594 of      6,649  (short 0.83%)  via: Power
+  Salvage Power  total       13,382  mult 1.5623  additive      8,558 of      8,565  (short 0.09%)  via: Power, SalvagePower
+  Precision      total       18,579  mult 1.0000  additive     18,579 of     18,579  (short 0.00%)  via: Precision
+
+MAIN POWER the model subtracts as each gun's own (GetMainPowerSum):
+  65,276

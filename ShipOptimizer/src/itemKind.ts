@@ -1,5 +1,5 @@
 import type { Item } from "./types";
-import { effectiveMainVal, statTotals } from "./format";
+import { saturatedMainVal, statTotals } from "./format";
 import { reactorModifier } from "./reactor";
 import { isRoleStat, statApplies, type ShipFit } from "./roleStats";
 
@@ -48,34 +48,71 @@ export const isTurret = (it: Item) => it.category === "Turret";
 // Quality (the `Q15` on the card) is NOT a step: it boosts `bonusStat`, so it is already in the stat lines and
 // scoring it again would count one advantage twice. Nor is any weighted sum of unlike stats — Armor HP and
 // Corrosion Resistance share no unit, so a count says "this brings more" without inventing an exchange rate.
-export function compareModules(a: Item, b: Item, energy?: { usedWithout: number; capacity: number },
-                               role?: string | null, fit?: ShipFit | null): number {
+/** A draw difference under this much of the reactor budget is noise, not a reason. */
+export const DRAW_TIE_FRACTION = 0.01;
+/** And this much in absolute terms, for a hull whose budget is not reported at all. */
+export const DRAW_TIE_ABS = 100;
+
+/**
+ * WHICH STEP decided, beside the ordering it produced — `d > 0` when `a` wins, and `why` the words for the step
+ * that separated them (null when nothing did).
+ *
+ * A rail row that says only "+0" reads as broken when a tie-break put it there, and three separate bugs in one
+ * day were invisible for exactly that reason: a silent verdict cannot be checked by the
+ * person it is shown to.
+ */
+export function compareModulesWhy(a: Item, b: Item, energy?: { usedWithout: number; capacity: number },
+                                  role?: string | null, fit?: ShipFit | null): { d: number; why: string | null } {
   // Base draw, so a fitted item and a stored one are measured on the same basis (see Item.powerUsageBase).
   const draw = (x: Item) => x.powerUsageBase ?? x.powerUsage ?? 0;
   const bracket = (x: Item) =>
     energy && energy.capacity > 0 ? reactorModifier((energy.usedWithout + draw(x)) / energy.capacity) : 0;
+  // How much of a draw difference is worth deciding on. See the draw step below.
+  const drawTie = energy && energy.capacity > 0 ? energy.capacity * DRAW_TIE_FRACTION : DRAW_TIE_ABS;
   // Stats this ship can do nothing with are not counted at all: Drone Power with no drone bay, Salvage Power
   // on a hull that neither salvages nor carries a salvage gun. A count of "how much it brings" that includes
   // them ranks a module by rolls the player can never use.
   const names = (x: Item) => new Set([...statTotals(x).keys(), ...(x.substats ?? []).map((l) => l.stat)]
     .filter((n) => statApplies(n, fit ?? { role })));
-  const steps = [
-    (x: Item) => effectiveMainVal(x) ?? 0,
-    bracket,
+  // NAMED steps, because the row that shows the verdict has to be able to say which one made it. The words are
+  // the PLAYER's reading of the step, kept beside the arithmetic so the two cannot drift apart.
+  const steps: { why: string; of: (x: Item) => number }[] = [
+    // The headline as a DECISION reads it: clamped where the stat saturates, or a count with nothing behind it
+    // (ten tractor beams where five is already everything) wins before any other step is consulted.
+    { why: "a bigger main stat", of: (x: Item) => saturatedMainVal(x) ?? 0 },
+    { why: "it keeps a better reactor bracket", of: bracket },
     // EMPTY slots, not total: a fitted aspect already counts through the stats it grants, and counting the
     // slot as well ranks a full 2/2 above a full 1/1 for capacity neither of them has.
-    (x: Item) => Math.max(0, (x.aspectSlots ?? 0) - (x.aspects ?? []).length),
-    (x: Item) => (role ? [...names(x)].filter((n) => isRoleStat(role, n)).length : 0),
-    (x: Item) => -draw(x),                  // less draw wins
+    { why: "a spare aspect slot", of: (x: Item) => Math.max(0, (x.aspectSlots ?? 0) - (x.aspects ?? []).length) },
+    { why: `more stats this ${role ?? "hull"} uses`, of: (x: Item) => (role ? [...names(x)].filter((n) => isRoleStat(role, n)).length : 0) },
     // Distinct stat names from both sources, de-duplicated: `substats` is the bridge's non-main view and may
     // mirror entries in `stats`, so a Set counts "how many different things it gives you" either way.
-    (x: Item) => names(x).size,
+    { why: "it brings more stat lines", of: (x: Item) => names(x).size },
+    // DRAW COUNTS ONLY THROUGH THE BRACKET, per the user ("power draw should only count if it would change the
+    // reactor bracket") — and the bracket has its own step second, so by the time control reaches here the two
+    // candidates sit in the SAME band and the difference buys nothing the player can feel. It stays as the step
+    // of LAST resort, below substance: two modules alike in every other way, and the leaner one wins.
+    //
+    // Compared any earlier, 26 units of a 22,190 budget outranked +1,220 Precision, +1,335 Hull HP and two
+    // aspects — and it did so hardest where the objective is silent, which for a non-combat battery is
+    // the normal case: a salvage power figure prices no combat stat at all, so this chain decides everything.
+    // Bucketed as well as demoted, so the last resort is not itself decided by noise.
+    { why: "it draws less power", of: (x: Item) => -Math.round(draw(x) / drawTie) },
   ];
-  for (const f of steps) {
-    const d = f(a) - f(b);
-    if (Math.abs(d) > 1e-9) return d;
+  for (const step of steps) {
+    const d = step.of(a) - step.of(b);
+    if (Math.abs(d) > 1e-9) return { d, why: step.why };
   }
-  return 0;
+  return { d: 0, why: null };
+}
+
+/**
+ * The comparator's answer as a NUMBER, which is what every ordering caller wants. One line over `compareModulesWhy`
+ * so the decision and the explanation of it can never be two implementations (the defect this repo pays for most).
+ */
+export function compareModules(a: Item, b: Item, energy?: { usedWithout: number; capacity: number },
+                               role?: string | null, fit?: ShipFit | null): number {
+  return compareModulesWhy(a, b, energy, role, fit).d;
 }
 
 // What a slot currently holds, by slot key ("t:<index>" hardpoint, "m:<EquipmentSlot>" module). Two copies of

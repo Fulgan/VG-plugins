@@ -1,9 +1,9 @@
 import type { Item } from "./types";
 import { aspectDamageFraction } from "./aspect";
 import { mainVal, statTotals } from "./format";
-import { catOf, compareModules, isTurret } from "./itemKind";
+import { catOf, compareModulesWhy, isTurret } from "./itemKind";
 import type { ShipFit } from "./roleStats";
-import { energyDraw, poolReactorFactor } from "./reactor";
+import { energyDraw, poolReactorFactor, reactorModifier } from "./reactor";
 import { turretScore } from "./turretScore";
 
 // Total ship DPS for a SET of turrets — the objective the expanded gear ranking optimises.
@@ -110,10 +110,18 @@ export interface ShipPools {
   // bracketed multiplier on every power pool (+20% at =<50% down to -75% past 150%, see reactor.ts), so a gun
   // that draws nothing — Solar Powered — can be worth more than one with a bigger headline number and an extra
   // aspect. Without this the objective silently valued draw at zero.
+  //
+  // THIS IS THE ONLY CARRIER OF THE BUDGET. Anything that shows the player a load, a capacity or a bracket reads
+  // it through `reactorBudgetOf` rather than off `/status` again: a second reader drifts from this one the moment
+  // a cached reading stands in, and near a bracket edge the two then disagree about a 10% multiplier on every
+  // power pool — which is the number that decided the suggestion the player is checking.
   energy?: {
     used: number;      // draw of everything EXCEPT the turrets in the set (modules, boosters, hull)
     capacity: number;
     mod: number;       // the bracket modifier already baked into poolCombatPower
+    // The load the game printed, which is the only reading left when `capacity` is 0 — the objective divides
+    // `used/capacity` itself and never consults this.
+    usage?: number;
     // The ship's TOTAL draw when the pools were read. `used` has the equipped turrets taken out of it, so it is
     // the wrong load to de-bracket a reported figure with: the reading was taken at this one.
     usedAll?: number;
@@ -147,7 +155,8 @@ export function poolsFromStatus(s: {
   critDamage?: number | null; megaCrit?: number | null;
   poolAttackSpeed?: number | null; poolReloadSpeed?: number | null; poolMagazineSize?: number | null;
   caps?: { extraTurretPenalty?: boolean } | null;
-  energyCapacity?: number | null; energyUsed?: number | null; reactorBonus?: number | null;
+  energyCapacity?: number | null; energyUsed?: number | null; energyUsage?: number | null;
+  reactorBonus?: number | null;
 }): ShipPools | null {
   if (s.poolCombatPower == null || s.precisionDivisor == null) return null;
   return {
@@ -179,7 +188,8 @@ export function poolsFromStatus(s: {
     // part of what it is worth. `used` is the WHOLE ship's draw here; `background()` takes the equipped turrets'
     // share out so a candidate set's can be added back.
     energy: s.energyCapacity != null && s.energyUsed != null
-      ? { used: s.energyUsed, capacity: s.energyCapacity, mod: s.reactorBonus ?? 0 }
+      ? { used: s.energyUsed, capacity: s.energyCapacity, mod: s.reactorBonus ?? 0,
+          usage: s.energyUsage ?? undefined }
       : undefined,
     extraTurretPenalty: s.caps?.extraTurretPenalty === true,
   };
@@ -222,7 +232,7 @@ function additiveSpace(pools: ShipPools): number {
   const full = pools.poolCombatPowerMult;
   if (full != null && full > 0) return pools.poolCombatPower / full;
   // No reported multiplier: fall back to the factor the game applies to THIS pool, skill term included.
-  const usage = pools.energy && pools.energy.capacity > 0 ? pools.energy.used / pools.energy.capacity : null;
+  const usage = pools.energy && pools.energy.capacity > 0 ? loadAsRead(pools.energy) : null;
   const factor = usage != null
     ? poolReactorFactor(usage, pools.combatReactorBonus ?? 0)
     : 1 + (pools.energy?.mod ?? 0);
@@ -246,6 +256,83 @@ export function poolsForShip(pools: ShipPools | null, poolsShip: string | null, 
   if (!pools) return null;
   return poolsShip && scoring && poolsShip !== scoring ? null : pools;
 }
+
+/**
+ * The reactor budget as anything OUTSIDE the objective reads it — the load rows, the capacity row, the bracket
+ * warning, the skill-tree line.
+ *
+ * It is a projection of `ShipPools` and never a second read of `/status`, because the pools a score came from are
+ * not always the pools the live payload describes: a cached reading stands in around a scene change (see the
+ * substitution rule), and a panel reading the live payload would then print a load that decided nothing. On a ship
+ * near a bracket edge the two readings land on OPPOSITE sides of it, so every figure the player checks is out by
+ * the whole 10% the bracket is worth — with nothing on screen saying which of the two was scored.
+ *
+ * `capacityAll`/`usedAll` where present: those are the ship's TOTAL draw and the capacity it was read at, and a
+ * background()-drained `used` is the wrong load to print for the same reason it is the wrong one to de-bracket
+ * with.
+ */
+export interface ReactorBudget {
+  capacity: number | null;
+  used: number | null;
+  usage: number | null;
+  mod: number | null;          // the modifier already baked into the pools
+  combatBonus: number | null;  // extra CombatPower from the skill tree, only at/under 50% load
+}
+
+export function reactorBudgetOf(pools: ShipPools | null): ReactorBudget | null {
+  if (!pools) return null;
+  const e = pools.energy;
+  const capacity = e ? (e.capacityAll ?? e.capacity) : null;
+  const used = e ? (e.usedAll ?? e.used) : null;
+  return {
+    capacity, used,
+    usage: e && (e.capacityAll ?? e.capacity) > 0 ? loadAsRead(e) : (e?.usage ?? null),
+    mod: e?.mod ?? null,
+    combatBonus: pools.combatReactorBonus ?? null,
+  };
+}
+
+/**
+ * May THIS pool reading be scored against the budget the game is reporting NOW?
+ *
+ * The substitution rule lets the last reconcilable reading for a ship stand in, silently, because the ranking it
+ * produces is still the right one. That holds while the ship's power REGIME is unchanged — and the reactor bracket
+ * is a step function, so it is exactly what a stale budget can get wrong. A cached reading taken at 51% load and a
+ * live ship at 49% differ by a 10% multiplier on every power pool: the objective prices a build one bracket below
+ * what the game and the panel show, and because the two readings drift independently, successive refreshes flip
+ * which side of the edge the objective believes it is on. That is a contradiction MANUFACTURED fresh each refresh,
+ * so the both-ways guards cannot converge it — they refuse to order a pair, and here the pair changes underneath
+ * them.
+ *
+ * ∴ where the cached budget and the live one land in different brackets the reading is REFUSED (→ simple mode) and
+ * the refusal is NAMED: a build priced on the wrong side of a bracket edge is worse than no suggestion, and an
+ * objective that quietly stops scoring is indistinguishable from one that found nothing worth changing.
+ *
+ * Silent, and deliberately so, in the two cases where the cached budget is still the only honest one: the live
+ * payload carries no budget at all (the unit is gone, so `reactorModule` reads null), and both budgets sit in the
+ * same bracket (a few units of drift decides nothing). Same bracket is the test rather than same NUMBERS, because
+ * the load moves by a rounding every refresh and refusing on that would degrade the tab permanently.
+ */
+export function pairBudget(pools: ShipPools | null, live: ShipPools["energy"] | null): {
+  pools: ShipPools | null; note: string | null;
+} {
+  const held = pools?.energy;
+  if (!pools || !held || !live) return { pools: pools ?? null, note: null };
+  if (!(held.capacity > 0) || !(live.capacity > 0)) return { pools, note: null };
+  const heldUsage = loadAsRead(held);
+  const liveUsage = loadAsRead(live);   // a live payload carries no pin, so this is its own load
+  if (reactorModifier(heldUsage) === reactorModifier(liveUsage)) return { pools, note: null };
+  const pct = (u: number) => `${Math.round(u * 100)}%`;
+  return {
+    pools: null,
+    note: `The reactor load the ranking model holds (${pct(heldUsage)}) and the one the ship reports `
+      + `(${pct(liveUsage)}) are in different brackets, worth ${signed(reactorModifier(liveUsage) - reactorModifier(heldUsage))} `
+      + `on every power pool — so the set objective is switched off until the reading settles, rather than pricing `
+      + `this build on the wrong side of the edge. Ranked on the headline stat meanwhile.`,
+  };
+}
+
+const signed = (v: number) => `${v > 0 ? "+" : ""}${Math.round(v * 100)}%`;
 
 /**
  * The MULTIPLIER half of an item's pooled stat lines, 1 where it rolls none.
@@ -285,6 +372,13 @@ export interface Contribution {
   magazineSize: number;
   /** The same lines' multiplier halves. Composed by `background`/`poolParts`, never added to the fields above. */
   mul: StatMul;
+  /**
+   * WEAPON-LOCAL lines — an aspect's `TurretBoostStat`, which `AbstractEquipment.GetStat` folds into this gun
+   * and no other. `CalculateDamage` reads them as `sourceTurret.GetStat(...)`, so they belong to the gun's own
+   * term in `setDps` and must never be summed into a pool: `Critical Attenuation` (+25% critical damage) is
+   * worth one gun's crits, and pooling it would credit the whole battery with a bonus one hardpoint carries.
+   */
+  local: { critDamage: number; attackSpeed: number; reloadSpeed: number; magazineSize: number };
 }
 
 const norm = (s: string) => s.replace(/[^a-z0-9]/gi, "").toLowerCase();
@@ -300,9 +394,22 @@ function part(it: Item, stat: string): { add: number; mul: number } {
   const want = norm(stat);
   let add = 0;
   let mul = 1;
+  // POOLED halves only (`add`/`mul`). An aspect's weapon-local line is in `localAdd`/`localMul` and is read by
+  // `localPart`, because it reaches one gun rather than the pool this composes.
   for (const [k, v] of statTotals(it))
     if (norm(k) === want) { add += Number(v.add); mul *= Number(v.mul); }
   return { add: Number.isFinite(add) ? add : 0, mul: Number.isFinite(mul) && mul !== 0 ? mul : 1 };
+}
+
+/** The WEAPON-LOCAL half of one stat on this item — an aspect's `TurretBoostStat` and nothing else. */
+function localPart(it: Item, stat: string): number {
+  const want = norm(stat);
+  let add = 0;
+  for (const [k, v] of statTotals(it))
+    // A local MULTIPLIER has no per-gun base to act on in this model, so it folds the way `folded` folds one with
+    // no pool reading: `×1.25` counts as +0.25 rather than as nothing.
+    if (norm(k) === want) add += Number(v.localAdd) + (v.localMul !== 1 ? Number(v.localMul) - 1 : 0);
+  return Number.isFinite(add) ? add : 0;
 }
 
 // A stat with no pool reading of its own: the multiplier has nothing to act on, so it is folded into the
@@ -316,6 +423,61 @@ function folded(it: Item, stat: string): number {
 
 /** One stat's two halves on any item — exported for the module swap, which works on the REPORTED pools. */
 export const statPart = part;
+
+/**
+ * THE TWO LOADS, AND THE ONLY TWO. Every reactor bracket in this app is one of these, and nothing else may divide a
+ * draw by a capacity — `the build checks.ps1` scans for it.
+ *
+ * The whole family of defects here has been one mistake made in different places: picking one half of the ratio from
+ * the READING and the other from the PROJECTION. `usedAll`/`capacityAll` are the pin (the draw and capacity the
+ * reported figures were measured at) while `used`/`capacity` are what a candidate would fly at, and mixing them
+ * yields a load the ship has never been at — 50.8% on a build whose real loads are 47.2% and 46.2%. Past a bracket
+ * edge that invents or destroys a step worth 10-20% of every power pool. Three bugs: (two readings),
+ * (`poolsWithModule` pinned one half), (`background`'s residual took the numerator from the projection).
+ *
+ * The rule was written as V73 and then broken twice more, because it was prose and each site still chose its own
+ * fields. Two named owners and a scan make the wrong pairing unwritable instead of merely forbidden.
+ */
+export const loadAsRead = (e: NonNullable<ShipPools["energy"]>): number =>
+  (e.usedAll ?? e.used) / (e.capacityAll ?? e.capacity);   // load-owner
+
+/** The load a candidate would FLY at: the projection's own draw over the projection's own capacity. */
+export const loadWith = (e: NonNullable<ShipPools["energy"]>, extraDraw = 0): number =>
+  (e.used + extraDraw) / e.capacity;   // load-owner
+
+// `Power` is the UMBRELLA over the three power pools, and a multiplier on it scales all of them at once.
+//
+// MEASURED on the live Assayer, game 0.8.1.23: an Engine carrying the aspect `Operational Reserves`
+// (`Power ×1.02`, its only line) raised `poolCombatPowerMult`, `poolMiningPowerMult` AND `poolSalvagePowerMult`
+// by exactly 1.02 while `poolPrecisionMult`, `critChanceMult` and `poolAttackSpeed` did not move at all. Those
+// three pools are the game's own `reactorAffectedStats` minus `Power` itself, so the line reaches them the way
+// the reactor bracket does rather than the way a named `×Mining Power` roll does.
+//
+// It matters because `MODULE_POOLS` maps a pool to ONE stat name: a line called `Power` matched no entry and was
+// dropped, so the projection carried the reported multiplier through unchanged and every projected power figure
+// came out 2% above what the game then reported.
+//
+// BOTH halves are the umbrella's, and the game says so per contribution. `GET /stat/sources?stat=<pool>` reports a
+// `via` naming the stat each amount arrived through, and on the Manglor "2nd law" (0.8.1.23) the Reactor's
+// `Power 2,289.86` and a Missile Launcher's `Power 1,262.33` appear under CombatPower, MiningPower AND
+// SalvagePower alike — while `Precision` lists no `Power` source at all. MiningPower's whole additive sum on that
+// ship IS those two lines, so a projection that drops them reports no mining change for a reactor swap.
+//
+// `Power` is ⊥ DRAW: draw arrives as `powerUsage`, and a reactor carrying `Power 2,289.86` reports
+// `powerUsage: 0` — it contributes power, it does not consume it.
+const POWER_POOLS = new Set(["combatpower", "miningpower", "salvagepower"]);
+
+/**
+ * One POOLED stat's two halves, with the umbrella folded in. The one owner of that rule: `deriveContribution` and
+ * `poolsWithModule` both compose pool multipliers and a fold applied at only one of them is the shape —
+ * the panel and the score disagreeing about the same swap.
+ */
+function poolPart(it: Item, stat: string): { add: number; mul: number } {
+  const p = part(it, stat);
+  if (!POWER_POOLS.has(norm(stat))) return p;
+  const umbrella = part(it, "Power");
+  return { add: p.add + umbrella.add, mul: p.mul * umbrella.mul };
+}
 
 /** Which power pool this turret feeds. `catOf` owns the classification (the game's own `gameplayType`). */
 export type PowerActivity = "Mining" | "Salvage";
@@ -352,9 +514,10 @@ function deriveContribution(it: Item): Contribution {
   const magazineSize = part(it, "Magazine Size");
   // A power multiplier is a UNIT stat like any other, so it applies whichever pool it names — a mining laser
   // rolling `×Combat Power` still lifts the ship's guns. Only the MAIN power is local to the gun that carries it.
-  const combatMul = part(it, "Combat Power").mul;
-  const miningMul = part(it, "Mining Power").mul;
-  const salvageMul = part(it, "Salvage Power").mul;
+  // Through `poolPart`, so an umbrella `×Power` line reaches all three the way the game applies it.
+  const combatMul = poolPart(it, "Combat Power").mul;
+  const miningMul = poolPart(it, "Mining Power").mul;
+  const salvageMul = poolPart(it, "Salvage Power").mul;
   return {
     // A turret's headline power IS its contribution to its own pool, which is why ranking by it worked — but a
     // gun only feeds ONE pool. Reading a mining gun's Mining Power as combat power let the optimiser score
@@ -373,6 +536,12 @@ function deriveContribution(it: Item): Contribution {
       combatPower: combatMul, miningPower: miningMul, salvagePower: salvageMul,
       precision: precision.mul, critDamage: critDamage.mul,
       attackSpeed: attackSpeed.mul, reloadSpeed: reloadSpeed.mul, magazineSize: magazineSize.mul,
+    },
+    local: {
+      critDamage: localPart(it, "Critical Damage"),
+      attackSpeed: localPart(it, "Attack Speed"),
+      reloadSpeed: localPart(it, "Reload Speed"),
+      magazineSize: localPart(it, "Magazine Size"),
     },
   };
 }
@@ -451,6 +620,19 @@ export function shortlist(cands: Item[], perKey = SHORTLIST_PER_KEY): Item[] {
     free.sort((a, b) => (mainVal(b) ?? 0) - (mainVal(a) ?? 0));
     for (const it of free.slice(0, perKey)) keep.add(it);
   }
+
+  // LAYER is categorical for the same reason draw is, and leaving it out made the optimizer blind: under a
+  // balanced target the score is `min(surface, core)`, so a gun for the layer a ship cannot currently reach is
+  // worth more than any amount of extra power on the layer it already works — its value is that the minimum stops
+  // being zero. None of the axes above can express that. They rank by power and pooled substats ∴ a core gun that
+  // sits 13th by mining power never entered the search at all, and the tab could not propose core mining however
+  // the target was set. Admitted per layer, best power first, and bounded exactly like `free`.
+  for (const layer of ["Surface", "Core"] as const) {
+    const forLayer = cands.filter((it) => catOf(it) !== "Combat" && coversLayer(it, layer));
+    if (!forLayer.length) continue;
+    forLayer.sort((a, b) => (mainVal(b) ?? 0) - (mainVal(a) ?? 0));
+    for (const it of forLayer.slice(0, perKey)) keep.add(it);
+  }
   return [...keep];
 }
 
@@ -508,18 +690,37 @@ export function speedRatio(it: Item, attackSpeed = 0, reloadSpeed = 0, magazineS
   if (it.fireDelayRaw == null || it.magSizeRaw == null) return 1;
   const burst = Math.max(1, it.burstAmount ?? 1);
   const bd = it.burstDelay ?? 0;
-  const rate = (fd: number, rd: number, mag: number) => {
+  // THE DIVISOR THE GAME CHARGES, and it is not the cadence the gun achieves. `CalculateDamage` divides a shot
+  // by `defaultAttacksPerSecond`, which is built from the RAW serialized fields with the reload counted in full
+  // and the burst-end delay ADDED to it.
+  const nominal = (() => {
+    const m = Math.max(1, it.magSizeRaw as number);
+    const cycle = Math.ceil(m / burst) * ((burst - 1) * bd + (it.fireDelayRaw as number)) + (it.reloadDelayRaw ?? 0);
+    return cycle > 0 ? m / cycle : 0;
+  })();
+  // THE CADENCE IT ACTUALLY FIRES AT. Two differences from the divisor, both measured in game by the arena
+  // thread across all 71 prefabs (`fixtures/cadence-structural.json`): `ReloadCoroutine` waits `reloadDelay *
+  // 0.8`, and the burst-end delay OVERLAPS the reload rather than following it — `AdvanceBurstCycle` sets the
+  // fire delay while `RecordShotFired` starts the reload in the same `Fire()` call, so the idle between
+  // magazines is `max(fireDelay, reload * 0.8)`.
+  //
+  // At zero stats this is 1.044× (SmallGatlingTurret) to 2.077× (LargeSalvageLaser) of the nominal figure,
+  // median 1.379×. It is PER TURRET and spans two-fold ∴ it does not cancel between two guns, and pricing it at
+  // 1.0 — which this did until the table arrived — reorders a battery by up to that spread.
+  const real = (fd: number, rd: number, mag: number) => {
     const m = Math.max(1, mag);
-    const cycle = Math.ceil(m / burst) * ((burst - 1) * bd + fd) + rd;
+    const bursts = Math.ceil(m / burst);
+    const cycle = (m - bursts) * bd + (bursts - 1) * fd + Math.max(fd, rd * 0.8);
     return cycle > 0 ? m / cycle : 0;
   };
-  const raw = rate(it.fireDelayRaw, it.reloadDelayRaw ?? 0, it.magSizeRaw);
-  const boosted = rate(
-    it.fireDelayRaw / (1 + attackSpeed),
+  const boosted = real(
+    (it.fireDelayRaw as number) / (1 + attackSpeed),
     (it.reloadDelayRaw ?? 0) / (1 + reloadSpeed),
-    Math.round(it.magSizeRaw * (1 + magazineSize)),
+    Math.round((it.magSizeRaw as number) * (1 + magazineSize)),
   );
-  return raw > 0 ? boosted / raw : 1;
+  // Damage per shot is `power / 5 / nominal`; shots land at `boosted` ∴ the gun's throughput is scaled by their
+  // ratio. The STAT half cancels within it exactly as before; the STRUCTURAL half no longer vanishes.
+  return nominal > 0 ? boosted / nominal : 1;
 }
 
 /** The fixed part of each pool: hull + crew + modules, i.e. everything this optimiser is not choosing. */
@@ -529,8 +730,17 @@ export function background(pools: ShipPools, equippedTurrets: Item[]): ShipPools
   // reactor bracket (hull role bonus, skill nodes, non-turret gear), which stays constant while candidates are
   // swapped and is re-applied by `poolParts()`.
   // Per pool, because the combat factor carries a skill term the others do not.
-  const readAt = pools.energy?.capacityAll ?? pools.energy?.capacity ?? 0;
-  const usage = pools.energy && readAt > 0 ? pools.energy.used / readAt : null;
+  //
+  // AT THE LOAD THE REPORTED FIGURE WAS TAKEN AT, and both halves of that ratio come from the same reading.
+  // `capacityAll`/`usedAll` are the pair a projection pins; taking the capacity from the pin and the draw from the
+  // PROJECTION divides a new numerator by an old denominator, which is a load the ship has never flown at — 11,898
+  // over 23,412 = 50.8% on a build whose real load is 46.2% and whose reading was taken at 47.2%. Past the 50%
+  // edge that costs the bracket AND the combat skill term, so the residual came out ×1.3/1.1 too large. It does
+  // not cancel: `shared × mult` is `reported × next / now` and loses it, but each gun's OWN main power is
+  // multiplied by `mult` directly — and own power dominates the shared remainder, so the whole battery read ~9%
+  // stronger for having projected a bracket it never lost.
+  const usage = pools.energy && (pools.energy.capacityAll ?? pools.energy.capacity) > 0
+    ? loadAsRead(pools.energy) : null;
   const factorFor = (skillBonus: number) =>
     usage != null ? poolReactorFactor(usage, skillBonus) : 1 + (pools.energy?.mod ?? 0);
   const reactorFactor = factorFor(0);
@@ -689,10 +899,8 @@ function poolParts(reported: number, set: Item[], energy: ShipPools["energy"],
   const has = !!energy && energy.capacity > 0;
   // `now` is the load the figure was REPORTED at — that draw over that capacity — and `next` the one the
   // candidate set would fly at. A reactor swap moves the capacity, so the two denominators differ.
-  const now = has ? poolReactorFactor((energy!.usedAll ?? energy!.used) / (energy!.capacityAll ?? energy!.capacity), skillBonus)
-                  : 1 + (energy?.mod ?? 0);
-  const next = has ? poolReactorFactor((energy!.used + energyDraw(set)) / energy!.capacity, skillBonus)
-                   : 1 + (energy?.mod ?? 0);
+  const now = has ? poolReactorFactor(loadAsRead(energy!), skillBonus) : 1 + (energy?.mod ?? 0);
+  const next = has ? poolReactorFactor(loadWith(energy!, energyDraw(set)), skillBonus) : 1 + (energy?.mod ?? 0);
   return { shared: reported / now / residual, mult: residual * next * setMul };
 }
 
@@ -746,7 +954,6 @@ export function setDps(set: Item[], bg: ShipPools): number {
   // Without an anchor this reduces to `BASE + curve`, which is what a bridge reporting no crit chance leaves.
   const critChance = (BASE_CRIT_CHANCE + precisionCrit(precision, bg.precisionDivisor) + (bg.critAdd ?? 0))
     * (bg.critAdd == null ? 1 : bg.critChanceMult ?? 1);
-  const crit = expectedCrit(critChance, critDamage, bg.megaCrit);
 
   // Only the SHARED part is divided by the equivalent-turret count, and each gun draws its own size's rating out
   // of it: `AbstractTurret.turretEquivalentRating` is Tiny 0.45 / Small 1.425 / Medium 2 / Large 3, and the count
@@ -772,8 +979,14 @@ export function setDps(set: Item[], bg: ShipPools): number {
     // `CalculateAttackPower`, per turret: its own main power plus its rating's slice of the shared remainder,
     // the whole thing multiplied, then the damage calc's `/ 5`.
     const own = contribs[i].combatPower;
+    // THE GUN'S OWN CRIT AND CYCLE, not the battery's. `AbstractEquipment.GetStat` is `parent.GetStat(s)` PLUS
+    // this equipment's own boost lines, and `CalculateDamage` reads `sourceTurret.GetStat(CriticalDamage)` ∴ an
+    // aspect's `TurretBoostStat` multiplies THIS gun's crits and no other's. Summed into the pool it would be
+    // worth the whole battery, which is how giving one up could read as free.
+    const loc = contribs[i].local;
+    const crit = expectedCrit(critChance, critDamage + loc.critDamage, bg.megaCrit);
     total += ((own + poolShare(shared, nEq, bg) * rating(it)) * mult / 5)
-      * speedRatio(it, attackSpeed, reloadSpeed, magazineSize)
+      * speedRatio(it, attackSpeed + loc.attackSpeed, reloadSpeed + loc.reloadSpeed, magazineSize + loc.magazineSize)
       * crit
       * (1 + typed + allDamage)
       * (1 + aspectDamageFraction(it));
@@ -941,6 +1154,55 @@ const MODULE_POOLS: ReadonlyArray<readonly [pool: keyof ShipPools, mult: keyof S
 ];
 
 /**
+ * Does the objective PRICE this stat on a module, or merely notice it?
+ *
+ * `MODULE_POOLS` is the whole list a module swap can move, so a stat outside it — Torpedo Power, Kinetic
+ * Resistance, Hull HP — changes the score by exactly nothing. That is ⊥ a claim it is worthless: it is a
+ * statement that the objective has NO OPINION, and the difference matters on a card where a player is weighing
+ * "+3,892 Torpedo Power" against "−1,220 Precision" and cannot otherwise know which of the two the app acted on
+ *. Derived from the table itself ∴ adding a pool teaches every surface at once.
+ */
+export type StatChannel = "pool" | "bracket" | null;
+
+/**
+ * Stats priced through the REACTOR BRACKET rather than as a pool of their own.
+ *
+ * A module's `Energy` is the reactor's CAPACITY: the objective moves it (`capacityWith`) and reads it back as
+ * load → bracket → a multiplier on EVERY pool. It is therefore priced, and priced heavily — but it is not a pool,
+ * so `MODULE_POOLS` cannot list it without `poolsWithModule` trying to move it as if it were.
+ *
+ * Leaving it out of the pricing answer entirely is what made the card mark `Energy` "not scored — your call" on a
+ * reactor swap that doubled capacity from 10.8K to 21.2K. The player read that as the app ignoring the
+ * energy budget, which is exactly what it said.
+ *
+ * `Power use` is here and `Power` is NOT, which is the opposite of how they read: DRAW is `powerUsage`, moves the
+ * load and is bracket-priced, while a `×Power` line is the umbrella over the three power pools and scales them
+ * DIRECTLY (`poolPart`). Marking draw "not scored" was defect on the other stat.
+ */
+const BRACKET_STATS = ["Energy", "Power use"] as const;
+
+/**
+ * WHICH channel prices a stat, or `null` where the objective genuinely has no opinion.
+ *
+ * `compareStats` names the two halves of one stat line DIFFERENTLY — `Precision` for the additive delta and
+ * `× Precision` for the multiplier — and for the umbrella those halves are ⊥ priced alike: the multiplier is
+ * modelled and a flat amount is not ∴ they must not share one verdict. Everywhere else the two halves are
+ * priced together and the prefix changes nothing.
+ */
+export const moduleStatChannel = (stat: string): StatChannel => {
+  const want = norm(stat);
+  if (MODULE_POOLS.some(([, , s]) => norm(s) === want)) return "pool";
+  // The umbrella feeds all three power pools, additive and multiplier alike (`poolPart`).
+  if (want === "power") return "pool";
+  if (BRACKET_STATS.some((s) => norm(s) === want)) return "bracket";
+  return null;
+};
+
+
+export const pricesModuleStat = (stat: string): boolean => moduleStatChannel(stat) !== null;
+
+
+/**
  * The reported pools as they would read with one MODULE swapped for another.
  *
  * A module's stat lines reach the UNIT exactly as a turret's do — a scanner's Precision, an armour
@@ -961,8 +1223,8 @@ export function poolsWithModule(pools: ShipPools, out: Item | null, inn: Item | 
   for (const [pool, multKey, stat] of MODULE_POOLS) {
     const reported = pools[pool] as number | undefined;
     if (reported == null) continue;                       // no reading ⇒ nothing to move
-    const a = inn ? statPart(inn, stat) : { add: 0, mul: 1 };
-    const b = out ? statPart(out, stat) : { add: 0, mul: 1 };
+    const a = inn ? poolPart(inn, stat) : { add: 0, mul: 1 };
+    const b = out ? poolPart(out, stat) : { add: 0, mul: 1 };
     const add = a.add - b.add;
     const mul = b.mul !== 0 ? a.mul / b.mul : 1;
     if (add === 0 && mul === 1) continue;
@@ -970,6 +1232,25 @@ export function poolsWithModule(pools: ShipPools, out: Item | null, inn: Item | 
     const write = next as unknown as Record<string, number>;
     write[pool] = Math.max(0, (reported + add * m) * mul);
     if (multKey && pools[multKey] != null) write[multKey] = m * mul;
+  }
+  // THE REPORTED CRIT CHANCE MOVES WITH PRECISION, or the change cancels itself.
+  //
+  // `background` recovers the ship's additive crit sources (skill tree, officers, crit aspects) by subtracting
+  // the precision curve from the REPORTED chance — an anchor it derives from whatever pools it is handed. Hand it
+  // a precision we just rewrote while the reported chance still describes the OLD precision, and the anchor grows
+  // by exactly the crit the precision change removed: a module's Precision roll is then worth precisely nothing,
+  // the objective reports a 0 gain, and the decision falls through to tie-breaks that hand the slot to whichever
+  // module draws less ( — a hangar bay offered over one carrying +1,220 Precision, +1,335 Hull HP and two
+  // aspects, on 26 units of draw).
+  //
+  // So the projection moves the reading too: the anchor is a fact about the SHIP, ⊥ about the module in the slot,
+  // and it must come out the same before and after. A module's own `Critical Chance` line is separate and has
+  // already been applied by the loop above — this is only the part precision drives.
+  if (next.poolPrecision !== pools.poolPrecision && pools.critChance != null) {
+    const mult = pools.critChanceMult ?? 1;
+    const was = precisionCrit(pools.poolPrecision, pools.precisionDivisor);
+    const now = precisionCrit(next.poolPrecision, next.precisionDivisor);
+    next.critChance = Math.max(0, (next.critChance ?? pools.critChance) + (now - was) * mult);
   }
   // Both halves of the reactor budget move, and the second one is the whole point of a REACTOR: a module's
   // draw changes what is USED, its Energy stat changes what there is to use. Missing the capacity half made a
@@ -983,11 +1264,38 @@ export function poolsWithModule(pools: ShipPools, out: Item | null, inn: Item | 
     next.energy = {
       ...pools.energy,
       used: Math.max(0, pools.energy.used + draw),
-      usedAll: pools.energy.usedAll == null ? undefined : Math.max(0, pools.energy.usedAll + draw),
       capacity,
-      // The reading belongs to the OLD budget; only the projection uses the new one.
+      // The load the reported figures were TAKEN at, and it is ONE ratio: both halves are pinned here, together,
+      // or `poolParts` divides a projected numerator by a reported denominator. A projection that raises the
+      // capacity is exactly where they part company — the new reactor's draw over the old reactor's capacity is a
+      // load the ship has never flown at, and where it lands past a bracket edge the de-bracket invents a loss on
+      // the BASELINE which the re-bracket then hands back as a gain. That fiction is worth the whole step (+9% at
+      // the 50% edge), it appears only in the direction that gains capacity, and two builds where one direction is
+      // honest and the other is not are a pair the objective will swap forever.
+      usedAll: pools.energy.usedAll ?? pools.energy.used,
       capacityAll: pools.energy.capacityAll ?? pools.energy.capacity,
     };
+  }
+  return next;
+}
+
+/**
+ * The reported pools with a WHOLE module set swapped at once — the plural of `poolsWithModule`, and what lets a
+ * module PLAN be priced rather than a single slot.
+ *
+ * Two swaps are not two independent readings. Every pooled stat composes, and the reactor budget composes twice
+ * over: each module's draw adds to what is USED while its `Energy` line changes what there IS to use. So two
+ * modules that each keep the ship inside a bracket can cross it TOGETHER and dock every power pool at once.
+ * Folding one swap at a time is exactly right for that — each step rewrites the reported product the next reads —
+ * and it is what turns the bracket into an ordinary term of the objective instead of a constraint bolted beside it.
+ *
+ * Positional: `out[i]` is what leaves the slot `inn[i]` enters. A null on either side is a slot being filled or emptied.
+ */
+export function poolsWithModules(pools: ShipPools, out: (Item | null)[], inn: (Item | null)[]): ShipPools {
+  let next = pools;
+  for (let i = 0; i < Math.max(out.length, inn.length); i++) {
+    const o = out[i] ?? null, n = inn[i] ?? null;
+    if (o !== n) next = poolsWithModule(next, o, n);
   }
   return next;
 }
@@ -1025,7 +1333,33 @@ export function capacityWith(capacity: number, out: Item[], inn: Item[]): number
 export function moduleRank(pools: ShipPools, turrets: Item[], out: Item | null, inn: Item | null,
                            target: LayerTarget = "balanced", act?: PowerActivity): Rank {
   const bg = background(poolsWithModule(pools, out, inn), turrets);
-  return setRank(turrets, bg, target, act);
+  return setRank(turrets, bg, layerTargetFor(turrets, target, act), act);
+}
+
+/**
+ * The target a FIXED battery can actually be judged against.
+ *
+ * A module cannot change which ore layers a ship reaches — only guns can. So asking `balanced` of a battery that
+ * reaches one layer scores it `min(s, 0) = 0` no matter which module is fitted, and every module then ties at zero:
+ * a swap losing 1,485 Mining Power reads as "same battery score", the tie-break chain takes over, and the winner is
+ * whichever module keeps a better reactor bracket — a module measurably worse for the ship's job, offered because
+ * the objective had gone silent.
+ *
+ * ∴ when the set cannot cover the target, judge it on the layers it DOES cover. That is not a softer objective, it
+ * is the only one with a subject: this ship, as it is armed. `optimizeGearSet` must NOT use this for GUNS — there
+ * the coverage is exactly what the search is choosing, and collapsing the target per candidate would make the
+ * objective non-monotone in set size (the trap `setPowerTargeted` documents).
+ */
+export function layerTargetFor(set: Item[], target: LayerTarget, act?: PowerActivity): LayerTarget {
+  if (target !== "balanced") return target;
+  const a = act ?? activityOf(set);
+  if (!a) return target;
+  const mine = set.filter((it) => catOf(it) === a);
+  if (!mine.length || !layersKnown(mine)) return target;
+  const s = mine.some((it) => coversLayer(it, "Surface"));
+  const c = mine.some((it) => coversLayer(it, "Core"));
+  if (s && c) return "balanced";
+  return s ? "surface" : c ? "core" : target;
 }
 
 /** What a module swap is worth as a FRACTION of the current build, 0 when there is nothing to compare against. */
@@ -1097,17 +1431,46 @@ export function slotPotential(it: Item, ctx: ModuleCtx): number {
  * override the objective, which is how an engine that gave up Combat Power and its zero draw won a slot on
  * having one more aspect slot.
  */
-export function moduleBetter(cand: Item, eq: Item | null, ctx: ModuleCtx): boolean {
-  if (!eq) return true;                     // an empty slot takes anything that fits
+/**
+ * Whether this module should displace that one AND WHY — one owner for both, because a verdict the player cannot
+ * check is how three separate objective bugs stayed invisible for as long as they did.
+ *
+ * The `why` is written for the person reading a rail row, not for a log: it names what actually separated the two,
+ * which on a silent objective is a countable tie-break and on a live one is a percentage of the battery.
+ */
+export function moduleWhy(cand: Item, eq: Item | null, ctx: ModuleCtx): { better: boolean; why: string } {
+  if (!eq) return { better: true, why: "the slot is empty" };
   if (ctx.pools && ctx.turrets?.length) {
     const gain = moduleGain(cand, eq, ctx);
-    if (gain >= MIN_GAIN) return true;
-    if (Math.abs(gain) >= OBJECTIVE_TIE) return false;
+    // THE COMPARISON MUST DISAGREE WITH ITSELF IN AT MOST ONE DIRECTION. `moduleGain` prices a swap against the
+    // pools as they read WITH the current module fitted, and two modules differing in a reactor-capacity aspect
+    // (`Microgenerators ×1.1`) as well as in a pooled stat can each score a gain from the other's baseline: the
+    // reported pool already embeds the bracket the fitted one produces, so the unwind is not symmetric. Acting on
+    // that is the apply → suggest → apply BOUNCE the user saw — two module sets proposed alternately, forever.
+    //
+    // Where both directions claim a gain the honest answer is that the objective cannot order them, so it says so
+    // and the tie-breaks below decide — which are antisymmetric by construction. A swap is only ever
+    // DECLINED by this, never invented.
+    const back = moduleGain(eq, cand, ctx);
+    if (gain >= MIN_GAIN && back >= MIN_GAIN)
+      return { better: false, why: "the two cannot be ordered — each scores higher from the other's build" };
+    if (gain >= MIN_GAIN) return { better: true, why: `+${(gain * 100).toFixed(1)}% for the whole battery` };
+    if (Math.abs(gain) >= OBJECTIVE_TIE)
+      return { better: false, why: `${(gain * 100).toFixed(1)}% for the whole battery` };
     // Silent on what the two DO — so what they could BECOME decides, before the countable tie-breaks.
     const potential = slotPotential(cand, ctx) - slotPotential(eq, ctx);
-    if (Math.abs(potential) >= OBJECTIVE_TIE) return potential > 0;
+    if (Math.abs(potential) >= OBJECTIVE_TIE)
+      return { better: potential > 0, why: "an empty aspect slot is worth more than the difference" };
   }
-  return compareModules(cand, eq, ctx.energy, ctx.role, ctx.fit) > 0;
+  const { d, why } = compareModulesWhy(cand, eq, ctx.energy, ctx.role, ctx.fit);
+  // The objective could not separate them, so SAY that as well as the tie-break: a "+0" with a reason reads as a
+  // judgement, where a "+0" alone reads as a mistake.
+  return { better: d > 0, why: why ? `same battery score — ${why}` : "nothing separates them" };
+}
+
+/** The verdict alone, for every caller that only orders by it. */
+export function moduleBetter(cand: Item, eq: Item | null, ctx: ModuleCtx): boolean {
+  return moduleWhy(cand, eq, ctx).better;
 }
 
 /** A set's worth: an ordered TIER plus a value inside it. Never one number — see `setRank`. */
@@ -1167,6 +1530,257 @@ export function worthSwitching(next: Rank, base: Rank): boolean {
   if (!(base[1] > 0)) return next[1] > base[1];
   return rankSub(next, base) / base[1] >= MIN_GAIN;
 }
+
+/* ---- THE RANKED GOAL ------------------------------------------------------------------------------------
+ *
+ * "combat power over armor over precision" — an ORDER, which is the one thing a player can actually state. A
+ * weight cannot be stated: there is no knowable exchange rate between a hull point and a point of damage, and
+ * inventing one is V31's "a guess wearing a measurement's clothes". A floor cannot be stated either: it needs a
+ * MAGNITUDE (`hull >= 1,200,000`) nobody knows. An order needs neither, because it never compares two different
+ * stats — it compares combat power to combat power, then armor to armor, and reads armor only where combat power
+ * came out the same.
+ *
+ * THE SHAPE IS `officer.ts`'s comparator, which is six lines and already proven: scan a per-candidate vector,
+ * then INCUMBENCY, then the existing tie-break. It is safe to be that simple because `cov[i]` is EXACT — a
+ * boolean — so the scan is transitive and `sort` is well defined.
+ *
+ * THE ONE RULE THIS KEEPS: the key stays exact. Each sign is computed ONCE per candidate against the FITTED
+ * build, and the band that decides "same" is applied THERE. A banded PAIRWISE comparator — `if (abs(d) > band)
+ * return sign(d)` — is INTRANSITIVE: at a band of 0.5, 100 ties 100.4 ties 100.8 while 100 loses to 100.8. That
+ * is V70's family, which has already cost five bugs; a hill-climb on it can cycle and `Array.sort` is
+ * implementation-defined. Against a fixed reference the vector is exact and the order is total.
+ *
+ * THREE states, not two: an officer cannot anti-cover a priority, but a build can REGRESS, and it is `worse`
+ * that disqualifies a plan before a lower key is ever read.
+ */
+export type GoalSign = -1 | 0 | 1;
+
+/** What a goal may rank. Each is a figure the objective computes for a WHOLE build and that `reconcile.test.ts`
+ *  covers — a key nothing validates would be an opinion with no measurement under it. */
+export const GOAL_KEYS = ["dps", "combat", "precision", "mining", "salvage", "hull", "armor", "shield"] as const;
+export type GoalKey = (typeof GOAL_KEYS)[number];
+
+/** One build's figures, in the units the panel already shows. A key this build has no reading for is absent, and
+ *  absent orders nothing — it can neither promote nor demote a candidate. */
+export type GoalReading = Partial<Record<GoalKey, number>>;
+
+/**
+ * Better, same or worse than the FITTED build on ONE key.
+ *
+ * The band is `OBJECTIVE_TIE`, the documented silence band — the difference below which this objective already
+ * declines to have an opinion. It is an INTRA-stat judgement ("what counts as no change in combat power") and so
+ * is answerable; a weight would be an INTER-stat one, and that is the thing nobody can answer.
+ */
+export function goalSign(cand: number | undefined, fitted: number | undefined,
+                         band = OBJECTIVE_TIE): GoalSign {
+  if (cand == null || fitted == null || !Number.isFinite(cand) || !Number.isFinite(fitted)) return 0;
+  if (!(Math.abs(fitted) > 0)) return cand > 0 ? 1 : cand < 0 ? -1 : 0;
+  const d = (cand - fitted) / Math.abs(fitted);
+  return d > band ? 1 : d < -band ? -1 : 0;
+}
+
+/** The whole vector, in the player's own order. Computed ONCE per candidate, against the fitted build. */
+export function goalVector(keys: readonly GoalKey[], cand: GoalReading, fitted: GoalReading,
+                           band = OBJECTIVE_TIE): GoalSign[] {
+  return keys.map((k) => goalSign(cand[k], fitted[k], band));
+}
+
+/** A candidate as the goal comparator reads it: its signs, whether it IS the fitted build, and the scalar the
+ *  objective already scores it by — which breaks ties inside a vector and nothing more. */
+export interface GoalCandidate { signs: GoalSign[]; fitted?: boolean; scalar?: number }
+
+/**
+ * Negative ⇒ `a` ranks above `b`. A comparator, so it can be handed to `sort` — which is only sound because the
+ * signs are exact.
+ *
+ * INCUMBENCY sits immediately after the keys, copied from `officer.ts` where it is the whole anti-churn
+ * mechanism: "the optimizer never proposes a swap that doesn't change priority coverage — that churn read as
+ * 'changes I didn't ask for'". A candidate that ties the fitted build on every key does not displace it.
+ */
+export function goalCompare(a: GoalCandidate, b: GoalCandidate): number {
+  const n = Math.min(a.signs.length, b.signs.length);
+  for (let i = 0; i < n; i++) if (a.signs[i] !== b.signs[i]) return b.signs[i] - a.signs[i];
+  if (!!a.fitted !== !!b.fitted) return a.fitted ? -1 : 1;
+  // Only inside an identical vector, and only as a magnitude: two candidates both "better on combat power" are
+  // separated by HOW much, which is what keeps a ranked goal from flattening into indifference.
+  return (b.scalar ?? 0) - (a.scalar ?? 0);
+}
+
+/** Does the goal prefer `cand` over the fitted build? The fitted build is `signs` of all zeroes by construction,
+ *  so this is `goalCompare` against it — stated as its own name because it is the question every caller asks. */
+export function goalPrefers(cand: GoalCandidate, fittedScalar = 0): boolean {
+  return goalCompare(cand, { signs: cand.signs.map(() => 0), fitted: true, scalar: fittedScalar }) < 0;
+}
+
+/**
+ * A LAYER HP as this build would read it, anchored on the game's own figure.
+ *
+ * `GetStat` is `(base + Σ amount) * Π multiplier`, and on the HP stats that product is enormous: measured on the
+ * Varyag, Hull HP is `(1,409 + 8,338) * 269.176` — a Hull Kit contributing `Hull HP ×162.948` and two modules
+ * contributing 4,575 and 3,763 flat. Taking a raw additive line off the REPORTED total (already multiplied) and
+ * adding the candidate's back mixes the two spaces: an item's 2,339 of Hull HP moves the row by 2,339 where the
+ * game moves it by 2,339 × 269. So: divide the product out, move the additive half there, put the candidate's
+ * product back — the order `poolsWithModule` uses for the pools, and the same reason.
+ *
+ * ANCHORED, NEVER RE-SUMMED, and that is load-bearing: the reported figure already carries the game's own
+ * scaling passes — `rankHp × escalationHp × hpBalance(level)`, measured at ×8.57 on a Legendary level-60 unit
+ * and ×2.00 on a Rookie — which `ApplyHpBalanceBonus` applies to the PLAYER's ship too, with no faction guard.
+ * A layer HP rebuilt from item lines alone is short by a factor that is not one number and that `/status` does
+ * not serve. Only the RATIO between two builds is ours to compute; the magnitude stays the game's.
+ *
+ * An ESTIMATE where both halves move, and labelled as one wherever it is shown.
+ */
+export function projectLayer(cur: number | null, stat: string, curSet: Item[], nextSet: Item[]): number | null {
+  if (cur == null) return null;
+  const lines = (set: Item[]) => {
+    let add = 0, mul = 1;
+    for (const it of set) {
+      const t = statTotals(it).get(stat);
+      if (t) { add += t.add; mul *= t.mul; }
+    }
+    return { add, mul };
+  };
+  const a = lines(curSet);
+  const b = lines(nextSet);
+  if (a.add === b.add && Math.abs(a.mul - b.mul) < 1e-9) return cur;
+  if (!(a.mul > 0)) return cur;
+  // `cur / a.mul` is the whole additive side INCLUDING the hull's own base, which no gear swap moves.
+  const base = cur / a.mul - a.add;
+  return Math.max(0, (base + b.add) * b.mul);
+}
+
+/** One build's ranked figures, read off the pools the objective already scores with. HULL/ARMOR/SHIELD do not
+ *  live in the pools at all — they are the GAME's own `/ship/vitals` reading, projected by `projectLayer` — so
+ *  they arrive as `layers` or not at all, and a key with no reading orders nothing (`goalSign`) rather than
+ *  silently counting as unchanged. */
+export function goalReadingOf(p: ShipPools | null | undefined, rank?: Rank,
+                              layers?: { hull?: number | null; armor?: number | null; shield?: number | null }): GoalReading {
+  if (!p) return {};
+  return {
+    combat: p.poolCombatPower,
+    precision: p.poolPrecision,
+    mining: p.poolMiningPower,
+    salvage: p.poolSalvagePower,
+    dps: rank && rank[0] === 2 ? rank[1] : undefined,
+    hull: layers?.hull ?? undefined,
+    armor: layers?.armor ?? undefined,
+    shield: layers?.shield ?? undefined,
+  };
+}
+
+/**
+ * The order a ship starts with, before the player states one.
+ *
+ * Deliberately ONE key — the pool the hull's own role is about. A longer default would be inventing an ordering
+ * the player has not asked for, and the whole point of an order over a weight is that it comes from them. One key
+ * is enough to refuse the class of plan that prompted this: a battery whose Combat Power FALLS is not an upgrade
+ * to a combat ship, whatever it does for a stat further down.
+ */
+export function defaultGoalOrder(role?: string | null): GoalKey[] {
+  switch (role) {
+    case "Combat": return ["combat"];
+    case "Mining": return ["mining"];
+    case "Salvaging": return ["salvage"];
+    default: return [];      // no role, no default opinion — the objective behaves exactly as before
+  }
+}
+
+/**
+ * The KEY that refuses this plan, or null when the goal is content.
+ *
+ * A veto only: the goal may decline a plan the objective liked, never invent one it did not — the same rule the
+ * both-ways guard obeys, and for the same reason. It names the key so the tab can say WHY a slot was kept, since
+ * a plan silently withheld is indistinguishable from having found nothing.
+ */
+/**
+ * Every tracked measurement this plan LOWERS by more than `threshold`, worst first.
+ *
+ * A WARNING, ⊥ a refusal, and the difference is the whole point: the app declining a trade the player would have
+ * taken is worse than the app taking one it should have flagged, because a refusal is invisible — it produces no
+ * row, and the only trace is a sentence explaining an absence. Naming what falls hands the decision back with the
+ * facts attached.
+ *
+ * It reads EVERY key rather than the three layers, because a plan can be ruinous on an axis nobody thought to cap:
+ * a swap costing 4.9% of Combat Power on a combat hull said nothing at all while a hull cap was busy refusing
+ * plans, which is the wrong axis watched for the wrong reason.
+ *
+ * A key missing from either reading is skipped rather than treated as zero — absent and "fell to nothing" are
+ * different claims, and a bridge that stops reporting a pool must not read as every plan destroying it.
+ */
+export function goalDrops(fitted: GoalReading, planned: GoalReading,
+                          threshold: number): { key: GoalKey; drop: number }[] {
+  const out: { key: GoalKey; drop: number }[] = [];
+  for (const k of GOAL_KEYS) {
+    const a = fitted[k], b = planned[k];
+    if (a == null || b == null || !Number.isFinite(a) || !Number.isFinite(b) || !(a > 0)) continue;
+    const drop = (a - b) / a;
+    if (drop > threshold) out.push({ key: k, drop });
+  }
+  return out.sort((x, y) => y.drop - x.drop);
+}
+
+export function goalRefuses(order: readonly GoalKey[], fitted: GoalReading, planned: GoalReading,
+                            band = OBJECTIVE_TIE): GoalKey | null {
+  for (const k of order) {
+    const s = goalSign(planned[k], fitted[k], band);
+    if (s < 0) return k;        // worse on a ranked key: refused before any lower key is read
+    if (s > 0) return null;     // better on a ranked key: nothing below it can overrule that
+  }
+  return null;                  // every ranked key tied — the objective's own scalar decides, as before
+}
+
+/**
+ * THE DEFENSIVE LAYERS, AND THE ONE RULE THAT IS NOT AN EXCHANGE RATE.
+ *
+ * A ranked ORDER cannot answer the complaint that produced this — "it wants me to cut the shields and hull in
+ * half for a small DPS gain" — because an order with Combat first never reads the hull key when combat WENT UP.
+ * Ordering says which stat is consulted; it says nothing about how much of one is worth how much of another,
+ * and by design nothing here invents that rate.
+ *
+ * What a player can state without inventing one is a REFUSAL TO BE WRECKED: however good the gain, do not shed
+ * more than this share of a layer. It needs no magnitude — no `hull >= 1,200,000` that nobody can know — only a
+ * fraction of what the ship already has, which is why it survives the objection that killed floors.
+ *
+ * PER LAYER, deliberately, and not against a summed "effective HP": shields absorb first, armor carries its own
+ * weak/resist type table (`ArmorModule.ApplyArmorResistance`) and hull is what is left when both are gone, so a
+ * total hides a layer going to zero while another rises to cover it. A plan may lift the shield and gut the
+ * armor; the sum says nothing happened.
+ *
+ * The reading is the GAME's (`/ship/vitals`) projected by `projectLayer`, never a re-sum of item lines — the
+ * reported figure carries `rankHp × escalationHp × hpBalance(level)`, which applies to the player's own ship and
+ * is not one number.
+ */
+export const DEFAULT_LAYER_CAP = 0.10;
+
+export interface LayerReading { hull?: number | null; armor?: number | null; shield?: number | null }
+
+/** How a layer reads on screen when it is the one refusing. */
+export const LAYER_LABEL: Record<keyof LayerReading, string> = { hull: "Hull", armor: "Armor", shield: "Shield" };
+
+/**
+ * The layer this plan sheds too much of, or null. Reports the WORST one and by how much, because a refusal that
+ * cannot say which layer or how far is a refusal the player can do nothing with.
+ *
+ * A layer with no reading on either side orders nothing — absent is not zero, and a ship with no armor module
+ * must not read as one whose armor was destroyed.
+ */
+export function layerRefuses(now: LayerReading, plan: LayerReading,
+                             cap = DEFAULT_LAYER_CAP): { layer: keyof LayerReading; drop: number } | null {
+  let worst: { layer: keyof LayerReading; drop: number } | null = null;
+  for (const layer of ["hull", "armor", "shield"] as const) {
+    const a = now[layer], b = plan[layer];
+    if (a == null || b == null || !Number.isFinite(a) || !Number.isFinite(b) || !(a > 0)) continue;
+    const drop = (a - b) / a;
+    if (drop > cap && (!worst || drop > worst.drop)) worst = { layer, drop };
+  }
+  return worst;
+}
+
+/** How a refused key reads on screen. */
+export const GOAL_LABEL: Record<GoalKey, string> = {
+  dps: "DPS", combat: "Combat Power", precision: "Precision", mining: "Mining Power",
+  salvage: "Salvage Power", hull: "Hull", armor: "Armor", shield: "Shield",
+};
 
 /** What layer a hardpoint is FOR. `any` leaves the choice to the meta search. */
 export type LayerRole = "surface" | "core" | "any";
@@ -1295,9 +1909,199 @@ export function optimizeTurretSetLayered(
 // They take part in every evaluation: the objective is the WHOLE battery, so scoring a subset answers a question
 // about a ship that does not exist.
 export function optimizeTurretSet(slots: SlotChoice[], bg: ShipPools, maxPasses = 4, fixed: Item[] = [], target: LayerTarget = "balanced", act?: PowerActivity): Map<string, Item> {
+  return optimizeGearSet({
+    slots,
+    maxPasses,
+    score: (chosen) => setRank([...fixed, ...chosen.values()], bg, target, act),
+    alone: (it) => setRank([...fixed, it], bg, target, act),
+  });
+}
+
+/**
+ * Choose a MODULE per slot against the whole ship — the module half of the same search the battery gets.
+ *
+ * Per slot was not enough, and the reason is the reactor: a module's draw and its `Energy` line both move the
+ * bracket, and the bracket multiplies EVERY power pool. Judged one slot at a time, two modules that each stay
+ * inside a bracket can cross it together, and the only defence was to forbid any swap that gave up a bracket —
+ * a constraint standing in for a set objective, which also refused the crossings that PAY. Scoring the whole
+ * assignment through `poolsWithModules` prices them instead.
+ *
+ * The battery is `turrets` and does not move here, but it is the thing being scored: a module is worth what it
+ * does for the guns. Pass the planned turrets, not the fitted ones, when a turret plan is pending.
+ *
+ * `ctx` carries the parts of the decision the objective cannot see — role, fit, layer target, activity. Its
+ * `pools`, `turrets` and `energy` are supplied per evaluation and whatever the caller sets is ignored.
+ */
+export function optimizeModuleSet(
+  slots: SlotChoice[], pools: ShipPools, turrets: Item[], ctx: ModuleCtx = {}, maxPasses = 4,
+): Map<string, Item> {
+  // What each open slot holds now. Positional against the assignment below, so a slot nobody re-picks swaps its
+  // own item for itself and moves nothing.
+  const out = slots.map((s) => s.current ?? null);
+  const inn = (chosen: ReadonlyMap<string, Item>, override?: { at: string; item: Item }) =>
+    slots.map((s) => (override && s.key === override.at ? override.item : chosen.get(s.key) ?? s.current ?? null));
+
+  return optimizeGearSet({
+    slots,
+    maxPasses,
+    score: (chosen) => {
+      const next = poolsWithModules(pools, out, inn(chosen));
+      return setRank(turrets, background(next, turrets), ctx.target, ctx.act);
+    },
+    // `moduleBetter` is asked, never re-derived: its bands decide when the objective is SILENT rather than
+    // negative, and a sub-floor loss is still a loss. It is handed the ship as the other slots would
+    // leave it, with this slot still holding `best`, so `out`/`inn` inside it are exactly this one swap.
+    tie: (cand, best, at, chosen) => {
+      const next = poolsWithModules(pools, out, inn(chosen, { at, item: best }));
+      const e = next.energy;
+      return moduleBetter(cand, best, {
+        ...ctx,
+        pools: next,
+        turrets,
+        energy: e && e.capacity > 0
+          ? { usedWithout: Math.max(0, e.used - (best.powerUsage ?? 0)), capacity: e.capacity }
+          : undefined,
+      });
+    },
+  });
+}
+
+/** Both halves of the ship, opened to ONE search. */
+export interface ShipSearch {
+  /** Hardpoints this search may fill. Empty is legal — then it is `optimizeModuleSet` with more ceremony. */
+  turretSlots: SlotChoice[];
+  moduleSlots: SlotChoice[];
+  pools: ShipPools;
+  /** The battery as FITTED — what the reported pools already contain, and therefore what `background` strips. */
+  fittedTurrets: Item[];
+  /** Turrets the ship keeps that this search is not choosing: pinned slots, hardpoints outside the filter. */
+  fixedTurrets?: Item[];
+  ctx?: ModuleCtx;
+  target?: LayerTarget;
+  act?: PowerActivity;
+  maxPasses?: number;
+}
+
+/**
+ * Choose turrets AND modules together — the coupling that runs BETWEEN the halves, which neither single-block
+ * pass can see.
+ *
+ * `optimizeModuleSet` holds the battery still and `optimizeTurretSet` holds the modules still, so each is blind
+ * to the move the other unlocks: a bigger reactor raises capacity, which relaxes the bracket, which makes a
+ * THIRSTIER gun affordable — and the player can only reach it by pressing the two buttons in the right order,
+ * twice. That is a ritual, and an optimizer exists to end it.
+ *
+ * Not a new ascent: the same `optimizeGearSet` over both slot lists, with one objective that folds the module
+ * assignment onto the pools and then scores the candidate battery against it. The module slots come FIRST in
+ * the order, because capacity moves before the guns that spend it.
+ */
+export function optimizeShipSet({
+  turretSlots, moduleSlots, pools, fittedTurrets, fixedTurrets = [], ctx = {}, target, act, maxPasses = 4,
+}: ShipSearch): Map<string, Item> {
+  // Positional against `inn` below, so a module slot nobody re-picks swaps its own item for itself.
+  const out = moduleSlots.map((s) => s.current ?? null);
+  const moduleKeys = new Set(moduleSlots.map((s) => s.key));
+  const inn = (chosen: ReadonlyMap<string, Item>, override?: { at: string; item: Item }) =>
+    moduleSlots.map((s) => (override && s.key === override.at ? override.item : chosen.get(s.key) ?? s.current ?? null));
+  const battery = (chosen: ReadonlyMap<string, Item>): Item[] => [
+    ...fixedTurrets,
+    ...turretSlots.map((s) => chosen.get(s.key) ?? s.current ?? null).filter((x): x is Item => !!x),
+  ];
+
+  // `background` is the expensive half and depends on the MODULE assignment alone — which does not move while a
+  // hardpoint's candidates are tried. Memoised on that vector by identity ∴ a turret pass costs one `setRank`
+  // per candidate instead of a full re-derivation of every pool.
+  let lastMods: (Item | null)[] | null = null;
+  let lastBg: ShipPools | null = null;
+  const bgFor = (mods: (Item | null)[]): ShipPools => {
+    if (lastBg && lastMods && lastMods.length === mods.length && lastMods.every((m, i) => m === mods[i])) return lastBg;
+    lastMods = mods;
+    lastBg = background(poolsWithModules(pools, out, mods), fittedTurrets);
+    return lastBg;
+  };
+
+  return optimizeGearSet({
+    slots: [...moduleSlots, ...turretSlots],
+    maxPasses,
+    // ONE evaluation for both halves: the modules decide the pools (capacity included), the battery is scored
+    // against them, and `setDps` adds the candidate battery's own draw — so a bracket edge is crossed, or
+    // cleared, by the WHOLE plan rather than by either half's guess about the other.
+    score: (chosen) => setRank(battery(chosen), bgFor(inn(chosen)), target, act),
+    // A turret alone is a battery of one, judged against the ship's CURRENT modules. A module has no such
+    // reading — nothing else being chosen, every module scores the same — so it answers null and seeds from
+    // `moduleBetter` below.
+    alone: (it, at) => (moduleKeys.has(at)
+      ? null
+      : setRank([...fixedTurrets, it], bgFor(inn(NO_ASSIGNMENT)), target, act)),
+    // `moduleBetter` is asked, never re-derived. Turret ties stay with the objective, which is
+    // the only thing that can order two whole batteries.
+    tie: (cand, best, at, chosen) => {
+      if (!moduleKeys.has(at)) return false;
+      const next = poolsWithModules(pools, out, inn(chosen, { at, item: best }));
+      const e = next.energy;
+      return moduleBetter(cand, best, {
+        ...ctx,
+        pools: next,
+        turrets: battery(chosen),
+        energy: e && e.capacity > 0
+          ? { usedWithout: Math.max(0, e.used - (best.powerUsage ?? 0)), capacity: e.capacity }
+          : undefined,
+      });
+    },
+  });
+}
+
+const NO_ASSIGNMENT: ReadonlyMap<string, Item> = new Map();
+
+/** What an ascent needs to know about the thing it is choosing. */
+export interface GearSearch {
+  slots: SlotChoice[];
+  maxPasses?: number;
+  /**
+   * The WHOLE ship's worth with this assignment — the objective, whichever half is being chosen.
+   *
+   * Keyed by SLOT, because what a choice is worth can depend on the slot it lands in: a module swap has to know
+   * what it displaces, and only the key says which item that is. The map is the ascent's live state, so read it and
+   * never retain it.
+   *
+   * Gear the ship keeps but this call is not choosing belongs INSIDE this closure: the objective is the whole ship,
+   * so scoring a subset answers a question about a ship that does not exist.
+   */
+  score: (chosen: ReadonlyMap<string, Item>) => Rank;
+  /**
+   * One item judged with nothing else open — seed B. Keyed by SLOT because a search over BOTH halves of the ship
+   * has slots of two kinds: a turret alone is a battery of one, while a module alone is worth the same whatever
+   * it is, so a module slot answers `null` and is seeded from the tie-break instead. Omitted entirely, every slot
+   * is.
+   */
+  alone?: (it: Item, at: string) => Rank | null;
+  /**
+   * Break a tie the objective cannot: `true` if `cand` should displace `best` when the two score the same.
+   *
+   * Only consulted when `score` genuinely cannot separate them, and it is the caller's own predicate — for modules
+ * that is `moduleBetter`, whose bands are load-bearing (a sub-floor LOSS is a loss,). The ascent must not
+   * invent a tie rule of its own, or there are two answers to "is this better" again.
+   */
+  tie?: (cand: Item, best: Item, at: string, chosen: ReadonlyMap<string, Item>) => boolean;
+}
+
+/**
+ * Choose an item per slot to maximise the whole ship's worth — the ONE coordinate ascent in the app, over
+ * hardpoints, module slots, or both at once.
+ *
+ * Greedy then fixed-point: seed each slot, then re-pick one slot at a time against the set the others currently
+ * form, until a full pass changes nothing. Every re-pick goes through `score`, so the shared pools are seen from
+ * the whole ship's perspective — which is what lets a Precision-heavy gun win a slot it would lose on its own
+ * numbers, and what lets two module swaps be bracketed TOGETHER rather than one at a time.
+ *
+ * Not provably optimal: every slot's choice changes every other slot's value through the pools, and a coordinate
+ * ascent can settle in a local maximum. It is monotone, converges in two or three passes on real inventories, and
+ * `maxPasses` bounds the pathological case. An item can only be used once — gear is not shared between slots.
+ */
+export function optimizeGearSet({ slots, maxPasses = 4, score, alone, tie }: GearSearch): Map<string, Item> {
   // Coordinate ascent from a seed. Each pass is monotone — a slot only changes when the whole set scores
   // higher — but ascent converges to a LOCAL optimum, so the seed decides which one. Seeding only with
-  // "best gun alone per slot" can therefore land BELOW the build already fitted, making every per-slot
+  // "best item alone per slot" can therefore land BELOW the build already fitted, making every per-slot
   // suggestion worse than keeping what is there.
   //
   // So the current configuration is a seed too, and the better outcome wins. That makes the result never
@@ -1316,15 +2120,20 @@ export function optimizeTurretSet(slots: SlotChoice[], bg: ShipPools, maxPasses 
     for (let pass = 0; pass < maxPasses; pass++) {
       let changed = false;
       for (const slot of slots) {
-        const others = [...fixed, ...slots.filter((s) => s.key !== slot.key).map((s) => chosen.get(s.key)).filter((x): x is Item => !!x)];
         const current = chosen.get(slot.key);
         let bestItem = current;
-        let bestScore = setRank(current ? [...others, current] : others, bg, target, act);
+        let bestScore = score(chosen);
+        // The slot is scored by TRYING each candidate in it and putting the state back, rather than by building a
+        // fresh assignment per candidate: an armory runs to thousands of modules, and the copy is the whole cost.
         for (const cand of slot.candidates) {
           if (cand !== current && used.has(cand)) continue;   // spoken for by another slot
-          const score = setRank([...others, cand], bg, target, act);
-          if (rankGt(score, bestScore)) { bestScore = score; bestItem = cand; }
+          chosen.set(slot.key, cand);
+          const s = score(chosen);
+          if (rankGt(s, bestScore)) { bestScore = s; bestItem = cand; }
+          // Equal on the objective: the caller's own tie-break decides, or nothing does.
+          else if (tie && bestItem && !rankGt(bestScore, s) && tie(cand, bestItem, slot.key, chosen)) { bestScore = s; bestItem = cand; }
         }
+        if (current) chosen.set(slot.key, current); else chosen.delete(slot.key);
         if (bestItem !== current) { take(slot.key, bestItem); changed = true; }
       }
       if (!changed) break;
@@ -1332,17 +2141,26 @@ export function optimizeTurretSet(slots: SlotChoice[], bg: ShipPools, maxPasses 
     return chosen;
   };
 
-  const score = (chosen: Map<string, Item>) => setRank([...fixed, ...chosen.values()], bg, target, act);
+  const total = (chosen: Map<string, Item>) => score(chosen);
 
-  // Seed A: keep what is fitted. Seed B: the best gun alone per slot, which is the old per-slot answer and
-  // reaches optima that the status quo cannot climb to.
+  // Seed A: keep what is fitted. Seed B: the best item alone per slot, which is the old per-slot answer and
+  // reaches optima the status quo cannot climb to. A caller with no "alone" reading — a module scores the same
+  // whatever it is when there is no battery beside it — seeds B from the tie-break instead.
   const fromCurrent = run((slot, used) => {
     const cur = slot.current ?? undefined;
     return cur && !used.has(cur) ? cur : undefined;
   });
-  const fromBest = run((slot, used) => slot.candidates
-    .filter((c) => !used.has(c))
-    .reduce<Item | undefined>((a, b) => (!a || rankGt(setRank([...fixed, b], bg, target, act), setRank([...fixed, a], bg, target, act)) ? b : a), undefined));
+  const fromBest = run((slot, used) => {
+    const free = slot.candidates.filter((c) => !used.has(c));
+    if (alone) {
+      const ranked: [Item, Rank][] = [];
+      for (const c of free) { const r = alone(c, slot.key); if (r) ranked.push([c, r]); }
+      if (ranked.length) return ranked.reduce((a, b) => (rankGt(b[1], a[1]) ? b : a))[0];
+    }
+    // Nothing is assigned yet at seed time, so the tie-break judges each candidate against the ship as it stands.
+    if (tie) return free.reduce<Item | undefined>((a, b) => (!a || tie(b, a, slot.key, NO_ASSIGNMENT) ? b : a), undefined);
+    return free[0];
+  });
 
-  return rankGt(score(fromBest), score(fromCurrent)) ? fromBest : fromCurrent;
+  return rankGt(total(fromBest), total(fromCurrent)) ? fromBest : fromCurrent;
 }

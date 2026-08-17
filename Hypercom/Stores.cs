@@ -85,6 +85,15 @@ namespace Hypercom
         // AbstractEquipment.GetStats(). `slot` is the actionable handle; null for loadout (read-only).
         // `entry` is the STACK the item sits in, when there is one: `favourite` lives there rather than on
         // the type (moved in game 0.8.1.21), so it can only be reported for a store read.
+        // Read by NAME rather than bound: `equipmentBuilder` is set in `CreateItemType` and a build that
+        // renames or hides it must degrade this one field to null, not throw inside the DTO every consumer
+        // of this method depends on. Registered in `the build checks` for that reason.
+        private static string BuilderId(InventoryItemType item)
+        {
+            var builder = Compat.Get(item, "equipmentBuilder") as EquipmentBuilder;
+            return builder != null ? builder.identifier : null;
+        }
+
         internal static Dictionary<string, object> ItemDto(InventoryItemType item, int? slot = null,
                                                           Inventory.InventoryItem entry = null)
         {
@@ -93,6 +102,12 @@ namespace Hypercom
                 ["key"] = slot,   // pass this back as `key` to /move,/sell (or /buy for shops)
                 ["slot"] = slot,
                 ["identifier"] = item.identifier,
+                // The RECIPE this instance was rolled from. Named apart from `identifier` deliberately: an
+                // item's own identifier is set on a minority of items and joins to no builder, so a second
+                // field called `identifier` on the same object would be a join that silently returns nothing.
+                // Null where there is no builder — absent and "no recipe" are different claims, as with
+                // `favourite` below.
+                ["builderId"] = BuilderId(item),
                 ["name"] = ItemName(item),
                 ["rarity"] = item.rarity.ToString(),
                 ["level"] = item.itemLevel,
@@ -194,6 +209,16 @@ namespace Hypercom
                 var stat = ub != null ? Compat.Get(ub, "stat") : null;
                 if (bonus == null && stat is EquipStat es) bonus = StatName(es);
                 var req = Compat.Get(rb, "requirementType");
+                // What it pays TODAY, formatted by the game itself. The bonus scales linearly with progress
+                // (`GetScaledUnlockBonus`), and the game's own tooltip shows both this and the max — so both are
+                // sent rather than leaving a client to rescale a formatted string, which cannot be done correctly:
+                // a percent line is stored fractionally and only `ToReadableString` knows that.
+                string bonusNow = Compat.Call(Compat.Call(rb, "GetScaledUnlockBonus"), "ToReadableString") as string;
+                // The NUMBERS behind the line, because the two kinds are worth entirely different things: an
+                // `amount` adds to the ship's pool for that stat, while a `multiplier` scales the WHOLE pool
+                // (`AbstractUnitData.ApplyStatSourceLines`: `calcedStats[s] += amount; statMultipliers[s] *= mult`,
+                // read back as `(base + calcedStats[s]) * statMultipliers[s]`). A client cannot price the bonus
+                // without knowing which of the two it is.
                 return new Dictionary<string, object>
                 {
                     ["unlocked"] = Compat.Get(rb, "IsUnlocked"),
@@ -201,6 +226,9 @@ namespace Hypercom
                     ["threshold"] = Compat.Get(rb, "unlockThreshold"),
                     ["unit"] = ResonanceUnit(req?.ToString()),
                     ["bonus"] = bonus,
+                    ["bonusNow"] = bonusNow,
+                    ["bonusAmount"] = ub != null ? Compat.Num(ub, "amount") : 0d,
+                    ["bonusMultiplier"] = ub != null ? Compat.Num(ub, "multiplier") : 1d,
                     ["bonusStat"] = stat is EquipStat es2 ? StatName(es2) : null,
                 };
             }
@@ -246,37 +274,64 @@ namespace Hypercom
         }
 
 
-        // Stat lines contributed by one aspect. `BoostStat` lives on the aspect's own GameObject; reached by
-        // reflection so this stays typeref-free on an unconditionally served path. An unequipped aspect can
-        // report a zero stack, in which case the single-stack value is what the item is worth fitted.
+        // Stat lines contributed by one aspect, from BOTH component types that carry them — and they are not the
+        // same thing, which is why reading only one left a whole class of aspect reporting nothing:
+        //
+        //   BoostStat        an `IEquipStatSource` registered on the UNIT ∴ its line joins the ship's POOL, the
+        //                    way a module's line does.
+        //   TurretBoostStat  a plain `MonoBehaviour` — NOT a `BoostStat` subclass, which is the trap — whose line
+        //                    `AbstractEquipment.GetStat` folds into THAT WEAPON only: `parent.GetStat(s)` plus its
+        //                    own boost lines. `Critical Attenuation` (+25% critical strike damage) is one, and
+        //                    `DamageData.CalculateDamage` reads it through `sourceTurret.GetStat(CriticalDamage)`.
+        //
+        // Reporting the second as though it were the first would put a weapon-local bonus into a pooled figure, so
+        // each line says which it is (`scope`), and a client that ignores the field is no worse off than before.
+        // Reached by reflection so this stays typeref-free on an unconditionally served path.
+        //
+        // An unequipped aspect can report a zero stack, in which case the single-stack value is what the item is
+        // worth fitted.
         private static List<object> AspectStats(object aspect)
         {
             var list = new List<object>();
-            try
-            {
-                var t = Compat.FindType("Behaviour.Equipment.Aspect.BoostStat");
-                if (t == null || aspect == null) return list;
-                if (!(Compat.Call(aspect, "GetComponents", t) is System.Array comps)) return list;
-                foreach (var comp in comps)
-                {
-                    var lines = Compat.Call(comp, "GetStats") as System.Collections.IEnumerable;
-                    var any = false;
-                    if (lines != null)
-                        foreach (var line in lines) { Add(list, line); any = true; }
-                    if (!any) Add(list, Compat.Call(comp, "GetStatLine", Compat.Get(comp, "stat")));
-                }
-            }
-            catch { }
+            if (aspect == null) return list;
+            Collect("Behaviour.Equipment.Aspect.BoostStat", "ship");
+            Collect("Behaviour.Equipment.Aspect.TurretBoostStat", "weapon");
             return list;
 
-            void Add(List<object> into, object line)
+            void Collect(string typeName, string scope)
+            {
+                try
+                {
+                    var t = Compat.FindType(typeName);
+                    if (t == null) return;
+                    if (!(Compat.Call(aspect, "GetComponents", t) is System.Array comps)) return;
+                    foreach (var comp in comps)
+                    {
+                        // `TurretBoostStat.GetStats(int stackSize = 1)` has no parameterless overload, so the
+                        // default has to be passed explicitly; `BoostStat` accepts either form.
+                        var lines = (Compat.Call(comp, "GetStats") ?? Compat.Call(comp, "GetStats", 1))
+                            as System.Collections.IEnumerable;
+                        var any = false;
+                        if (lines != null)
+                            foreach (var line in lines) { Add(list, line, scope); any = true; }
+                        // Only `BoostStat` offers this fallback; a `TurretBoostStat` that reported nothing above
+                        // has nothing else to ask, and inventing a line for it would be worse than omitting one.
+                        if (!any) Add(list, Compat.Call(comp, "GetStatLine", Compat.Get(comp, "stat")), scope);
+                    }
+                }
+                catch { }
+            }
+
+            void Add(List<object> into, object line, string scope)
             {
                 if (line == null) return;
                 var stat = Compat.Get(line, "stat");
                 var amount = Compat.AsNumber(Compat.Get(line, "amount")) ?? 0f;
                 var mult = Compat.AsNumber(Compat.Get(line, "multiplier")) ?? 1f;
                 if (stat == null || (amount == 0f && mult == 1f)) return;
-                into.Add(StatLine((EquipStat)stat, amount, mult, null));
+                var d = StatLine((EquipStat)stat, amount, mult, null);
+                d["scope"] = scope;
+                into.Add(d);
             }
         }
 
@@ -310,10 +365,11 @@ namespace Hypercom
         }
 
         // Readable aspect name via the game's translation table (key "@Aspect<id>").
-        private static string AspectName(string id) => Translate("@Aspect" + id, id);
+        // Shared with the aspect catalog dump — one owner for "what is this aspect called".
+        internal static string AspectName(string id) => Translate("@Aspect" + id, id);
 
         // Strip TextMeshPro rich-text tags (<color=…>, <b>, …) for plain-text display.
-        private static string StripTags(string s)
+        internal static string StripTags(string s)
             => string.IsNullOrEmpty(s) ? s : System.Text.RegularExpressions.Regex.Replace(s, "<[^>]+>", "");
 
         // Display text for an item. `displayName` is a localisation key ("@RarityUpgradeKitName") and

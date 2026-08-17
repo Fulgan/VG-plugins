@@ -1,0 +1,81 @@
+{
+ "stat": "CombatPower",
+ "shipGuid": "68db8f14-7095-4f2e-aa6c-88b6914afeaa",
+ "shipType": "Loxagar",
+ "total": 7216.21,
+ "multiplier": 1.76172459,
+ "additiveSum": 4028.6056518554688,
+ "multiplierProduct": 1.4485484541608424,
+ "sources": [
+  {
+   "source": "Engine",
+   "amount": 1635.15833,
+   "multiplier": 1,
+   "via": "Power"
+  },
+  {
+   "source": "Tractor Beam",
+   "amount": 800.7033,
+   "multiplier": 1,
+   "via": "Power"
+  },
+  {
+   "source": "Hangar Bay",
+   "amount": 694.105835,
+   "multiplier": 1,
+   "via": "Power"
+  },
+  {
+   "source": "Salvage Grinder",
+   "amount": 883.6382,
+   "multiplier": 1,
+   "via": "Power"
+  },
+  {
+   "source": "Operational Reserves",
+   "amount": 0,
+   "multiplier": 1.02,
+   "via": "Power"
+  },
+  {
+   "source": "Operational Reserves",
+   "amount": 0,
+   "multiplier": 1.02,
+   "via": "Power"
+  },
+  {
+   "source": "Operational Reserves",
+   "amount": 0,
+   "multiplier": 1.02,
+   "via": "Power"
+  },
+  {
+   "source": "Veteran's Might",
+   "amount": 0,
+   "multiplier": 1.05,
+   "via": "CombatPower"
+  },
+  {
+   "source": "Veteran's Might",
+   "amount": 15,
+   "multiplier": 1,
+   "via": "CombatPower"
+  },
+  {
+   "source": "@Combat - OffensiveMastery",
+   "amount": 0,
+   "multiplier": 1.29999971,
+   "via": "CombatPower"
+  }
+ ],
+ "context": {
+  "gameVersion": "0.8.1.24",
+  "shipType": "Loxagar",
+  "role": "Salvaging",
+  "equivalentTurrets": 0,
+  "equivalentTurretsMining": 0,
+  "equivalentTurretsSalvage": 7,
+  "poolCombatPower": 7216.21,
+  "poolCombatPowerMult": 1.76172459
+ }
+}

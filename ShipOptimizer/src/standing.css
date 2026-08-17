@@ -17,18 +17,28 @@
 }
 .std-panel-head .muted { font-size: 10px; }
 
-.std-rows { display: flex; flex-direction: column; gap: 2px; }
+/* THE PANEL owns the columns, and every row inherits them (`subgrid`, chained down through the row to the button
+   that holds the cells). With the template on each row instead, a row was its own grid: the value track is sized
+   by CONTENT ("8,729+" against "0"), so each row gave its bar a different width and put its number at a different
+   x. Horizontal padding lives here rather than on the rows — padding on a subgrid shifts its tracks off the
+   parent's lines, which is the same misalignment by another route. */
+.std-rows {
+  display: grid;
+  grid-template-columns: minmax(112px, 1fr) minmax(60px, 1.6fr) auto minmax(88px, auto);
+  row-gap: 2px; column-gap: 9px; padding: 0 6px;
+}
 
-.std-row { border-radius: var(--radius, 3px); }
+.std-row { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; border-radius: var(--radius, 3px); }
 .std-row.open { background: var(--sunken, #101016); }
 /* At war: the one state that changes how you should act, so it reads without hunting for a number. */
 .std-row.war { box-shadow: inset 2px 0 0 #ff7b7b; }
 
-/* faction (badge+name) | bar | value | band-or-rank. One grid for both panels so the two line up when side
-   by side. The faction cell is a single mark: a colour dot beside a badge would say the same thing twice. */
+/* faction (badge+name) | bar | value | band-or-rank — the tracks come from `.std-rows`, which both panels declare
+   identically so the two line up when side by side. The faction cell is a single mark: a colour dot beside a badge
+   would say the same thing twice. Vertical padding only (see the note on `.std-rows`). */
 .std-main {
-  display: grid; grid-template-columns: minmax(112px, 1fr) minmax(60px, 1.6fr) auto minmax(88px, auto);
-  align-items: center; gap: 9px; width: 100%; padding: 4px 6px;
+  display: grid; grid-template-columns: subgrid; grid-column: 1 / -1;
+  align-items: center; width: 100%; padding: 4px 0;
   background: none; border: 0; text-align: left; color: inherit; cursor: pointer;
 }
 .std-main:hover { background: var(--hover, #1a1a22); }
@@ -42,6 +52,8 @@
 
 .std-bar { height: 6px; border-radius: 3px; overflow: hidden; background: var(--sunken, #101016); }
 .std-bar i { display: block; height: 100%; border-radius: 3px; }
+/* Full, and past the end of the scale: the notch says the figure ran off the bar rather than just reaching it. */
+.std-bar.over { box-shadow: inset -2px 0 0 var(--warn, #ffb020); }
 .std-val { font-size: 11px; font-variant-numeric: tabular-nums; text-align: right; }
 /* The scale sits with the value, the way the game prints it (30000 / 50000) — dimmer, since it never moves. */
 .std-val em { font-style: normal; color: var(--text-faint, #6a6a78); }
@@ -53,6 +65,7 @@
 }
 
 .std-detail {
+  grid-column: 1 / -1;
   display: flex; flex-wrap: wrap; gap: 6px 26px;
   padding: 2px 8px 8px 25px; border-top: 1px solid var(--border-faint, #1e1e26);
 }
@@ -76,9 +89,16 @@
 }
 .std-log-empty { font-size: 11px; padding: 6px 0 2px; }
 
-.std-log-rows { margin: 6px 0 0; padding: 0; list-style: none; max-height: 260px; overflow-y: auto; }
-.std-log-rows li {
+/* The COLUMNS BELONG TO THE LIST, not to each row: with the template on the `li`, every row resolved its own
+   `1fr` against its own trailing content, so the numbers in tracks 3 and 4 landed at a different x on every line.
+   The list owns the tracks and each row inherits them through `subgrid` — one set of column positions for the
+   whole log, which is what makes a table of numbers readable. */
+.std-log-rows {
+  margin: 6px 0 0; padding: 0; list-style: none; max-height: 260px; overflow-y: auto;
   display: grid; grid-template-columns: 52px minmax(80px, 1fr) 56px 62px auto;
+}
+.std-log-rows li {
+  display: grid; grid-template-columns: subgrid; grid-column: 1 / -1;
   align-items: baseline; gap: 6px; padding: 2px 0; font-size: 11px;
   border-bottom: 1px solid var(--border-faint, #1e1e26);
 }
@@ -88,12 +108,17 @@
 .std-log-rows li.up .std-log-d { color: #58c26b; }
 .std-log-rows li.down .std-log-d { color: #ff7b7b; }
 .std-log-v { font-variant-numeric: tabular-nums; text-align: right; color: var(--text-dim, #8a8a96); }
-.std-log-tier { grid-column: 5; color: #e8b04f; }
-.std-log-at { grid-column: 5; color: var(--text-faint, #6a6a78); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* ONE trailing cell holding both the band crossing and where it happened. Pinned to the same column separately,
+   they landed on top of each other on any row that had both. */
+.std-log-end { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.std-log-tier { color: #e8b04f; white-space: nowrap; }
+.std-log-at { color: var(--text-faint, #6a6a78); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 @media (max-width: 620px) {
-  /* Two rows per faction rather than four cramped columns: identity above, the numbers below. */
-  .std-main { grid-template-columns: 1fr auto; }
+  /* Two lines per faction rather than four cramped columns: identity above, the numbers below. The template
+     changes on the PANEL — the rows only inherit it, so setting it on a row here would leave a two-column row
+     inside a four-column parent and put every cell in the wrong track. */
+  .std-rows { grid-template-columns: 1fr auto; }
   .fac-mark { grid-column: 1 / span 2; }
   .std-lvl, .std-war, .std-rankcell { grid-column: 1 / span 2; }
 }

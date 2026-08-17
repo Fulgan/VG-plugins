@@ -123,10 +123,44 @@ describe("T34: the rail and the gear tab agree, on the capture that made them di
     expect(rankSub(plan, base)).toBeGreaterThanOrEqual(0);
   });
 
-  it("anchored, the fitted battery is already the answer and nothing is proposed", () => {
+  // CHANGED WHEN THE CADENCE WAS MEASURED, and the row above says why that is allowed: this pinned an OUTCOME
+  // ("nothing is proposed"), and the outcome moved when the model stopped pricing every gun's real fire rate at
+  // its nominal one. A one-shot magazine overlaps its whole reload with the fire delay — `max(fd, rd*0.8)`
+  // against a nominal `fd + rd` — so Lasers, Mining Lasers and Rad Cannons are worth ~2x what this capture's
+  // objective thought, and on this battery that is enough to find a real swap (`cadence.test.ts`, 71 prefabs,
+  // measured in game by the arena thread).
+  //
+  // What is pinned instead is the invariant the file exists for: the plan is never worse than what is fitted,
+  // and the optimizer never lands below its own baseline. If a future model wants to propose nothing here
+  // again, that is equally fine.
+  it("anchored, the plan is never worse than the fitted battery", () => {
     const { plan, base } = planAgainst(bgAnchored);
-    expect(rankSub(plan, base)).toBe(0);
-    expect(worthSwitching(plan, base)).toBe(false);
+    expect(rankSub(plan, base)).toBeGreaterThanOrEqual(0);
+    // Whatever it proposes, it must clear the same floor every other surface applies — no sub-noise churn.
+    if (rankSub(plan, base) > 0) expect(worthSwitching(plan, base)).toBe(true);
+  });
+
+  // AND THE HALF THAT ONLY BECAME TESTABLE WHEN THE OUTCOME MOVED. was two code paths DISAGREEING — the
+  // rail offering what the tab declined — and while nothing was proposed here, "they agree" was 0 == 0 and
+  // proved nothing. The corrected cadence gives this capture a real winner, so the rail must now see the same
+  // item the optimizer wants to fit: if the tab plans a gun the rail cannot even offer, that is B11 with the
+  // sides swapped.
+  it("anchored, the rail can see the gun the optimizer plans to fit", () => {
+    const { plan, base } = planAgainst(bgAnchored);
+    if (rankSub(plan, base) <= 0) return;   // nothing proposed on some future model ⇒ nothing to agree about
+    const slots = hps.map((h) => ({
+      key: `t:${h.index}`, current: h.equipped,
+      candidates: [...(h.equipped ? [h.equipped] : []), ...cands.filter((g) => turretFits(g, h.size, F(h.index), cats))],
+    }));
+    const chosen = optimizeTurretSet(slots, bgAnchored, 4, []);
+    const incoming = hps
+      .map((h) => ({ was: h.equipped, now: chosen.get(`t:${h.index}`) }))
+      .filter((s) => s.now && s.now !== s.was)
+      .map((s) => s.now!.name);
+    expect(incoming.length).toBeGreaterThan(0);
+    // The rail's own view of the same capture, before its floor: every gun it would consider offering.
+    const railSees = new Set(gearTurretOpps(cands, hps, filters, cats, gainAgainst(bgAnchored)).map((o) => o.item.name));
+    for (const name of incoming) expect(railSees).toContain(name);
   });
 
   // The invariant, not the numbers: whatever the rail advertises, the optimizer must be willing to fit.
@@ -135,8 +169,10 @@ describe("T34: the rail and the gear tab agree, on the capture that made them di
     const railed = gearTurretOpps(cands, hps, filters, cats, gearGain)
       .filter((o: Opp) => base <= 0 || o.delta / base >= MIN_GAIN);
     for (const o of railed) {
-      const others = equipped.filter((t) => t !== o.replaces);
-      expect(worthSwitching(setRank([...others, o.item], bg), setRank([...others, o.replaces], bg))).toBe(true);
+      // Every turret opportunity displaces an occupant — an empty hardpoint is the Gear tab's job, not a rail's.
+      const eq = o.replaces!;
+      const others = equipped.filter((t) => t !== eq);
+      expect(worthSwitching(setRank([...others, o.item], bg), setRank([...others, eq], bg))).toBe(true);
     }
   });
 });

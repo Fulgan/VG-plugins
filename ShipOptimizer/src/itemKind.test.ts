@@ -12,7 +12,52 @@ const mod = (o: Partial<Item>): Item => ({
 
 describe("compareModules", () => {
   it("prefers the bigger headline first", () => {
-    expect(compareModules(mod({ mainStat: { name: "Tractor Beams", amount: "8" } }), mod({}))).toBeGreaterThan(0);
+    // A MAGNITUDE headline, so the step being tested is the ordering and not the saturation below.
+    const small = mod({ mainStat: { name: "Energy", amount: "20,000" } });
+    const big = mod({ mainStat: { name: "Energy", amount: "25,000" } });
+    expect(compareModules(big, small)).toBeGreaterThan(0);
+  });
+
+  // A COUNT is not a magnitude, and past its ceiling it must not decide anything: the player's report was a
+  // tractor beam swap "worse on every level but the tractor beam count", where beyond five beams the extra ones
+  // only gather loot marginally faster.
+  it("does not let a saturated count outrank everything else", () => {
+    const manyBeams = mod({ mainStat: { name: "Tractor Beams", amount: "10" }, powerUsage: 1_147 });
+    const better = mod({
+      mainStat: { name: "Tractor Beams", amount: "6" }, powerUsage: 0, aspectSlots: 1,
+      substats: [{ stat: "Hull HP", amount: 2_000, multiplier: 1 }],
+    } as Partial<Item>);
+    // Ten beats six on the raw number, and the raw number is what the card still shows…
+    expect(compareModules(manyBeams, better)).toBeLessThan(0);   // …but the decision goes the other way
+  });
+
+  it("still counts a count BELOW its ceiling", () => {
+    const four = mod({ mainStat: { name: "Tractor Beams", amount: "4" } });
+    const five = mod({ mainStat: { name: "Tractor Beams", amount: "5" } });
+    expect(compareModules(five, four)).toBeGreaterThan(0);
+  });
+
+  // The reported case: on a SALVAGE hull the objective is silent about Precision and Hull HP, so this
+  // chain carries the whole decision — and 26 units of draw outranked three stat lines and two aspects.
+  it("does not spend a decision on a draw difference nobody feels", () => {
+    const en = { usedWithout: 7_951, capacity: 14_456 };   // 26 units is 0.18% of the budget
+    const richer = mod({
+      powerUsage: 732, aspectSlots: 2,
+      aspects: [{ name: "Repair Nanites", description: "", stats: [] },
+                { name: "Operational Reserves", description: "", stats: [] }],
+      substats: [
+        { stat: "Power", amount: 694, multiplier: 1 },
+        { stat: "Hull HP", amount: 1_335, multiplier: 1 },
+        { stat: "Precision", amount: 1_220, multiplier: 1 },
+      ],
+    } as Partial<Item>);
+    const barelyLeaner = mod({ powerUsage: 706, aspectSlots: 0 } as Partial<Item>);
+    expect(compareModules(barelyLeaner, richer, en)).toBeLessThanOrEqual(0);
+  });
+
+  it("still prefers a draw saving that is material", () => {
+    const en = { usedWithout: 1_000, capacity: 10_000 };   // 900 units is 9% of the budget
+    expect(compareModules(mod({ powerUsage: 0 }), mod({ powerUsage: 900 }), en)).toBeGreaterThan(0);
   });
 
   it("breaks a headline tie on energy draw", () => {

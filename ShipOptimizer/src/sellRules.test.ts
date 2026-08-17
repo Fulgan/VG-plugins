@@ -2,10 +2,11 @@
 // the app whose output spends something irreversibly.
 import { describe, it, expect } from "vitest";
 import {
-  cantSell, clauses, defaultDir, evaluate, explain, exportList, listProblems, mergeCats, newRule,
+  cantSell, clauses, defaultDir, evaluate, explain, exportList, FIELDS, freeKey, listProblems, mergeCats, needCount, newRule,
   NO_VALUE, REL_EXACT, isRelExact, orderOptions, parseList, pinsUnit, proceeds, rankVal, relAbs, relBound, relFixed,
-  relFixedQ, relTermOf, sentence, subjectPhrase, typeOf, valueLabel,
-  type FieldCtx, type Kind, type Rule, type RuleSet,
+  relFixedQ, relTermOf, sentence, setCondFor, setQOf, setQWords, SET_QS, subjectPhrase, typeOf, valueLabel,
+  fieldVaries,
+  type FieldCtx, type Kind, type Rule, type RuleSet, type SetCond,
 } from "./sellRules";
 import type { Item } from "./types";
 
@@ -172,6 +173,83 @@ describe("a field an item has NONE of", () => {
   });
 });
 
+// Several values in one clause used to be OR and nothing else, so "carries BOTH of these" had to be built out
+// of inverted clauses — the reason `all` exists. Negation interacts with it, and the two negations are
+// different questions: none of them, versus missing at least one.
+describe("several values in one clause: OR, AND, and their negations", () => {
+  const subs = (name: string, ...stats: string[]) =>
+    gun({ name, substats: stats.map((stat) => ({ stat, amount: 1, multiplier: 1 })) } as Partial<Item>);
+  const both = subs("both", "Armor HP", "Shield HP");
+  const one = subs("one", "Armor HP");
+  const neither = subs("neither", "Hull HP");
+  const items = [both, one, neither];
+  const verdicts = (where: Rule["where"]) =>
+    items.map((it) => evaluate([it], set("sell", [rule({ where })]))[0] === "keep");
+
+  it("OR takes any one of them, AND takes only every one", () => {
+    expect(verdicts({ sub: { values: ["Armor HP", "Shield HP"] } })).toEqual([true, true, false]);
+    expect(verdicts({ sub: { values: ["Armor HP", "Shield HP"], all: true } })).toEqual([true, false, false]);
+  });
+
+  it("a negated OR is none of them; a negated AND is missing at least one", () => {
+    expect(verdicts({ sub: { values: ["Armor HP", "Shield HP"], not: true } })).toEqual([false, false, true]);
+    expect(verdicts({ sub: { values: ["Armor HP", "Shield HP"], all: true, not: true } })).toEqual([false, true, true]);
+  });
+
+  it("takes a threshold: at least N of them, and fewer than N of them", () => {
+    const three = subs("three", "Armor HP", "Shield HP", "Hull HP");
+    const two = subs("two", "Armor HP", "Shield HP");
+    const list = ["Armor HP", "Shield HP", "Hull HP"];
+    const on = (where: Rule["where"], items: Item[]) =>
+      items.map((it) => evaluate([it], set("sell", [rule({ where })]))[0] === "keep");
+    expect(on({ sub: { values: list, need: 2 } }, [three, two, one, neither])).toEqual([true, true, false, false]);
+    // Its negation is the other side of the same threshold, which is what "fewer than" says.
+    expect(on({ sub: { values: list, need: 2, not: true } }, [three, two, one, neither])).toEqual([false, false, true, true]);
+  });
+
+  it("names each reading in the words the control offers", () => {
+    const list = ["Armor HP", "Shield HP", "Hull HP"];
+    const q = (c: Partial<SetCond>) => setQOf({ values: list, ...c });
+    expect(q({})).toBe("any");
+    expect(q({ need: "all" })).toBe("all");
+    expect(q({ need: 2 })).toBe("atLeast");
+    expect(q({ not: true })).toBe("none");
+    expect(q({ not: true, need: "all" })).toBe("notAll");
+    expect(q({ not: true, need: 2 })).toBe("fewer");
+    // The words are the player's, not the model's: no NOT, no AND, no arithmetic to compose.
+    expect(SET_QS.map((x) => setQWords(x, true))).toEqual([
+      "has any of", "has all of", "has at least", "has none of", "is missing at least one of", "has fewer than"]);
+    // A one-value field can only be one of them or not, and says so without the plural machinery.
+    expect(setQWords("any", false)).toBe("is one of");
+    expect(setQWords("none", false, true)).toBe("is not");
+    // Picking a reading writes the clause that reading means, and reading it back returns the same reading.
+    for (const x of SET_QS) expect(setQOf(setCondFor(x, { values: list }, 2))).toBe(x);
+    // `all` follows the LIST: ticking a fourth value still means every one, where a stored 3 would not.
+    const all = setCondFor("all", { values: list });
+    expect(needCount({ ...all, values: [...list, "Energy Resistance"] })).toBe(4);
+  });
+
+  it("says which mode it is in, and never says 'none' for a negated AND", () => {
+    const list = ["Armor HP", "Shield HP", "Hull HP"];
+    expect(subjectPhrase({ sub: { values: list, need: 2 } }))
+      .toBe("everything I own with at least 2 of Armor HP, Shield HP or Hull HP");
+    expect(subjectPhrase({ sub: { values: list, need: 2, not: true } }))
+      .toBe("everything I own with fewer than 2 of Armor HP, Shield HP or Hull HP");
+    expect(subjectPhrase({ asp: { values: list, need: 2 } }))
+      .toBe("everything I own carrying at least 2 of Armor HP, Shield HP or Hull HP");
+    const vals = ["Armor HP", "Shield HP"];
+    expect(subjectPhrase({ sub: { values: vals } })).toBe("everything I own with Armor HP or Shield HP");
+    expect(subjectPhrase({ sub: { values: vals, all: true } })).toBe("everything I own with Armor HP and Shield HP");
+    expect(subjectPhrase({ sub: { values: vals, not: true } })).toBe("everything I own without Armor HP or Shield HP");
+    expect(subjectPhrase({ sub: { values: vals, all: true, not: true } }))
+      .toBe("everything I own missing at least one of Armor HP and Shield HP");
+    // One value is one value: `all` cannot make a negation read as a shortfall of a single thing.
+    expect(subjectPhrase({ sub: { values: ["Armor HP"], all: true, not: true } }))
+      .toBe("everything I own without Armor HP");
+    expect(subjectPhrase({ asp: { values: vals, all: true } })).toBe("everything I own carrying Armor HP and Shield HP");
+  });
+});
+
 describe("a booster's type is its main stat", () => {
   // Every booster reports type "Booster", so grouping by type alone pooled all of them.
   it("typeOf reports the main stat for boosters and the type for everything else", () => {
@@ -215,6 +293,72 @@ describe("the sell guards (Hypercom V6)", () => {
     const items = [gun({ sellValue: 50, count: 3 }), gun({ favourite: true, sellValue: 9999 } as Partial<Item>)];
     const v = evaluate(items, set("sell", []));
     expect(proceeds(items, v)).toBe(150);
+  });
+});
+
+describe("the main stat AMOUNT clause", () => {
+  it("selects on the EFFECTIVE headline, and reads as a floor", () => {
+    // `ms` says WHICH stat the headline is; this says what it is WORTH — "any gun over 11K Combat Power".
+    const weak = gun({ name: "weak", power: 9_000 });
+    const strong = gun({ name: "strong", power: 12_000 });
+    const r = rule({ where: { mv: { min: 11_000, max: null } } });
+    expect(evaluate([weak, strong], set("keep", [r]))).toEqual(["keep", "sell"]);
+    expect(subjectPhrase(r.where)).toBe("everything I own whose main stat amount is at least 11000");
+  });
+
+  it("is a floor by CONSTRUCTION, since a ceiling would ask for a weaker item", () => {
+    expect(FIELDS.mv.onlyMin).toBe(true);
+    expect(FIELDS.mv.kind).toBe("range");
+  });
+});
+
+describe("several clauses over one field", () => {
+  const withSubs = (...subs: string[]) =>
+    gun({ substats: subs.map((stat) => ({ stat, amount: 1, multiplier: 1 })) });
+
+  it("ANDs them, which one ticked list cannot say at any threshold", () => {
+    // "any of crit AND any of rate" — a single clause over all three values is an OR, and `need: 2` over it
+    // also accepts the two crit stats together.
+    const r = rule({ where: {
+      sub: { values: ["Crit Chance", "Crit Damage"] },
+      "sub#2": { values: ["Fire Rate"] },
+    } });
+    const both = withSubs("Crit Damage", "Fire Rate");
+    const critOnly = withSubs("Crit Chance", "Crit Damage");
+    const rateOnly = withSubs("Fire Rate");
+    expect(evaluate([both, critOnly, rateOnly], set("keep", [r]))).toEqual(["sell", "keep", "keep"]);
+  });
+
+  it("names the clause that turned an item away, not just its field", () => {
+    const r = rule({ where: {
+      sub: { values: ["Crit Chance"] },
+      "sub#2": { values: ["Fire Rate"] },
+    } });
+    const ex = explain(r, [withSubs("Crit Chance"), withSubs("Fire Rate")], ctx);
+    expect(ex.excluded.map((x) => x.k)).toEqual(["sub#2", "sub"]);
+  });
+
+  it("mints a key that leaves every clause already there alone", () => {
+    expect(freeKey({}, "sub")).toBe("sub");
+    expect(freeKey({ sub: { values: ["a"] } }, "sub")).toBe("sub#2");
+    expect(freeKey({ sub: { values: ["a"] }, "sub#2": { values: ["b"] } }, "sub")).toBe("sub#3");
+    expect(freeKey({ "sub#2": { values: ["b"] } }, "sub")).toBe("sub");
+  });
+
+  it("says each of them, since the adjective form would read as one clause's own OR", () => {
+    // "everything Legendary, Exotic" is what ONE clause reading `any` already says, so a repeated field is
+    // worded instead of stacked into the noun phrase.
+    const s = subjectPhrase({ r: { values: ["Legendary"] }, "r#2": { values: ["Exotic"], not: true } });
+    expect(s).toBe("everything I own whose quality is Legendary and whose quality is not Exotic");
+    expect(subjectPhrase({ sub: { values: ["Crit Chance"] }, "sub#2": { values: ["Fire Rate"] } }))
+      .toBe("everything I own with Crit Chance and with Fire Rate");
+  });
+
+  it("carries every clause's categories into a saved list, and reports every unresolved one", () => {
+    const r = rule({ where: { cat: { values: ["EMP"] }, "cat#2": { values: ["burst"] } } });
+    const cats = { EMP: ["Ion Cannon"], burst: ["Salvage Laser"] };
+    expect(exportList("l", "keep", [r], cats).cats).toEqual(cats);
+    expect(listProblems([r], { EMP: ["Ion Cannon"] }, [gun()])[0]).toContain("burst");
   });
 });
 
@@ -353,5 +497,74 @@ describe("a saved rule list", () => {
     // with the category defined and the type owned, the same rule is silent
     expect(listProblems([catRule()], { railguns: ["Railgun"] },
       [gun({ type: "Railgun" }), gun({ type: "Plasma Beam" })])).toEqual([]);
+  });
+});
+
+// RESONANCE clauses. The game feature is BETA-ONLY (`ResonantBooster` is absent from the release build, so the
+// bridge sends `resonance: null` for every item) ∴ these fields must disappear from the picker on their own, by
+// the same `fieldVaries` mechanism that keeps `price` out of a list of things you already own — a build check kept
+// beside them would be a second thing to update when the feature ships.
+describe("resonance clauses", () => {
+  const boost = (r: Partial<NonNullable<Item["resonance"]>> | null, over: Partial<Item> = {}): Item => gun({
+    category: "Booster", type: "Booster", mainStatName: "Combat Power",
+    resonance: r ? { unlocked: false, progress: 0, threshold: 100, unit: "kills", bonusStat: "Reload Speed", ...r } : undefined,
+    ...over,
+  } as Partial<Item> & { power?: number; mainStatName?: string });
+
+  it("reads the three states a player acts on differently, plus none at all", () => {
+    const state = (it: Item) => FIELDS.res.get(it, ctx);
+    expect(state(boost(null))).toBe("none");
+    expect(state(boost({ progress: 0 }))).toBe("unstarted");
+    expect(state(boost({ progress: 40 }))).toBe("in progress");
+    expect(state(boost({ progress: 100, unlocked: true }))).toBe("finished");
+  });
+
+  it("offers the bonus stat and the unit it needs, so a want can say what it will finish", () => {
+    const b = boost({ bonusStat: "Reload Speed", unit: "ore" });
+    expect(FIELDS.resS.get(b, ctx)).toBe("Reload Speed");
+    expect(FIELDS.resU.get(b, ctx)).toBe("ore");
+  });
+
+  it("reports progress as a PERCENTAGE, the only figure comparable between units", () => {
+    // 1 per kill against a credit count: raw progress across two units means nothing.
+    expect(FIELDS.resP.get(boost({ progress: 25, threshold: 100 }), ctx)).toBe(25);
+    expect(FIELDS.resP.get(boost({ progress: 5_000, threshold: 20_000, unit: "profit" }), ctx)).toBe(25);
+    expect(FIELDS.resP.get(boost(null), ctx)).toBe(0);
+  });
+
+  it("selects on state, and a rule that says `finished` leaves the rest alone", () => {
+    const done = boost({ progress: 100, unlocked: true }, { name: "done" });
+    const part = boost({ progress: 50 }, { name: "part" });
+    const plain = boost(null, { name: "plain" });
+    const r = rule({ where: { res: { values: ["finished"] } } });
+    expect(evaluate([done, part, plain], set("keep", [r]))).toEqual(["sell", "keep", "keep"]);
+  });
+
+  it("selects on progress as a range", () => {
+    const low = boost({ progress: 10 }, { name: "low" });
+    const high = boost({ progress: 90 }, { name: "high" });
+    expect(evaluate([low, high], set("keep", [rule({ where: { resP: { min: 50, max: null } } })])))
+      .toEqual(["keep", "sell"]);
+  });
+
+  // THE BETA GUARD, and it is the whole reason these are ordinary fields: on a build without the feature every
+  // item answers the same, so the picker drops all four without knowing the feature exists.
+  it("offers nothing at all on a build with no resonance", () => {
+    const release = [boost(null), boost(null)];
+    for (const k of ["res", "resS", "resU", "resP"]) expect(fieldVaries(release, k, ctx), k).toBe(false);
+  });
+
+  it("offers each clause as soon as it has something to tell apart", () => {
+    // `res` and `resP` answer for EVERY item ("none", 0) ∴ one resonant booster among plain ones is enough.
+    const oneResonant = [boost(null), boost({ progress: 50 })];
+    expect(fieldVaries(oneResonant, "res", ctx)).toBe(true);
+    expect(fieldVaries(oneResonant, "resP", ctx)).toBe(true);
+    // `resS`|`resU` are ABSENT on a non-resonant item rather than "none", and `fieldVaries` counts values that
+    // exist ∴ they appear once two different bonuses or units are in front of the player, which is the
+    // point at which ticking one of them narrows anything.
+    expect(fieldVaries(oneResonant, "resS", ctx)).toBe(false);
+    const twoBonuses = [boost({ bonusStat: "Reload Speed", unit: "kills" }), boost({ bonusStat: "Shield HP", unit: "ore" })];
+    expect(fieldVaries(twoBonuses, "resS", ctx)).toBe(true);
+    expect(fieldVaries(twoBonuses, "resU", ctx)).toBe(true);
   });
 });

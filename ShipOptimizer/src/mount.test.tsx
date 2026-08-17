@@ -258,7 +258,10 @@ describe("standing panels", () => {
     expect(el.textContent).toContain("404 no player");
   });
 
-  it("clamps a contribution that has climbed past the top rank", async () => {
+  // The game counts contribution no further than the top rank's threshold ∴ the panel shows the figure TRIMMED
+  // there, marked, with the save's own number kept in the title — a display that silently replaced a value would
+  // leave a reader unable to tell which of the two they are looking at.
+  it("trims a contribution that has climbed past the top rank, and says so", async () => {
     const over = standing();
     over.factions[0].conquest!.contribution = 5441;   // observed live against a 4,500 "max"
     vi.spyOn(api, "reputation").mockResolvedValue(over);
@@ -266,9 +269,14 @@ describe("standing panels", () => {
     const el = mount(<StandingPanels conn={conn} conquestUnlocked />);
     await act(async () => { await Promise.resolve(); });
 
-    expect(el.textContent).toContain((5441).toLocaleString());
+    const val = el.querySelector<HTMLElement>(".std-panel:last-child .std-val");
+    // `value / ceiling`, the game's own shape, with `+` saying the save holds more than it counts.
+    expect(val?.textContent).toBe(`${(4500).toLocaleString()}+ / ${(4500).toLocaleString()}`);
+    expect(val?.title).toContain((5441).toLocaleString());
+    expect(el.textContent).not.toContain((5441).toLocaleString());
+    // and the bar it overshot is full rather than overflowing its track
     const widths = [...el.querySelectorAll<HTMLElement>(".std-panel:last-child .std-bar i")].map((i) => parseFloat(i.style.width));
-    expect(Math.max(...widths)).toBeLessThanOrEqual(100);
+    expect(Math.max(...widths)).toBe(100);
   });
 
   it("splits the change log by ladder and keeps a band crossing visible", async () => {

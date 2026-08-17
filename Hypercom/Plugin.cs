@@ -11,6 +11,7 @@ using Source.Galaxy.POI;
 using Source.Player;
 using UnityEngine;
 using VG.ModApi;
+using VG.Shared;
 
 namespace Hypercom
 {
@@ -20,7 +21,7 @@ namespace Hypercom
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "fulgan.vanguardgalaxy.hypercom";
-        public const string Version = "0.2.1";
+        public const string Version = "0.3.0";
 
         internal static ManualLogSource Log;
 
@@ -75,6 +76,17 @@ namespace Hypercom
                     null, new ConfigurationManagerAttributes { Browsable = false, IsAdvanced = true }));
             HttpServer.DebugEnabled = _debugEndpoints.Value;
 
+            // The other hidden developer flag: one warning after a frame gap ≥1s, saying whether any of OUR work was
+            // in flight when the game stopped drawing. Off for players, and
+            // the whole thing comes out once that row has a cause.
+            var logGaps = Config.Bind("Debug", "LogFrameGaps", false,
+                new BepInEx.Configuration.ConfigDescription(
+                    "Log a warning when the game runs no frame for over a second, and whether a Hypercom request was "
+                    + "waiting at the time. Developer diagnostic for chasing freezes — leave off for normal play.",
+                    null, new ConfigurationManagerAttributes { Browsable = false, IsAdvanced = true }));
+            MainThread.WatchFrames = logGaps.Value;
+            logGaps.SettingChanged += (_, __) => MainThread.WatchFrames = logGaps.Value;
+
             // Before anything serves a request: earlier versions installed the UI as loose files beside this
             // DLL, and those files are now dead weight under the same names the embedded ones answer to.
             UiCleanup.Run();
@@ -128,11 +140,15 @@ namespace Hypercom
         // to feed the SSE event bus.
         private void Update()
         {
+            MainThread.Watch();
             MainThread.Drain();
             if (_server != null)
             {
                 PollEvents();
                 RepLog.Poll();
+                // Missions leave the player's list when they are turned in, so the history has to be watched for
+                // rather than asked for. Bounded: it returns immediately between its own intervals.
+                MissionLog.Poll();
             }
         }
 

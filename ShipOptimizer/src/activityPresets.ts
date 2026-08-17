@@ -68,3 +68,47 @@ export function defaultProfileForShip(role: string | null | undefined, defenseLa
   return { ...DEFAULT_PROFILE, main: roleToActivity(role), combatLayer: defenseLayer ?? DEFAULT_PROFILE.combatLayer };
 }
 
+
+/**
+ * What a resonant booster's unlock requirement needs from the player, expressed in the vocabulary this module
+ * already owns. Extending the role→activity map rather than writing a second one beside it: the two answer the
+ * same question ("what does this ship do") and a second copy is how they come to disagree.
+ *
+ * The bridge sends the requirement as `resonance.unit`. `profit` and `absorbed` are deliberately absent: the
+ * progress bus is global to the PLAYER, and selling above cost or having damage mitigated happens however you
+ * play, so they are reachable on any hull. The other four need the ship to do the thing.
+ */
+export const UNIT_NEEDS: Record<string, MainActivity | "boarding"> = {
+  kills: "combat",
+  boardings: "boarding",
+  ore: "mining",
+  scrap: "salvage",
+};
+
+/**
+ * Can this ship, played this way, ever finish that resonance?
+ *
+ * `activities` is what the hull's own turrets serve, so a Combat hull carrying a mining laser DOES mine — the
+ * same reading `roleStats.statApplies` takes, and for the same reason: telling a player their booster is
+ * worthless because of the ship's ROLE would be wrong about the ship in front of them.
+ *
+ * Unknown units return TRUE. A requirement this build has not seen is not evidence that it cannot be met, and
+ * refusing to credit it would silently rank a booster below one whose unit we happen to recognise.
+ */
+export function unitReachable(
+  unit: string | null | undefined,
+  profile: ActivityProfile,
+  activities: ReadonlyArray<string> | undefined,
+): boolean {
+  if (!unit) return false;                      // no requirement stated ∴ nothing to reach
+  const needs = UNIT_NEEDS[unit];
+  if (!needs) return true;
+  if (needs === "boarding") return profile.boarding;
+  const serves = (act: string) => (activities ?? []).includes(act);
+  switch (needs) {
+    case "combat": return profile.main === "combat" || serves("Combat");
+    case "mining": return profile.main === "mining" || serves("Mining");
+    case "salvage": return profile.main === "salvage" || serves("Salvage");
+    default: return true;
+  }
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { setDps, setPower, setRank, rankGt, rankSub, slotPotential, worthSwitching, MIN_GAIN, background, capacityWith, contributionOf, moduleBetter, moduleGain, mulOf, poolsWithModule, precisionCrit, expectedCrit, speedRatio, optimizeTurretSet, optimizeTurretSetLayered, coversLayer, coversLayers, sameScale, setPowerByLayer, poolShare, poolsForShip, poolsReconcile, type ShipPools, type Rank, rating, isCombat } from "./fleetDps";
+import { moduleStatChannel, moduleWhy, pricesModuleStat, setDps, setPower, setRank, rankGt, rankSub, slotPotential, worthSwitching, MIN_GAIN, background, capacityWith, contributionOf, moduleBetter, moduleGain, mulOf, poolsWithModule, precisionCrit, expectedCrit, speedRatio, optimizeTurretSet, optimizeTurretSetLayered, coversLayer, coversLayers, sameScale, setPowerByLayer, poolShare, poolsForShip, poolsReconcile, type ShipPools, type Rank, rating, isCombat } from "./fleetDps";
 import type { Item } from "./types";
 
 // A ship whose hull/crew/modules alone give some power and precision.
@@ -176,8 +176,12 @@ describe("setDps", () => {
     // it still fires faster for its neighbour's roll, which is why the boost is an argument here rather than
     // something read off the host item.
     const fast = withStats([{ stat: "Attack Speed", amount: 0.5 }]);
-    expect(speedRatio(gun(), 0.5)).toBeGreaterThan(1);
-    expect(speedRatio(fast)).toBe(1);      // nothing pooled in ⇒ the raw cycle, whatever the host rolled
+    expect(speedRatio(gun(), 0.5)).toBeGreaterThan(speedRatio(gun()));
+    // Nothing POOLED in ⇒ the gun's own roll does not feed its own ratio, whatever it rolled. This used to
+    // assert `=== 1`, which quietly also asserted that a gun fires at its nominal cadence — measured false
+    // across all 71 prefabs (1.044x–2.077x, `cadence.test.ts`), so the assertion is now "same as an unrolled
+    // gun" rather than "one".
+    expect(speedRatio(fast)).toBe(speedRatio(gun()));
     expect(setDps([fast, gun()], bg)).toBeGreaterThan(setDps([gun(), gun()], bg));
   });
 
@@ -1164,6 +1168,120 @@ describe("judging a MODULE", () => {
     expect(moduleBetter(scanner, equipped, ctx)).toBe(false);
     // ...and the same pair with no pool reading falls back to the headline, which is simple mode's whole model.
     expect(moduleBetter(scanner, equipped, { role: "Combat" })).toBe(true);
+  });
+
+  // THE ZERO-COLLAPSE, on the module half. A module cannot change which ore layers a ship reaches, so asking
+  // `balanced` of a one-layer battery scores every module 0 — a swap losing 1,485 Mining Power then reads as "same
+  // battery score", the tie-break chain takes over, and the module that keeps a better reactor bracket wins while
+  // being measurably worse at the ship's job.
+  // A REACTOR's own headline is `Energy` — the capacity the whole ship is bracketed against. The objective moves it
+  // (`capacityWith`) and reads it back through the bracket ∴ it is priced, heavily, and the card said "not scored"
+  // on a swap that doubled it from 10.8K to 21.2K.
+  it("counts Energy as priced through the bracket, and Power as the pool umbrella it is", () => {
+    expect(moduleStatChannel("Energy")).toBe("bracket");
+    // BOTH halves of the umbrella are priced: the multiplier scales all three power pools (`Operational Reserves`,
+    // ×1.02 on each) and the additive feeds all three as well — the game's own `via` says so.
+    expect(moduleStatChannel("× Power")).toBe("pool");
+    expect(moduleStatChannel("Power")).toBe("pool");
+    // DRAW is the bracket-priced one, and marking it "not scored" is defect on the other stat.
+    expect(moduleStatChannel("Power use")).toBe("bracket");
+    expect(pricesModuleStat("Power use")).toBe(true);
+    expect(pricesModuleStat("Energy")).toBe(true);
+    expect(pricesModuleStat("Power")).toBe(true);
+    // a real pool still reports as one, and a stat the objective cannot weigh still reports nothing
+    expect(moduleStatChannel("Mining Power")).toBe("pool");
+    expect(moduleStatChannel("Torpedo Power")).toBe(null);
+    expect(pricesModuleStat("Kinetic Resistance")).toBe(false);
+  });
+
+  // And the score actually moves: a bigger reactor lifts every pool through the bracket, which is the whole reason
+  // that stat cannot be reported as ignored.
+  it("scores a reactor that buys capacity, not only its substats", () => {
+    const battery2 = [gun(), gun()];
+    const withEnergy: ShipPools = {
+      poolCombatPower: 40_000, poolPrecision: 12_300, equivalentTurrets: 2,
+      precisionDivisor: 5_000, critDamage: 1, megaCrit: 0, critChance: 0.2, critChanceMult: 1,
+      energy: { used: 9_000, capacity: 10_800, mod: 0.1 },
+    };
+    const small = mod({ slotType: "Reactor", type: "Reactor", mainStat: { name: "Energy", amount: "10,800" } });
+    const big = mod({ slotType: "Reactor", type: "Reactor", mainStat: { name: "Energy", amount: "21,200" } });
+    const ctx = { pools: withEnergy, turrets: battery2, role: "Combat" as const };
+    // Same substats, twice the capacity: the load halves, the bracket improves, every pool is scaled up.
+    expect(moduleGain(big, small, ctx)).toBeGreaterThan(0);
+  });
+
+  // A COMPARISON THAT DISAGREES WITH ITSELF must not be acted on. Reported as the app bouncing between two module
+  // sets forever: each scored a gain from the other's baseline, because `moduleGain` prices against the pools as
+  // they read WITH the current module fitted, and a reactor-capacity aspect makes that unwind asymmetric.
+  it("refuses to order two modules that each score higher from the other's build", () => {
+    // Built to be pathological on purpose: A carries the capacity aspect, B carries the pooled stat.
+    const withCapacity = mod({ mainStat: { name: "Precision", amount: "5,402" } }, [{ stat: "Precision", amount: 5_402 }]);
+    (withCapacity as unknown as { aspects: unknown[] }).aspects = [
+      { id: "Microgenerators", name: "Microgenerators", description: "+10% reactor energy",
+        stats: [{ stat: "Energy", amount: 0, multiplier: 1.1, percent: true }] },
+    ];
+    const withPool = mod({ mainStat: { name: "Precision", amount: "5,335" } },
+      [{ stat: "Precision", amount: 5_335 }, { stat: "Combat Power", amount: 4_000 }]);
+    const ctx = {
+      pools: { ...pools, energy: { used: 6_000, capacity: 12_000, mod: 0.2 } },
+      turrets: battery, role: "Combat" as const,
+    };
+    const fwd = moduleGain(withPool, withCapacity, ctx);
+    const back = moduleGain(withCapacity, withPool, ctx);
+    // Only meaningful as a test if the pathology is actually present; otherwise it proves nothing.
+    if (fwd >= MIN_GAIN && back >= MIN_GAIN) {
+      expect(moduleBetter(withPool, withCapacity, ctx)).toBe(false);
+      expect(moduleBetter(withCapacity, withPool, ctx)).toBe(false);
+      expect(moduleWhy(withPool, withCapacity, ctx).why).toMatch(/cannot be ordered/);
+    }
+  });
+
+  // The guard only ever DECLINES: a swap that is better in one direction and worse in the other is still taken.
+  it("still takes a swap that is better one way and worse the other", () => {
+    const worse = mod({ powerUsage: 2_150 });
+    const better = mod({ powerUsage: 2_150 }, [{ stat: "Combat Power", amount: 8_000 }]);
+    const ctx = { pools, turrets: battery, role: "Combat" as const };
+    expect(moduleGain(better, worse, ctx)).toBeGreaterThan(MIN_GAIN);
+    expect(moduleGain(worse, better, ctx)).toBeLessThan(0);
+    expect(moduleBetter(better, worse, ctx)).toBe(true);
+  });
+
+  it("prices a module against the layers the battery actually covers", () => {
+    const miner = (power: number, layer: string): Item => gun({
+      category: "Turret", gameplayType: "Mining", targetLayer: layer, type: "Cutter",
+      mainStat: { name: "Mining Power", amount: String(power) },
+    } as Partial<Item>);
+    const surfaceOnly = [miner(9_000, "Surface"), miner(9_000, "Surface")];
+    const minePools: ShipPools = {
+      poolCombatPower: 0, poolPrecision: 0,
+      poolMiningPower: 180_000, equivalentTurretsMining: 2, equivalentTurrets: 2,
+      precisionDivisor: 5_000, critDamage: 1, megaCrit: 0, critChance: 0.2, critChanceMult: 1,
+    };
+    const equipped = mod({ mainStat: { name: "Mining Power", amount: "1,485" }, powerUsage: 960 });
+    const worse = mod({ mainStat: { name: "Torpedo Power", amount: "3,892" }, powerUsage: 714 });
+    const ctx = { pools: minePools, turrets: surfaceOnly, role: "Mining" as const, act: "Mining" as const };
+
+    // Under the old reading both scored 0 and the LOSS was invisible; now the mining pool it gives up is priced.
+    expect(moduleGain(worse, equipped, ctx)).toBeLessThan(0);
+    expect(moduleBetter(worse, equipped, ctx)).toBe(false);
+  });
+
+  it("still balances the layers for a battery that reaches both", () => {
+    const miner = (power: number, layer: string): Item => gun({
+      category: "Turret", gameplayType: "Mining", targetLayer: layer, type: "Cutter",
+      mainStat: { name: "Mining Power", amount: String(power) },
+    } as Partial<Item>);
+    const mixed = [miner(9_000, "Surface"), miner(9_000, "Core")];
+    const minePools: ShipPools = {
+      poolCombatPower: 0, poolPrecision: 0,
+      poolMiningPower: 180_000, equivalentTurretsMining: 2, equivalentTurrets: 2,
+      precisionDivisor: 5_000, critDamage: 1, megaCrit: 0, critChance: 0.2, critChanceMult: 1,
+    };
+    const a = mod({ mainStat: { name: "Mining Power", amount: "1,485" } });
+    const b = mod({ mainStat: { name: "Mining Power", amount: "4,000" } });
+    const ctx = { pools: minePools, turrets: mixed, role: "Mining" as const, act: "Mining" as const };
+    // A mixed battery has a non-zero balanced score ∴ the bigger mining module is plainly better.
+    expect(moduleGain(b, a, ctx)).toBeGreaterThan(0);
   });
 
   it("takes the swap that lifts the battery, headline or not", () => {

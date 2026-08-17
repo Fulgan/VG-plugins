@@ -178,3 +178,56 @@ function prec(it: Item): number {
   return (it as unknown as { stats: { stat: string; amount: number }[] }).stats
     .find((s) => s.stat === "Precision")?.amount ?? 0;
 }
+
+// THE LAYER AXIS. The shortlist ranks by power and pooled substats, so a core gun that sits outside the top few by
+// mining power never entered the search — and under a `balanced` target, where the score is `min(surface, core)`,
+// that gun is worth more than any amount of extra surface power, because it is what stops the minimum being zero.
+// A pre-filter that cannot see it makes the whole objective unreachable.
+describe("the shortlist keeps a gun for each ore layer", () => {
+  const mining = (seed: number, power: number, layer: "Surface" | "Core"): Item => ({
+    key: `m#${seed}#${layer}`, name: `${layer} Cutter Mk.${seed}`, type: `${layer} Cutter`, size: "Small",
+    level: 60, category: "Turret", gameplayType: "Mining", targetLayer: layer,
+    mainStat: { name: "Mining Power", amount: String(power) },
+    rarity: "Standard", location: "armory",
+    stats: [stat("Precision", 100)], substats: [], aspects: [],
+    powerUsage: 400, powerUsageBase: 400,
+    fireDelayRaw: 1.2, reloadDelayRaw: 2.5, magSizeRaw: 8, burstAmount: 1, burstDelay: 0.2,
+  } as unknown as Item);
+
+  it("admits the best CORE gun even when every core gun is weaker than the surface ones", () => {
+    // 40 strong surface guns and 3 weak core guns: on power alone the core guns are nowhere near the cut.
+    const cands = [
+      ...Array.from({ length: 40 }, (_, i) => mining(i, 9000 + i * 10, "Surface")),
+      ...Array.from({ length: 3 }, (_, i) => mining(100 + i, 1200 + i * 10, "Core")),
+    ];
+    const short = shortlist(cands);
+    expect(short.length).toBeLessThan(cands.length);          // still a shortlist
+    const cores = short.filter((it) => it.targetLayer === "Core");
+    expect(cores.length).toBeGreaterThan(0);
+    // and the strongest of them is the one kept first — a weaker core gun is no substitute
+    expect(Math.max(...cores.map((it) => Number(it.mainStat!.amount)))).toBe(1220);
+  });
+
+  it("keeps surface guns too — the axis adds, it does not replace", () => {
+    const cands = [
+      ...Array.from({ length: 30 }, (_, i) => mining(i, 5000 + i * 10, "Surface")),
+      ...Array.from({ length: 30 }, (_, i) => mining(100 + i, 4000 + i * 10, "Core")),
+    ];
+    const short = shortlist(cands);
+    expect(short.some((it) => it.targetLayer === "Surface")).toBe(true);
+    expect(short.some((it) => it.targetLayer === "Core")).toBe(true);
+  });
+
+  it("treats a Both gun as a candidate for either layer", () => {
+    const both = { ...mining(500, 1000, "Surface"), targetLayer: "Both" } as Item;
+    const cands = [...Array.from({ length: 40 }, (_, i) => mining(i, 9000 + i * 10, "Surface")), both];
+    expect(shortlist(cands)).toContain(both);
+  });
+
+  it("leaves combat guns to the power axes, where layer means nothing", () => {
+    const cands = Array.from({ length: 40 }, (_, i) => turret("Small Railgun", "Small", i + 1, "Combat"));
+    const short = shortlist(cands);
+    expect(short.length).toBeGreaterThan(0);
+    expect(short.length).toBeLessThan(cands.length);
+  });
+});

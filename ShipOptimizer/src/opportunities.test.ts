@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { gearModuleOpps, gearBoosterOpps } from "./opportunities";
+import { gearModuleOpps, gearBoosterOpps, shopRailRows, type Opp } from "./opportunities";
+import { boosterId } from "./booster";
 import { mainVal, effectiveMainVal } from "./format";
+import { DEFAULT_PROFILE } from "./activityPresets";
+import type { BoosterCtx } from "./booster";
 import type { Item } from "./types";
 
 // The MODULE and BOOSTER rails. These spend the player's credits, and the module one is where a
@@ -142,5 +145,104 @@ describe("gearBoosterOpps", () => {
     const opps = gearBoosterOpps([cand], ["Combat Power", "Combat Power"], [weakSlot, eq]);
     expect(opps).toHaveLength(1);
     expect(opps[0].delta).toBeCloseTo(1_000);
+  });
+});
+
+describe("the shop rail's reading order", () => {
+  const row = (name: string, wanted?: string): Opp =>
+    ({ item: { name } as Item, delta: 0, ...(wanted ? { wanted } : {}) });
+
+  // An upgrade row is the app's own idea; a want row is an instruction the player wrote. On a station with a
+  // dozen upgrades the ★ rows were below the fold, which breaks the shopping list's one promise.
+  it("puts the wants first and leaves each block's own order alone", () => {
+    const upgrades = [row("up-1"), row("up-2")];
+    const wanted = [row("want-cheap", "Flag anything Legendary."), row("want-dear", "Flag anything Legendary.")];
+    expect(shopRailRows(upgrades, wanted).map((o) => o.item.name))
+      .toEqual(["want-cheap", "want-dear", "up-1", "up-2"]);
+  });
+
+  it("is the identity on either block being empty", () => {
+    expect(shopRailRows([row("up")], []).map((o) => o.item.name)).toEqual(["up"]);
+    expect(shopRailRows([], [row("w", "…")]).map((o) => o.item.name)).toEqual(["w"]);
+  });
+});
+
+// The rail and the booster tab must reach the same verdict: a blocked resonance the rail still chased read as the
+// app ignoring a setting the player had just changed.
+describe("gearBoosterOpps under the ship's own reading", () => {
+  const boost = (name: string, amount: string, r?: Partial<NonNullable<Item["resonance"]>>): Item => ({
+    key: null, slot: null, identifier: null, name, rarity: "Standard", level: 60, size: "Small",
+    type: "Booster", category: "Booster", sellValue: 0, aspects: [], stats: [], substats: [],
+    bonus: null, bonusStat: null, mainStat: { name: "Combat Power", amount },
+    resonance: r ? { unlocked: true, progress: 100, threshold: 100, unit: "kills", bonusStat: "Reload Speed", ...r } : undefined,
+  } as unknown as Item);
+  const ctx = (blacklist?: string[]): BoosterCtx => ({
+    scope: "current", profile: { ...DEFAULT_PROFILE, main: "combat" },
+    fit: { role: "Combat", activities: ["Combat"] },
+    blacklist: blacklist ? new Set(blacklist) : undefined,
+  });
+
+  it("still reports the delta in raw value, so the row says what the player would see", () => {
+    const eq = boost("fitted", "1000");
+    const better = boost("better", "1200");
+    const [opp] = gearBoosterOpps([better], ["Combat Power"], [eq], ctx());
+    expect(opp.item).toBe(better);
+    expect(opp.delta).toBe(200);
+  });
+
+  it("does not offer a swap whose headline would go DOWN, however good its resonance", () => {
+    const eq = boost("fitted", "1000");
+    const weakResonant = boost("resonant", "900", {});
+    expect(gearBoosterOpps([weakResonant], ["Combat Power"], [eq], ctx())).toEqual([]);
+  });
+
+  // THE RAIL AND THE TAB ARE ONE VERDICT. Every decision the tab takes has to reach the rail, or the app
+  // proposes what it would then refuse to fit — reported live: the rail offered a booster whose resonance is
+  // Critical Chance (paying 35%) to replace ones paying 54% of Combat Power, purely on raw main-stat value.
+  it("will not offer a booster whose resonance ranks BELOW the fitted one in the player's order", () => {
+    const withOrder = (order: Record<string, string[]>): BoosterCtx => ({ ...ctx(), order });
+    const eq = boost("fitted", "1000", { bonusStat: "Combat Power" });
+    const bigger = boost("bigger", "1400", { bonusStat: "Critical Chance" });
+    // Raw value says yes by 400; the stated order says Combat Power outranks Critical Chance, and the order
+    // is read FIRST — so this is not an upgrade at all.
+    expect(gearBoosterOpps([bigger], ["Combat Power"], [eq],
+      withOrder({ "Combat Power": ["Combat Power", "Critical Chance"] }))).toEqual([]);
+    // Reverse the player's own ranking and the same pair becomes a real offer.
+    expect(gearBoosterOpps([bigger], ["Combat Power"], [eq],
+      withOrder({ "Combat Power": ["Critical Chance", "Combat Power"] }))).toHaveLength(1);
+  });
+
+  it("keeps the order PER BOOSTER TYPE, so one type's ranking cannot answer for another", () => {
+    const withOrder = (order: Record<string, string[]>): BoosterCtx => ({ ...ctx(), order });
+    const eq = boost("fitted", "1000", { bonusStat: "Combat Power" });
+    const bigger = boost("bigger", "1400", { bonusStat: "Critical Chance" });
+    // The ranking that would block this belongs to Mining Power boosters ∴ it says nothing here.
+    expect(gearBoosterOpps([bigger], ["Combat Power"], [eq],
+      withOrder({ "Mining Power": ["Combat Power", "Critical Chance"] }))).toHaveLength(1);
+  });
+
+  it("does not re-offer a booster the player refused in the tab", () => {
+    const eq = boost("fitted", "1000");
+    const better = boost("better", "1200");
+    expect(gearBoosterOpps([better], ["Combat Power"], [eq], ctx())).toHaveLength(1);
+    expect(gearBoosterOpps([better], ["Combat Power"], [eq], ctx(), new Set([boosterId(better)]))).toEqual([]);
+  });
+
+  it("does not offer an upgrade for a slot the player locked", () => {
+    const eq = boost("fitted", "1000");
+    const better = boost("better", "1200");
+    expect(gearBoosterOpps([better], ["Combat Power"], [eq], ctx(), undefined, new Set([0]))).toEqual([]);
+    // A lock is about ONE slot: the other still answers.
+    expect(gearBoosterOpps([better], ["Combat Power", "Combat Power"], [eq, eq],
+      ctx(), undefined, new Set([0]))).toHaveLength(1);
+  });
+
+  // The ask: a bonus the player blocked on this ship must stop being a reason to buy anything.
+  it("drops a candidate that only won on a resonance the player blocked", () => {
+    const eq = boost("fitted", "1000", { bonusStat: "Reload Speed" });
+    const cand = boost("cand", "1010");                    // barely better raw, worse once the fitted one counts
+    expect(gearBoosterOpps([cand], ["Combat Power"], [eq], ctx())).toEqual([]);
+    // with that bonus blocked the fitted booster loses its credit ∴ the candidate is genuinely better
+    expect(gearBoosterOpps([cand], ["Combat Power"], [eq], ctx(["Reload Speed"])).length).toBe(1);
   });
 });

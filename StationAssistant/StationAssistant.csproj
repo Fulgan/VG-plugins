@@ -1,10 +1,10 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>netstandard2.1</TargetFramework>
     <AssemblyName>StationAssistant</AssemblyName>
     <Product>Station Assistant</Product>
-    <Version>1.1.1</Version>
+    <Version>1.1.2</Version>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
@@ -66,6 +66,8 @@
     <!-- Game-bound shared adapters (buy executor, station shop enumeration). -->
     <Compile Include="..\Shared\PurchaseExec.cs" Link="PurchaseExec.cs" />
     <Compile Include="..\Shared\GameMembers.cs" Link="GameMembers.cs" />
+    <Compile Include="..\Shared\Stall.cs" Link="Stall.cs" />
+    <Compile Include="..\Shared\ConfigurationManagerAttributes.cs" Link="ConfigurationManagerAttributes.cs" />
     <Compile Include="..\Shared\GameState.cs" Link="GameState.cs" />
     <Compile Include="..\Shared\Wallet.cs" Link="Wallet.cs" />
     <Compile Include="..\Shared\ItemFlags.cs" Link="ItemFlags.cs" />

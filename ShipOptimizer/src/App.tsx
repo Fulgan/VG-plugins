@@ -1,34 +1,41 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ApiError, api, loadConn, saveConn, setAssetVersion, bumpImageCacheBust, type Conn } from "./api";
 import { useEvents } from "./useEvents";
-import Price from "./Price";
+import Price, { CurrencyMark } from "./Price";
 import Ledger from "./Ledger";
 import CycleTimers from "./CycleTimers";
 import type { CritContext } from "./turretScore";
 import type { ShipPools } from "./fleetDps";
-import { background, poolsForShip, poolsFromStatus, poolsReconcile, rankSub, setRank, MIN_GAIN } from "./fleetDps";
+import { background, pairBudget, poolsForShip, poolsFromStatus, poolsReconcile, rankSub, reactorBudgetOf, setRank, MIN_GAIN } from "./fleetDps";
 import { isRoleStat } from "./roleStats";
-import { kindOf } from "./itemKind";
+import { ACTIVITIES, kindOf } from "./itemKind";
 import OfficersTab, { useOfficerBuilder, type BuilderShip } from "./OfficersTab";
 import { evaluateRecruits, type RecruitOfficer } from "./officer";
 import SummaryTab from "./SummaryTab";
 import MapTab from "./MapTab";
 import BoostersTab, { useBoosterBuilder } from "./BoostersTab";
-import { isBooster } from "./booster";
+import { isBooster, resonanceLive, unlockBonusText } from "./booster";
 import GearTab, { useGearBuilder, isTurret, type Ranking } from "./GearTab";
 import { ItemTip } from "./ItemCard";
 import { Notice } from "./Notice";
 import { Modal, useConfirm } from "./Modal";
 import SellList from "./SellList";
-import type { Kind as SellKind, Rule as SellRule, SellListFile } from "./sellRules";
+import WantedRules from "./WantedRules";
+import { RARITY_ORDER, cantSell, type FieldCtx, type Kind as SellKind, type Rule as SellRule, type SellListFile } from "./sellRules";
+// Selling has ONE owner, shared with the sell list — see `sellRun`.
+import { sellRows, sellableRows } from "./sellRun";
+import { sanitizeView, type ViewState } from "./sellView";
+import { ownedCounts, type WantRule } from "./wantRules";
+import { usePopAnchor, type Vocabulary } from "./whereEditor";
 import type { CatalogTypes, Inventories, Item, Loadout, LoadoutPresetInfo, LogEntry, Officers, Recruits, ShipLayout, StatLine, Status, Vitals } from "./types";
-import { num, subFmt, statVal, mainVal, brokeMsg, barterMsg, undockedMsg, buyExpect, priceLabel, affordTip, affordLine } from "./format";
+import { num, fmt, subFmt, statVal, mainVal, brokeMsg, barterMsg, undockedMsg, buyExpect, priceLabel, affordTip, affordLine, CREDIT_MARK, pluralName } from "./format";
 import { useHoverIntent } from "./useCursorTip";
 import { useWindowed } from "./useWindowed";
 import TabBadge, { TabNote } from "./TabBadge";
-import { gearTurretOpps, gearModuleOpps, gearBoosterOpps, type Opp } from "./opportunities";
+import { gearTurretOpps, gearModuleOpps, gearBoosterOpps, wantedOpps, shopRailRows, type Opp } from "./opportunities";
+import { ViewBar } from "./viewGrid";
 import { useApply } from "./useApply";
-import { load, save, onStorageFailure, clearStorageFailure, clearCachedPrefs, SNAPSHOT_KEY, LOG_KEY, COL_W_KEY, type StorageFailure } from "./storage";
+import { load, save, onStorageFailure, clearStorageFailure, clearCachedPrefs, SNAPSHOT_KEY, LOG_KEY, COL_W_KEY, GRID_VIEW_KEY, type StorageFailure } from "./storage";
 import "./App.css";
 
 type Tab = "inventory" | "officers" | "boosters" | "gear" | "summary" | "map";
@@ -82,6 +89,20 @@ function Pills({ options, isOn, onToggle }: { options: string[]; isOn: (o: strin
   return <>{options.map((o) => <button key={o} className={`asp-chip${isOn(o) ? " on" : ""}`} onClick={() => onToggle(o)}>{o}</button>)}</>;
 }
 
+// How many rows the player's own sold pile may reach before it stops riding along with the stock. Above this the
+// list asks for them instead: the bridge's own measurement is 10.2 MB and 843ms of held frame after a 7,891-item
+// sale, and that arrives on EVERY poll while it is switched on.
+const SOLD_AUTOLOAD_MAX = 400;
+/** A grid's untouched layout: every column, no grouping. `cols: []` means "all of them" here — see `shown`. */
+const emptyGridView = (): ViewState => ({ group: [], sort: [], cols: [], hide: [] });
+
+
+// How long a burst of events is allowed to settle before one refresh answers all of it, and the least time
+// between two full refreshes however long the burst runs. The floor exists because a refresh is not free to the
+// GAME: it reads the inventory on the main thread, and that read grows with the playthrough.
+const EVENT_DEBOUNCE_MS = 250;
+const MIN_REFRESH_GAP_MS = 1_500;
+
 // The client config (categories, per-ship gear filters, activity profile, connection) — every
 // "shipoptimizer.*" key except the transient snapshot/log — as pretty JSON.
 // The markers go too: they record WHICH SAVE this browser last saw, so importing someone else's would
@@ -110,7 +131,8 @@ function configJson(): string {
 // Validate a pasted/edited config before applying: must be an object of shipoptimizer.* string values;
 // JSON-backed keys must parse and have the right shape. Returns the error list (empty = valid).
 const JSON_KEYS = ["shipoptimizer.turretCategories", "shipoptimizer.gearFilters", "shipoptimizer.conn", "shipoptimizer.officerBuilder", "shipoptimizer.activityProfile",
-                   "shipoptimizer.sellRules", "shipoptimizer.sellLists"];
+                   "shipoptimizer.sellRules", "shipoptimizer.sellLists", "shipoptimizer.wantRules",
+                   "shipoptimizer.sellView"];
 function validateConfig(raw: string): { errors: string[]; cfg?: Record<string, string> } {
   let obj: unknown;
   try { obj = JSON.parse(raw); } catch (e) { return { errors: ["Not valid JSON: " + (e as Error).message] }; }
@@ -150,8 +172,22 @@ function validateConfig(raw: string): { errors: string[]; cfg?: Record<string, s
           if (typeof rule?.where !== "object" || rule.where === null) errors.push(`sellRules[${i}] needs a where object`);
           if (!Array.isArray(rule?.group)) errors.push(`sellRules[${i}].group must be an array`);
         });
+      } else if (k === "shipoptimizer.wantRules") {
+        // The sell rules' shape check without their stakes: a want never spends anything by itself. It still
+        // earns one, because a clause that failed to load is a rule the player believes is watching for them.
+        if (!Array.isArray(p)) errors.push("wantRules must be an array");
+        else p.forEach((r, i) => {
+          const rule = r as Record<string, unknown>;
+          if (typeof rule?.id !== "string") errors.push(`wantRules[${i}] needs a string id`);
+          if (typeof rule?.where !== "object" || rule.where === null) errors.push(`wantRules[${i}] needs a where object`);
+        });
       } else if (k === "shipoptimizer.sellLists" && !isObj) {
         errors.push("sellLists must be an object of name → list");
+      } else if (k === "shipoptimizer.sellView" && !isObj) {
+        // Only the container is checked. What is INSIDE is a layout: a field this build does not have is
+        // dropped when it loads (`sanitizeView`), because refusing a whole config over a column name would
+        // cost the player their rules to save their view.
+        errors.push("sellView must be an object");
       }
     }
   }
@@ -333,8 +369,13 @@ export default function App() {
   // as state because `refresh` is called from callbacks that captured an older render, and the fetch must use
   // what the toggle says NOW rather than what it said when the callback was made.
   const [buybackCount, setBuybackCount] = useState(0);
-  const [buybackShown, setBuybackShown] = useState(false);
-  const showBuyback = useRef(false);
+  // Whether the sold rows come down with the stock. AUTOMATIC while the pile is small, which is the case a player
+  // is actually in — one click to see your own gun is one click too many. Above the cap it goes back to
+  // being asked for, because buy-back is opt-in on the bridge for a MEASURED reason: 10.2 MB and 843ms of held
+  // frame after a 7,891-item sale (`Api.Shops`), and that cost lands on every poll of a list read for something
+  // else. `showBuyback` is the ref the fetch reads; `buybackShown` is what the header renders.
+  const [buybackShown, setBuybackShown] = useState(true);
+  const showBuyback = useRef(true);
   // Deadline after which the cached shop list must not be bought from (see RestockClock). Deliberately not
   // persisted with the snapshot: a countdown restored from a previous session would be pure fiction.
   const [restock, setRestock] = useState<{ secs: number; fetched: number } | null>(null);
@@ -352,6 +393,17 @@ export default function App() {
   const [storeErr, setStoreErr] = useState<StorageFailure | null>(null);
   useEffect(() => onStorageFailure(setStoreErr), []);
   const [flashed, setFlashed] = useState<Set<string>>(new Set());
+  // How each inventory-tab grid is laid out, by grid id. Per BROWSER like the column widths beside it: which
+  // columns this screen shows and how its rows are grouped is a fact about the window, ⊥ about the playthrough
+  //.
+  const [gridViews, setGridViews] = useState<Record<string, ViewState>>(() => load(GRID_VIEW_KEY, {}));
+  const gridView = useCallback((id: string): ViewState => gridViews[id] ?? emptyGridView(), [gridViews]);
+  const setGridView = useCallback((id: string, v: ViewState) => setGridViews((m) => {
+    const next = { ...m, [id]: v };
+    save(GRID_VIEW_KEY, next);
+    return next;
+  }), []);
+
   const prevCounts = useRef<Map<string, number>>(new Map());
   const playthroughRef = useRef<string | null>(localStorage.getItem("shipoptimizer.playthrough"));
   const [error, setError] = useState<string | null>(null);
@@ -467,7 +519,12 @@ export default function App() {
           .flatMap((shop) => shop.items.map((it) => ({ ...it, location: shop.facility })))
           .filter((it) => kindOf(it) !== null);
         setShops(shopData);
-        setBuybackCount(shopRes.shops.reduce((n, shop) => n + (shop.buybackCount ?? 0), 0));
+        const sold = shopRes.shops.reduce((n, shop) => n + (shop.buybackCount ?? 0), 0);
+        setBuybackCount(sold);
+        // Learned from the answer, ⊥ guessed before it: the count comes back either way, so the NEXT poll knows
+        // whether carrying the rows is affordable. A station where it is not says so in the header rather than
+        // quietly dropping them.
+        if (sold > SOLD_AUTOLOAD_MAX && showBuyback.current) { showBuyback.current = false; setBuybackShown(false); }
         // When this list stops being safe to buy from. Stamped with the fetch time so the countdown can be
         // extrapolated locally instead of polling the bridge every second. Absent on a game build that has no
         // restock timer — the clock then simply doesn't render.
@@ -524,10 +581,22 @@ export default function App() {
 
   const [echo, setEcho] = useState(false);
   // Coalesce bursty events (a multi-slot install fires one "loadoutChanged" per slot) into one refresh.
+  //
+  // The trailing wait is also a FLOOR between reads, because a burst is not always short: station automation
+  // moving items emits an event per move for SECONDS (one ammo pass moved 1,269), and a 250ms debounce then
+  // fires four times a second. Each of those is a `/inventories` read the bridge has to serve ON THE GAME'S
+  // MAIN THREAD — 1.1 MB and 12-40ms of held frame on a long playthrough — so the client was taxing the game
+  // hardest exactly while the game was busiest.
   const refreshTimer = useRef<number | null>(null);
+  const lastRefreshAt = useRef(0);
   const debouncedRefresh = useCallback(() => {
     if (refreshTimer.current != null) clearTimeout(refreshTimer.current);
-    refreshTimer.current = window.setTimeout(() => { refreshTimer.current = null; refresh(); }, 250);
+    const wait = Math.max(EVENT_DEBOUNCE_MS, MIN_REFRESH_GAP_MS - (Date.now() - lastRefreshAt.current));
+    refreshTimer.current = window.setTimeout(() => {
+      refreshTimer.current = null;
+      lastRefreshAt.current = Date.now();
+      refresh();
+    }, wait);
   }, [refresh]);
   // Standing changes are their own signal: they don't invalidate inventory or loadout, so they nudge the
   // standing panels (at the foot of the map) instead of triggering a full refresh.
@@ -596,6 +665,16 @@ export default function App() {
   // a saved list is deliberately independent of one.
   const [sellLists, setSellLists] = useState<Record<string, SellListFile>>(
     () => load<Record<string, SellListFile>>("shipoptimizer.sellLists", {}));
+  // How the split is READ — grouping, sort, columns. Stored apart from the rules because it decides nothing:
+  // a layout the player settles on outlives the rule they were checking when they chose it.
+  const [sellView, setSellView] = useState<ViewState>(
+    () => sanitizeView(load<unknown>("shipoptimizer.sellView", null)));
+
+  // The shopping list: what to watch a shop floor FOR, in the sell list's own clauses. Saved the same way as
+  // the sell rules and for the same reason — a want is about this playthrough's ship, level and holdings.
+  const [wantRules, setWantRules] = useState<WantRule[]>(() => load<WantRule[]>("shipoptimizer.wantRules", []));
+  const [wantOpen, setWantOpen] = useState(false);
+  const { trigger: wantTrigger, at: wantAt } = usePopAnchor(wantOpen, 440);
 
   // Inventory filters/search.
   const [cat, setCat] = useState("");
@@ -632,6 +711,8 @@ export default function App() {
   const shopShown = useMemo(() => shops.filter(passes), [shops, hidden]);
   // An item the player just SOLD is not an opportunity to buy: the rails exist to find what the station stocks
   // that beats what is fitted, and offering back what was scrapped a minute ago is the opposite of that.
+  // What the STATION sells, which is what an upgrade rail and a want rule are about: a row you sold is your own
+  // gun coming back, ⊥ an offer the station made. The GRID shows both (tinted) — see `shopShown`.
   const shopStock = useMemo(() => shops.filter((it) => !it.buyback), [shops]);
   const loadoutShown = useMemo(() => currentItems.filter(passes), [currentItems, hidden]);
 
@@ -658,9 +739,12 @@ export default function App() {
     return { ship: s?.poolsShip ?? null, pools: s?.pools ?? null, station: s?.poolsStation ?? null };
   });
   const cachedPools = useRef(snapPools);
-  const { critCtx, shipPools } = useMemo(() => {
+  const { critCtx, shipPools, reactorInfo, budgetNote } = useMemo(() => {
     const ship = status?.shipGuid ?? null;
     if (lastLive.current.ship !== ship) lastLive.current = { ship, crit: null, pools: null };
+    // Read ONCE, here, and every consumer takes the budget out of the pools object rather than off `/status`
+    // again — see `reactorBudgetOf`.
+    const livePools = status ? poolsFromStatus(status) : null;
     // A bridge too old to send `statsLive` omits it: treat what it sends as live, which is what that client
     // did before this existed.
     const live = status != null && (status.statsLive ?? true);
@@ -677,7 +761,7 @@ export default function App() {
       // zero, which is not a scale error: a candidate's own power becomes the whole pool. Reconciled against the
       // battery rather than gated on `docked`, a settled undocked reading being identical to the docked one at
       // the same station.
-      const fresh = poolsFromStatus(status);
+      const fresh = livePools;
       const eq = (layout?.hardpoints ?? []).map((h) => h.equipped).filter((x): x is Item => !!x);
       if (fresh && poolsReconcile(fresh, eq)) {
         lastLive.current.pools = fresh;
@@ -695,26 +779,31 @@ export default function App() {
     // The cache's guard only establishes that the FLOWN ship is unchanged, not that it is the one being SCORED —
     // see poolsForShip, which owns that rule.
     pools = poolsForShip(pools, ship, layout?.shipGuid ?? null);
+    // The two guards above establish that the reading is internally consistent and belongs to the ship being
+    // scored; neither says it was taken at the load the ship is flying at NOW. The reactor bracket is a step
+    // function, so a stale budget one bracket out prices the whole build ~10% off what the panel and the game
+    // show — and the objective refuses to score rather than answer on the wrong side of the edge.
+    const paired = pairBudget(pools, livePools?.energy ?? null);
     return {
       critCtx: lastLive.current.crit ?? { chance: 0.03, damage: 1, megaCrit: 0 },
-      shipPools: pools,
+      shipPools: paired.pools,
+      budgetNote: paired.note,
+      // The budget of the reading that is actually SCORING. Where nothing is scoring, the live one — it decided
+      // nothing, and saying so is the note's job, but it is still the game's own figure and the player's only
+      // reading of their own load.
+      reactorInfo: reactorBudgetOf(paired.pools ?? livePools),
     };
   }, [status?.shipGuid, status?.statsLive, status?.docked, status?.station, layout,
       status?.critChance, status?.critDamage, status?.megaCrit,
       status?.poolCombatPower, status?.poolPrecision, status?.equivalentTurrets, status?.precisionDivisor,
       status?.poolMiningPower, status?.poolSalvagePower,
       status?.equivalentTurretsMining, status?.equivalentTurretsSalvage,
-      status?.energyCapacity, status?.energyUsed, status?.reactorBonus]);
-  // Reactor budget for the Gear tab's totals panel. Not folded into ShipPools: the pools are the ranking
-  // model's inputs, while this is the ship-wide budget a whole BUILD is judged against.
-  const reactorInfo = useMemo(() => ({
-    capacity: status?.energyCapacity ?? null,
-    used: status?.energyUsed ?? null,
-    usage: status?.energyUsage ?? null,
-    bonus: status?.reactorBonus ?? null,
-    combatBonus: status?.reactorCombatBonus ?? null,
-  }), [status?.energyCapacity, status?.energyUsed, status?.energyUsage, status?.reactorBonus, status?.reactorCombatBonus]);
-  const gearBuilder = useGearBuilder(layout, inv, status?.shipGuid ?? null, critCtx, shipPools, status?.role ?? null);
+      status?.energyCapacity, status?.energyUsed, status?.energyUsage, status?.reactorBonus,
+      status?.combatReactorOutputCP]);
+  // `vitals` carries the GAME's own hull/armor/shield maxima, which is the only honest reading of a layer (the
+  // reported figure already includes scaling passes no re-sum of item lines can reproduce). Without it the
+  // defensive cap has nothing to measure and silently permits everything.
+  const gearBuilder = useGearBuilder(layout, inv, status?.shipGuid ?? null, critCtx, shipPools, status?.role ?? null, vitals);
   const boosterBuilder = useBoosterBuilder(loadout, inv);
   // What swapping one turret for another is WORTH, under the Gear tab's selected ranking — the rail's
   // objective has to be the optimizer's, or the two disagree and the rail recommends buying something the
@@ -749,7 +838,12 @@ export default function App() {
       ? setRank(equippedT, background(shipPools, equippedT))[1] : 0;
     const turrets = gearTurretOpps(cands.filter(isTurret), gearBuilder.hps, gearBuilder.filters, gearBuilder.cats, gearGain)
       .filter((o) => baseDps <= 0 || o.delta / baseDps >= MIN_GAIN);
-    const boosters = gearBoosterOpps(cands.filter(isBooster), boosterBuilder.slotTypes, boosterBuilder.equippedBySlot);
+    // The rail reads under the SAME reading as the booster tab, and that is ALL of it: `ctx` carries the
+    // resonance scope, the blocklist and the player's per-type order, and the refusals and locks are the two
+    // decisions that live outside it. A rail offering what the tab was told to stop offering is one slot with
+    // two verdicts.
+    const boosters = gearBoosterOpps(cands.filter(isBooster), boosterBuilder.slotTypes, boosterBuilder.equippedBySlot,
+                                     boosterBuilder.ctx, boosterBuilder.refused, boosterBuilder.locked);
     // The rails judge a module the way the tab does: on the battery it changes, wherever the pools allow it.
     const other = gearModuleOpps(cands.filter((i) => !isTurret(i) && !isBooster(i)), gearBuilder.mslots,
       shipPools?.energy, status?.role ?? null,
@@ -758,6 +852,48 @@ export default function App() {
   }, [passes, currentItems, gearBuilder, boosterBuilder, gearGain]);
   const invOpps = useMemo(() => oppsFor(equippable), [equippable, hidden, oppsFor]);
   const shopOpps = useMemo(() => oppsFor(shopStock), [shopStock, hidden, oppsFor]);
+  // What a `copies owned` clause is about: everything the player HOLDS, armory and fitted alike, since a spare
+  // is a spare wherever it sits.
+  const wantCtx = useMemo<FieldCtx>(
+    () => ({ cats: gearBuilder.cats, myLevel, owned: ownedCounts([...equippable, ...currentItems]) }),
+    [gearBuilder.cats, myLevel, equippable, currentItems]);
+  // The field picker's vocabulary is the shop floor PLUS the armory: it offers only fields whose value varies
+  // across what it is given, and a station stocking four rows would hide most of them from a rule written to
+  // outlive it.
+  // The armory is EVERY store's rows here, ⊥ only the equippable ones: a want may name a substat, a main stat or
+  // an aspect the game has no catalog for, and those lists can only be as rich as the items the editor is shown.
+  const wantVocab = useMemo(
+    () => [...shopStock, ...equippable, ...currentItems], [shopStock, equippable, currentItems]);
+  // And the game's OWN vocabulary on top of that: a want names what you do not own, so the types, module slots
+  // and damage types it can name are the ones the GAME ships (`/catalog/types`), not the ones in stock tonight.
+  // Absent on an older bridge, which degrades to the value lists the rows in front of us can supply.
+  const wantCatalog = useMemo<Vocabulary | undefined>(() => {
+    const slotOfType: Record<string, string> = {};
+    for (const t of catTypes?.turrets ?? []) slotOfType[t.type] = "Hardpoint";
+    for (const s of catTypes?.moduleSlots ?? []) slotOfType[s] = s;
+    return {
+      values: {
+        // From the bridge's catalog, so absent on an older one and the lists fall back to what is on offer.
+        t: [...(catTypes?.turrets ?? []).map((t) => t.type), ...(catTypes?.moduleSlots ?? [])],
+        dt: [...(catTypes?.damageTypes ?? [])],
+        st: catTypes ? ["Hardpoint", "Booster", ...catTypes.moduleSlots] : [],
+        // From the CLIENT's own vocabulary, which is complete by construction: every quality the game has, and
+        // every activity with the layer split the gear tab's filters already speak (`itemKind.catOf`).
+        r: [...RARITY_ORDER],
+        a: [...ACTIVITIES.flatMap((a) => (a === "Combat" ? [a] : [a, `${a} - surface`, `${a} - core`])), "Other"],
+      },
+      slotOfType,
+    };
+  }, [catTypes]);
+  // The offers in play, hidden categories out. ONE list for the rail's rows AND the count beside each rule:
+  // computed twice, a rule would claim "3 on offer here" over a rail showing none of them.
+  const shopInPlay = useMemo(() => shopStock.filter(passes), [shopStock, hidden]);
+  // Wanted rows are ADDED to the upgrade rows rather than ranked against them — the two answer different
+  // questions. An offer already on the rail as an upgrade keeps that row, since it says strictly more.
+  const shopWanted = useMemo(
+    () => wantedOpps(shopInPlay, wantRules, wantCtx, new Set(shopOpps.map((o) => o.item.name))),
+    [shopInPlay, wantRules, wantCtx, shopOpps]);
+  const shopRail = useMemo(() => shopRailRows(shopOpps, shopWanted), [shopOpps, shopWanted]);
   const credits = status?.credits ?? null;
 
   // Officer optimizer: ships with officer slots (from /officers) joined with names/roles (from /ships),
@@ -806,12 +942,12 @@ export default function App() {
   // A badge that says HOW MANY without saying what it costs sends the player into the tab to find out. Both
   // tooltips are built by one formatter (`affordTip`) so buying and hiring word it the same way.
   const shopTip = useMemo(
-    () => affordTip(`${shopOpps.length} shop item${shopOpps.length === 1 ? "" : "s"} at this station beat something equipped`,
-      shopOpps.map((o) => ({
+    () => affordTip(`${shopRail.length} shop item${shopRail.length === 1 ? "" : "s"} here beat something equipped or match your shopping list`,
+      shopRail.map((o) => ({
         name: o.item.name, cost: o.item.cost,
         costItem: o.item.costItem, costItemCount: o.item.costItemCount, costItemOwned: o.item.costItemOwned,
       })), credits),
-    [shopOpps, credits]);
+    [shopRail, credits]);
   const hireTip = useMemo(
     () => affordTip(`${officerOppCount} recruit${officerOppCount === 1 ? "" : "s"} would out-rank an assigned officer`,
       officerOpps.map((o) => ({ name: o.name, cost: o.hireCost })), credits),
@@ -835,8 +971,14 @@ export default function App() {
           // Its own element, not the tail of a sentence: this is the figure checked before every purchase, and it
           // was rendered in the same grey as the ship name with no separation. Tabular figures so the digits do not
           // shift as it changes.
-          <span className="wallet" title="Credits on hand">
-            <b>{status.credits.toLocaleString()}</b> cr
+          //
+          // The MARK carries the unit, not the word `cr`, which was as wide as the figure it labelled — and the
+          // app already writes credits this way on the item card and the officer tab. The mark is decorative ∴
+          // `aria-hidden`, with the word in the title: a pill that answers "can I afford it" must not be silent to
+          // a screen reader. There is no icon to fetch here — the game has no registry item for credits.
+          <span className="wallet" title={`${status.credits.toLocaleString()} credits on hand`}>
+            <span className="wallet-mark" aria-hidden="true">{CREDIT_MARK}</span>
+            <b>{status.credits.toLocaleString()}</b>
           </span>
         )}
         {/* Non-credit currencies: barter offers are priced in them, so a wallet showing only credits cannot
@@ -855,8 +997,12 @@ export default function App() {
             ? [{ id: "VanguardMark", name: "marks", owned: status.vanguardMarks }]
             : []
         ).filter((c) => c.owned > 0).map((c) => (
-          <span key={c.id} className="wallet marks" title={`${c.name} on hand — what barter offers are priced in`}>
-            <b>{c.owned.toLocaleString()}</b> {c.name}
+          <span key={c.id} className="wallet marks"
+                title={`${c.owned.toLocaleString()} ${pluralName(c.name)} on hand — what barter offers are priced in`}>
+            <b>{c.owned.toLocaleString()}</b>
+            {/* A currency IS an item in the game's registry, so this is the game's own art — and the WORD comes
+                back if it cannot be fetched (an older bridge, a retired currency). */}
+            <CurrencyMark id={c.id} conn={conn} name={pluralName(c.name)} fallback={c.name} size={15} />
           </span>
         ))}
         <button onClick={() => setCfgOpen(true)} title="Export / import categories, filters & settings">Config</button>
@@ -880,6 +1026,8 @@ export default function App() {
           setSellDefault(next.defaultKind); save("shipoptimizer.sellDefault", next.defaultKind);
           setSellRules(next.rules); save("shipoptimizer.sellRules", next.rules);
         }}
+        view={sellView}
+        onView={(v) => { setSellView(v); save("shipoptimizer.sellView", v); }}
         lists={sellLists}
         onLists={(next) => { setSellLists(next); save("shipoptimizer.sellLists", next); }}
         onCats={gearBuilder.setCats}
@@ -912,7 +1060,7 @@ export default function App() {
         <button className={tab === "inventory" ? "on" : ""} onClick={() => setTab("inventory")}>
           Inventory &amp; opportunities
           <TabBadge kind="inv" count={invOpps.length} label="inv" title="Inventory items that beat something equipped" />
-          <TabBadge kind="shop" count={shopOpps.length} label="shop" title={shopTip} />
+          <TabBadge kind="shop" count={shopRail.length} label="shop" title={shopTip} />
         </button>
         {crewSupported && (
           <button className={tab === "officers" ? "on" : ""} onClick={() => setTab("officers")}>
@@ -938,7 +1086,7 @@ export default function App() {
 
       {tab === "officers" && <OfficersTab apply={applyApi} builder={builder} portraitUrl={portraitUrl} recruits={recruits} portraitByIcon={(icon) => api.portraitByIcon(conn, icon)} goSummary={() => setTab("summary")} conn={conn} docked={!!status?.docked} credits={credits} onHired={refresh} />}
       {tab === "boosters" && <BoostersTab apply={applyApi} builder={boosterBuilder} docked={!!status?.docked} conn={conn} goSummary={() => setTab("summary")} />}
-      {tab === "gear" && <GearTab layout={layout} builder={gearBuilder} catalog={catTypes} conn={conn} currentShipGuid={status?.shipGuid ?? null} goSummary={() => setTab("summary")} reactor={reactorInfo} role={role} vitals={vitals} apply={applyApi} />}
+      {tab === "gear" && <GearTab layout={layout} builder={gearBuilder} catalog={catTypes} conn={conn} currentShipGuid={status?.shipGuid ?? null} goSummary={() => setTab("summary")} reactor={reactorInfo} budgetNote={budgetNote} role={role} vitals={vitals} apply={applyApi} />}
       {tab === "map" && <MapTab conn={conn} docked={!!status?.docked} standingBump={standingBump} />}
       {tab === "summary" && (
         <SummaryTab officer={builder} boosters={boosterBuilder} gear={gearBuilder} portraitUrl={portraitUrl} conn={conn}
@@ -989,7 +1137,9 @@ export default function App() {
               <button onClick={() => downloadText("inventory.csv", toCsv(invShown))}>CSV</button>
               <button onClick={() => setSellOpen(true)} title="What is scrap, and why — rules you write, reviewed before anything sells">Sell list…</button>
             </div>
-            <ItemGrid items={invShown} showWhere equipped={currentItems} role={role} flashed={flashed} conn={conn} />
+            <ItemGrid items={invShown} showWhere equipped={currentItems} role={role} flashed={flashed} conn={conn}
+                        gridId="inv" view={gridView("inv")} onView={(v) => setGridView("inv", v)}
+                        sellable onSold={() => void refresh(true)} />
           </section>
 
           <section>
@@ -997,17 +1147,25 @@ export default function App() {
               {status && !status.docked ? "Station shop (last)" : "Station shop"}{" "}
               <small>{shopShown.length}/{shops.length}</small>{" "}
               <RestockClock deadline={restock} onExpire={refresh} />{" "}
-              {/* Fetched on request, because after selling an armory this is thousands of rows and megabytes
-                  on a list that is otherwise read for what the STATION sells. */}
-              {buybackCount > 0 && (
-                <button className="mini" title="Items you sold here. The station holds them until it restocks."
-                        onClick={() => { showBuyback.current = !buybackShown; setBuybackShown(!buybackShown); refresh(); }}>
-                  {buybackShown ? "hide" : "show"} {buybackCount.toLocaleString()} you sold
+              {/* The sold rows are IN the list, tinted (`.r-buyback`), so noticing your own gun costs no click.
+                  The button survives only for the pile the bridge cannot afford to send every poll — see
+                  `SOLD_AUTOLOAD_MAX` — and then it says why. */}
+              {buybackCount > 0 && (buybackShown ? (
+                <small className="dim" title="Items you sold here, tinted in the list. The station holds them until it restocks.">
+                  · {buybackCount.toLocaleString()} you sold
+                </small>
+              ) : (
+                <button className="mini"
+                        title={`${buybackCount.toLocaleString()} items you sold here — too many to carry in every refresh (they arrive as megabytes on a list read for what the station sells), so they are fetched when asked for.`}
+                        onClick={() => { showBuyback.current = true; setBuybackShown(true); refresh(); }}>
+                  show {buybackCount.toLocaleString()} you sold
                 </button>
-              )}
+              ))}
             </h2>
             {shopShown.length ? (
-              <ItemGrid items={shopShown} showShop equipped={currentItems} role={role} flashed={flashed} conn={conn} docked={!!status?.docked} credits={credits} onBought={refresh} />
+              <ItemGrid items={shopShown} showShop equipped={currentItems} role={role} flashed={flashed} conn={conn}
+                            docked={!!status?.docked} credits={credits} onBought={refresh}
+                            gridId="shop" view={gridView("shop")} onView={(v) => setGridView("shop", v)} />
             ) : (
               <p className="hint">No shop items.</p>
             )}
@@ -1015,7 +1173,8 @@ export default function App() {
 
           <section>
             <h2>Current loadout {loadout && <small>{loadout.name}</small>}</h2>
-            {loadout ? <ItemGrid items={loadoutShown} equipped={currentItems} role={role} conn={conn} /> : <p className="hint">Dock to read the loadout.</p>}
+            {loadout ? <ItemGrid items={loadoutShown} equipped={currentItems} role={role} conn={conn}
+                              gridId="loadout" view={gridView("loadout")} onView={(v) => setGridView("loadout", v)} /> : <p className="hint">Dock to read the loadout.</p>}
           </section>
 
 
@@ -1048,11 +1207,28 @@ export default function App() {
           <div className="opp-panel">
             <div className="opp-head">
               <h2>From shop</h2>
+              {/* Anchored to this button rather than laid out under it: the rail is ~230px and a rule is a
+                  sentence plus its chips, so editing in the column meant a clause wrapping over four lines. The
+                  flyout is `position: fixed` for the same reason the field picker inside it is — every ancestor
+                  here scrolls or clips. */}
+              <button ref={wantTrigger} className={"mini" + (wantOpen ? " on" : "")} onClick={() => setWantOpen((v) => !v)}
+                      title="Shopping list — what to watch this station's shop for, in the sell list's own filters. Matches join the rail; nothing is bought without your click.">
+                shopping list{wantRules.length ? ` (${wantRules.length})` : ""}
+              </button>
             </div>
-            {loadout ? (
-              shopOpps.length ? <OpportunityList opps={shopOpps} equipped={currentItems} showCost role={role} credits={credits} conn={conn} docked={!!status?.docked} onBought={refresh} ranking={gearBuilder.ranking} /> : <p className="hint" title="Nothing you own or can buy here beats what is equipped">none better</p>
+            {wantOpen && (
+              <div className="want-flyout" style={wantAt}>
+                <WantedRules rules={wantRules} offers={shopInPlay} vocabulary={wantVocab} catalog={wantCatalog} ctx={wantCtx}
+                             onClose={() => setWantOpen(false)}
+                             onChange={(next) => { setWantRules(next); save("shipoptimizer.wantRules", next); }} />
+              </div>
+            )}
+            {shopRail.length ? (
+              <OpportunityList opps={shopRail} equipped={currentItems} showCost role={role} credits={credits} conn={conn} docked={!!status?.docked} onBought={refresh} ranking={gearBuilder.ranking} />
             ) : (
-              <p className="hint">dock to see upgrades</p>
+              <p className="hint" title={loadout ? "Nothing here beats what is equipped, and no want matched" : undefined}>
+                {loadout ? "none better" : "dock to see upgrades"}
+              </p>
             )}
           </div>
 
@@ -1192,11 +1368,22 @@ function RestockClock({ deadline, onExpire }: { deadline: { secs: number; fetche
 
 // Dense grid: fixed columns + one column per stat. Click a header to sort (first click desc).
 // A filter row under the header filters each column (text substring; numeric operators).
-function ItemGrid({
-  items, showWhere, showShop, equipped, role, flashed, conn, docked, credits, onBought,
+export function ItemGrid({
+  items, showWhere, showShop, equipped, role, flashed, conn, docked, credits, onBought, gridId, view, onView,
+  sellable, onSold,
 }: {
   items: Item[]; showWhere?: boolean; showShop?: boolean; equipped?: Item[]; role?: string | null;
   flashed?: Set<string>; conn: Conn; docked?: boolean; credits?: number | null; onBought?: () => void;
+  /** Which grid this is, for the layout the app remembers per grid. Absent ⇒ no layout bar at all. */
+  gridId?: string;
+  view?: ViewState; onView?: (v: ViewState) => void;
+  /**
+   * Selling straight off this grid: a tick per row and one button. Only the INVENTORY grid gets it — a shop row
+   * is not yours to sell and a loadout row is fitted, so the control would be a promise the grid cannot keep.
+   */
+  sellable?: boolean;
+  /** Refresh after money has moved. Required for `sellable` to mean anything. */
+  onSold?: () => void;
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -1242,11 +1429,56 @@ function ItemGrid({
     } finally { setBuying(null); }
   }, [conn, onBought, ask, credits]);
 
+  // "Sell selected", through the ONE owner that sells (`sellRun`): the sell list's own button calls the same
+  // function, so a sale from here re-checks each handle, falls back on an older bridge and reports skipped rows by
+  // reason exactly as that one does. What differs is only the wording of the confirmation.
+  const [selling, setSelling] = useState(false);
+  const picked = useMemo(
+    () => items.filter((it) => selected.has(exactKey(it)) && !cantSell(it)), [items, selected]);
+  const pickedCr = useMemo(
+    () => picked.reduce((n, it) => n + Math.max(1, it.count ?? 1) * (it.sellValue ?? 0), 0), [picked]);
+  const sellPicked = useCallback(async () => {
+    if (!picked.length) return;
+    setSelling(true); setGridMsg(null);
+    try {
+      if (!(await ask({
+        title: `Sell ${picked.length} item${picked.length === 1 ? "" : "s"} for ${fmt(pickedCr)} cr?`,
+        detail: "Each row is re-checked as it sells; anything that moved is skipped.",
+        confirmLabel: "Sell", danger: true,
+      }))) return;
+      const out = await sellRows(conn, sellableRows(picked));
+      setGridMsg({ ok: out.ok, text: out.text });
+      // Only what actually went: a row the station refused is still owned, and clearing it would tell the player
+      // it had gone. The refresh below re-reads the inventory either way.
+      if (out.sold > 0) setSelected(new Set());
+      onSold?.();
+    } catch (e) {
+      setGridMsg({ ok: false, text: e instanceof ApiError ? e.message : String(e) });
+    } finally { setSelling(false); }
+  }, [picked, pickedCr, conn, ask, onSold]);
+
   const statCols = useMemo(() => statColumns(items), [items]);
   const columns: Col[] = useMemo(() => {
     const distinct = (f: (it: Item) => string | null | undefined) =>
       [...new Set(items.map(f).filter((v): v is string => !!v))].sort();
-    return [
+    const cols: Col[] = [
+      // The tick, ahead of everything: it is what the row is FOR once a player is clearing stock, and a checkbox
+      // that arrives after the name reads as a property of the item rather than a handle on it. Row-click already
+      // toggled selection, and it stays — this makes it visible and gives a protected row somewhere to say no.
+      ...(sellable
+        ? [{
+            key: "__sel", label: "", cls: "c-sel",
+            cell: (it: Item) => {
+              const why = cantSell(it);
+              return (
+                <input type="checkbox" checked={selected.has(exactKey(it))} disabled={!!why}
+                  title={why ?? "select for selling"}
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={() => toggleSel(exactKey(it))} />
+              );
+            },
+          } as Col]
+        : []),
       {
         key: "__name", label: "Item", cls: "c-name", sortable: true, text: (it) => it.name,
         cell: (it) => <span className={`r-${it.rarity}`}>{it.name}</span>,
@@ -1262,9 +1494,41 @@ function ItemGrid({
           ] as Col[])
         : []),
       { key: "__bonus", label: "Qual", cls: "num", sortable: true, num: (it) => it.bonus ?? 0, cell: (it) => (it.bonus ? `${it.bonus}${it.bonusStat ? " " + it.bonusStat : ""}` : "") },
+      // RESONANCE, offered only when something in front of the player HAS one. `ResonantBooster` is beta-only on
+      // the game side ∴ on a release build every row reads `null` and the column would be a header over nothing —
+      // the same reason the shop columns are conditional rather than always-present-and-empty.
+      ...(items.some((i) => i.resonance)
+        ? [{
+            key: "__res", label: "Resonance", cls: "num", sortable: true,
+            // Sorted and grouped by PROGRESS, which is the only figure comparable between two boosters: the
+            // thresholds differ by orders of magnitude between units (one per kill against a credit count).
+            num: (it: Item) => (it.resonance ? Math.round(resonanceLive(it.resonance) * 100) : -1),
+            text: (it: Item) => (it.resonance ? `${Math.round(resonanceLive(it.resonance) * 100)}% ${unlockBonusText(it.resonance)}`.trim() : ""),
+            cell: (it: Item) => {
+              const r = it.resonance;
+              if (!r) return "";
+              const pct = Math.round(resonanceLive(r) * 100);
+              // The BONUS is the point of the column — the progress figure alone says how far along something the
+              // player cannot see. `unlockBonusText` is the game's own formatted line (percent stats are stored
+              // fractionally ∴ rebuilding it by hand is wrong), and it is the FULL bonus, so the percentage beside
+              // it says how much of that is being paid today.
+              return (
+                <span className={`res-cell${r.unlocked ? " done" : ""}`}
+                      title={`${unlockBonusText(r)} — ${r.unlocked ? "paying in full" : `paying ${pct}% of it`} · ${Math.round(r.progress).toLocaleString()} / ${Math.round(r.threshold).toLocaleString()} ${r.unit}`}>
+                  <span className="res-pct">{pct}%</span>
+                  {unlockBonusText(r) ? <span className="res-bonus"> {unlockBonusText(r)}</span> : null}
+                </span>
+              );
+            },
+          } as Col]
+        : []),
       { key: "__asp", label: "Aspects", cls: "c-asp", text: (it) => it.aspects.map((a) => a.name).join(", "), cell: (it) => it.aspects.map((a) => a.name).join(", ") },
       ...(showShop
         ? [{
+          // FIRST column on the shop grid, per the user: the action is what the row is for, and reaching it meant
+          // crossing Type|Lvl|Size|Cost|Stock|Qual|Aspects on a table wide enough to scroll sideways. It is spliced
+          // in below rather than appended, since this same `Col[]` builds the inventory and loadout grids, where
+          // there is no buy column at all.
           key: "__buy",
           label: "",
           cls: "c-buy",
@@ -1294,10 +1558,48 @@ function ItemGrid({
         (c): Col => ({ key: c, label: c, cls: `num c-stat ${isRoleStat(role, c) ? "role" : ""}`, sortable: true, num: (it) => statVal(it, c), cell: (it) => cell(it.stats.find((s) => s.stat === c)) }),
       ),
     ];
-  }, [statCols, items, showWhere, showShop, role, whyBlocked, doBuy, buying]);
+    // The buy button LEADS the row on the shop grid: it is what the row is for, and it sat past seven columns on
+    // a table wide enough to scroll sideways. Spliced here rather than built first, because the same list serves
+    // the inventory and loadout grids — where there is no buy column to lead with.
+    const buyAt = cols.findIndex((c) => c.key === "__buy");
+    if (buyAt > 0) cols.unshift(...cols.splice(buyAt, 1));
+    return cols;
+  }, [statCols, items, showWhere, showShop, role, whyBlocked, doBuy, buying, conn, sellable, selected]);
 
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [sort, setSort] = useState<{ key: string; dir: 1 | -1 } | null>(null);
+  // Groups the player has folded away. Local to the mount: a fold is "not now", ⊥ a preference (the grouping
+  // itself IS remembered — see `view`).
+  const [folded, setFolded] = useState<Set<string>>(new Set());
+
+  // WHICH columns this grid may hide, and which of them it may group by.
+  //
+  // The name leads every row and the buy button is the shop grid's whole purpose, so neither is optional. A column
+  // is GROUPABLE when it answers with a word rather than a measurement: grouping by sell value makes one group per
+  // row, which is a longer way of saying "no grouping".
+  // Never hideable: the name is the identity, and the two ACTION columns are how the grid is used. Hiding one of
+  // those would leave a selection nobody can see or a buy button nobody can reach.
+  const optional = useMemo(
+    () => columns.filter((c) => !["__name", "__buy", "__sel"].includes(c.key)), [columns]);
+  const groupable = useMemo(() => optional.filter((c) => !c.num && !!c.text).map((c) => c.key), [optional]);
+  const labelOf = useCallback((k: string) => columns.find((c) => c.key === k)?.label || k, [columns]);
+  // Absent `cols` means EVERY column, which is what a player who never opened the picker already had. An empty
+  // list would mean "hide everything", and the two must not be the same value.
+  const shown = useMemo(() => {
+    // Only keys THIS grid has: `ViewState` is shared with the sell list, which names its columns by `FIELDS` key
+    // (`l`, `r`, `v`) — one type, two vocabularies. A view carrying none of this grid's keys means it was written
+    // for another grid, and the honest answer to that is every column rather than an empty table.
+    const want = (view?.cols ?? []).filter((k) => columns.some((c) => c.key === k));
+    if (!want.length) return columns;
+    const keep = new Set([...want, "__name", "__buy", "__sel"]);
+    return columns.filter((c) => keep.has(c.key));
+  }, [columns, view?.cols]);
+  const groupBy = useMemo(
+    () => (view?.group ?? []).filter((k) => columns.some((c) => c.key === k)), [view?.group, columns]);
+  const valueOf = useCallback((it: Item, key: string) => {
+    const c = columns.find((x) => x.key === key);
+    return (c?.text ? c.text(it) : String(c?.num?.(it) ?? "")) || "—";
+  }, [columns]);
 
   // Width of the two clipped TEXT columns, in px, dragged by the grip in their header and persisted per
   // browser. Only these two: every other column holds one short number or word and sizes itself, while
@@ -1393,11 +1695,35 @@ function ItemGrid({
     return r;
   }, [items, columns, filters, sort]);
 
+  /**
+   * The rows with GROUP HEADERS spliced in, as one flat list.
+   *
+   * Deliberately ⊥ a tree of nested tables: this grid's per-column filters, its selection, its draggable widths
+   * and its windowing all belong to ONE table, and nesting would cost every one of them. A header is just a row
+   * that spans, which is also how a player reads a grouped spreadsheet — and folding one drops its rows from the
+ * same list, so the window still measures exactly what is on screen.
+   */
+  const view0 = groupBy.length
+    ? (() => {
+        const keyOf = (it: Item) => groupBy.map((g) => valueOf(it, g)).join(" · ");
+        const sorted = [...rows].sort((a, b) => keyOf(a).localeCompare(keyOf(b)));
+        const out: ({ head: string; n: number } | { it: Item })[] = [];
+        let at = "";
+        let head: { head: string; n: number } | null = null;
+        for (const it of sorted) {
+          const k = keyOf(it);
+          if (k !== at) { at = k; head = { head: k, n: 0 }; out.push(head); }
+          if (head) head.n++;
+          if (!folded.has(k)) out.push({ it });
+        }
+        return out;
+      })()
+    : rows.map((it) => ({ it }));
   // WINDOWED, not capped: an armory of 8k items is an ordinary long playthrough, and the point of this table is
   // working through it — so every row stays in the list and only the slice on screen is in the DOM. Filtering
   // and sorting above still run over everything.
-  const win = useWindowed(rows.length, { scroll: wrapRef, rowH: 20 });
-  const capped = rows.slice(win.start, win.end);
+  const win = useWindowed(view0.length, { scroll: wrapRef, rowH: 20 });
+  const capped = view0.slice(win.start, win.end);
 
   const clickSort = (key: string) => setSort((s) => (s?.key === key ? { key, dir: s.dir === -1 ? 1 : -1 } : { key, dir: -1 }));
   const arrow = (key: string) => (sort?.key === key ? (sort.dir === -1 ? " ▼" : " ▲") : "");
@@ -1414,35 +1740,43 @@ function ItemGrid({
           optional: a `<tr>` with no cells collapses to zero height, the container's scrollHeight then covers
           only the drawn slice, and the browser clamping scrollTop against it fights the window forever. */}
       {win.padTop > 0 && (
-        <tr aria-hidden="true"><td colSpan={columns.length} style={{ height: win.padTop, padding: 0, border: 0 }} /></tr>
+        <tr aria-hidden="true"><td colSpan={shown.length} style={{ height: win.padTop, padding: 0, border: 0 }} /></tr>
       )}
-      {capped.map((it, i) => (
+      {capped.map((r, i) => ("head" in r ? (
+        <tr key={`h${i}`} className="grid-group" ref={i === 0 ? win.measureRef : undefined}
+            onClick={() => setFolded((f) => { const n = new Set(f); if (n.has(r.head)) n.delete(r.head); else n.add(r.head); return n; })}>
+          <td colSpan={shown.length}>
+            {folded.has(r.head) ? "▸ " : "▾ "}<b>{r.head}</b> <span className="dim">{r.n.toLocaleString()}</span>
+          </td>
+        </tr>
+      ) : (
         <tr
           ref={i === 0 ? win.measureRef : undefined}
+          data-buyback={r.it.buyback ? "1" : undefined}
           key={i}
-          className={`row-click ${selected.has(exactKey(it)) ? "sel" : ""} ${flashed?.has(flashKey(it)) ? "flash" : ""}`}
-          onClick={() => toggleSel(exactKey(it))}
+          className={`row-click ${selected.has(exactKey(r.it)) ? "sel" : ""} ${flashed?.has(flashKey(r.it)) ? "flash" : ""}`}
+          onClick={() => toggleSel(exactKey(r.it))}
           /* enter/leave only — ItemTooltip follows the cursor itself (no re-render per move) */
-          onMouseEnter={(e) => showTip({ it, x: e.clientX, y: e.clientY })}
+          onMouseEnter={(e) => showTip({ it: r.it, x: e.clientX, y: e.clientY })}
           onMouseLeave={hideTip}
         >
-          {columns.map((c) => (
-            <td key={c.key} className={c.cls ?? ""}>{c.cell(it)}</td>
+          {shown.map((c) => (
+            <td key={c.key} className={c.cls ?? ""}>{c.cell(r.it)}</td>
           ))}
         </tr>
-      ))}
+      )))}
       {win.padBottom > 0 && (
-        <tr aria-hidden="true"><td colSpan={columns.length} style={{ height: win.padBottom, padding: 0, border: 0 }} /></tr>
+        <tr aria-hidden="true"><td colSpan={shown.length} style={{ height: win.padBottom, padding: 0, border: 0 }} /></tr>
       )}
     </tbody>
-  ), [capped, win.padTop, win.padBottom, win.measureRef, columns, selected, flashed, toggleSel, showTip, hideTip]);
+  ), [capped, win.padTop, win.padBottom, win.measureRef, shown, folded, selected, flashed, toggleSel, showTip, hideTip]);
 
   // Memoized for the same reason as `body` — the header carries a live input/select per column, and
   // re-creating ~15 of them on every hover is pure waste.
   const head = useMemo(() => (
     <thead>
       <tr>
-        {columns.map((c) => (
+        {shown.map((c) => (
           <th key={c.key} className={`${c.cls ?? ""}${RESIZABLE[c.key] ? " resizable" : ""}`}>
             <div
               className={`th-label ${c.sortable ? "sortable" : ""}`}
@@ -1464,14 +1798,17 @@ function ItemGrid({
                 onDoubleClick={autoSize(c.key)}
               />
             )}
-            {c.opts ? (
+            {/* A column with no `text`, `num` or `opts` has nothing to match on — the row filter above returns
+                true for it whatever is typed (see `rows`) ∴ a box there is a control that cannot do anything, and
+                it was also what forced the buy column wider than its button. */}
+            {(c.opts || c.num || c.text) && (c.opts ? (
               <select value={filters[c.key] ?? ""} onChange={(e) => setF(c.key, e.target.value)}>
                 <option value="">all</option>
                 {c.opts.map((o) => (<option key={o} value={o}>{o}</option>))}
               </select>
             ) : (
               <input value={filters[c.key] ?? ""} onChange={(e) => setF(c.key, e.target.value)} placeholder={c.num ? "≥ / !=0" : "filter"} />
-            )}
+            ))}
           </th>
         ))}
       </tr>
@@ -1484,6 +1821,39 @@ function ItemGrid({
     <div className="grid-wrap-outer">
       {confirmUi}
       <Notice msg={gridMsg} onClose={() => setGridMsg(null)} />
+      {/* The same layout bar the sell list drives its review grid with, over THIS grid's own column
+          vocabulary — the sort chip reads the header sort this table already had, so there is one sort and not
+          two. A grid with no `gridId` (nothing to remember it by) gets no bar. */}
+      {sellable && (
+        // Above the table, because it acts on what the table is showing. Always present rather than appearing with
+        // the first tick: a control that materialises is a control nobody knew was there.
+        <div className="grid-sell">
+          <button className="apply sm" disabled={!picked.length || selling} onClick={() => void sellPicked()}
+                  title={picked.length ? `Sell the ${picked.length} ticked item${picked.length === 1 ? "" : "s"}` : "Tick a row first"}>
+            {selling ? "Selling…" : `Sell selected${picked.length ? ` (${picked.length})` : ""}`}
+          </button>
+          {!!picked.length && <span className="dim">{fmt(pickedCr)} cr</span>}
+          {!!selected.size && <button className="mini" onClick={() => setSelected(new Set())}>clear</button>}
+          {/* Selecting EVERY row would mean the filtered rows, not the 8,000 in the store — what is on screen is
+              what the player is looking at, and a tick-all that reaches past it sells things they never saw. */}
+          <button className="mini" disabled={!rows.length}
+                  onClick={() => setSelected(new Set(rows.filter((r) => !cantSell(r)).map(exactKey)))}
+                  title="Tick every row this filter shows">select shown</button>
+          {selected.size > picked.length && (
+            <span className="dim">{selected.size - picked.length} of them the game will not sell</span>
+          )}
+        </div>
+      )}
+      {gridId && view && onView && (
+        <ViewBar
+          view={{ ...view, sort: sort ? [{ k: sort.key, dir: sort.dir === -1 ? "desc" : "asc" }] : [] }}
+          setView={(v) => {
+            // The bar can only CLEAR the sort (its chip is an ×); ordering itself stays with the headers.
+            if (!v.sort.length && sort) setSort(null);
+            onView({ ...v, sort: [] });
+          }}
+          fields={optional.map((c) => c.key)} groupable={groupable} label={labelOf} allWhenEmpty />
+      )}
     <div className="grid-wrap" ref={wrapRef}>
       {/* Dragged widths ride as custom properties on the table, so the CSS keeps the defaults and one style
           object covers header and body cells alike. */}
@@ -1600,7 +1970,18 @@ function OpportunityList({ opps, equipped, showCost, role, credits, conn, docked
           onMouseLeave={hideTip}
         >
           <span className={`opp-name r-${o.item.rarity}`}>{o.item.name}</span>
-          <span className={`opp-d ${o.delta >= 0 ? "up" : "switch"}`} title={o.delta < 0 ? "lower than equipped — a type switch to match your slot filter" : oppMetric}>{o.delta >= 0 ? "+" : ""}{num(o.delta)}</span>
+          {/* A wanted row is here because a shopping rule claimed it, so it has no gain to report — and showing
+              its 0 delta as one would read "changes nothing", the opposite of why it is on the rail. */}
+          {o.wanted
+            ? <span className="opp-d b-want" title={o.wanted}>★ on my list</span>
+            : <span className={`opp-d ${o.delta >= 0 ? "up" : "switch"}`}
+                    title={o.why ?? (o.delta < 0 ? "lower than equipped — a type switch to match your slot filter" : oppMetric)}>
+                {o.delta >= 0 ? "+" : ""}{num(o.delta)}
+              </span>}
+          {/* WHY, where the number cannot say it: a headline tie shows `+0` and the decision was made on
+              something else. Written out rather than left to a tooltip — a reason nobody hovers is a reason
+ nobody checks, which is how three objective bugs survived a day of testing. */}
+          {!o.wanted && o.why && o.delta === 0 && <span className="opp-why dim" title={o.why}>{o.why}</span>}
           <span className="opp-type dim">{o.item.type}{o.slotLabel ? ` · ${o.slotLabel}` : ""}</span>
           {showCost && (
             <span className={`opp-cost ${affordable(o) ? "dim" : "down"}`}><Price it={o.item} conn={conn} /></span>

@@ -1,0 +1,33 @@
+{
+ "stat": "Precision",
+ "shipGuid": "68db8f14-7095-4f2e-aa6c-88b6914afeaa",
+ "shipType": "Loxagar",
+ "total": 12891.4492,
+ "multiplier": 1,
+ "additiveSum": 12891.449096679688,
+ "multiplierProduct": 1,
+ "sources": [
+  {
+   "source": "Scanner",
+   "amount": 11671.7188,
+   "multiplier": 1,
+   "via": "Precision"
+  },
+  {
+   "source": "Hangar Bay",
+   "amount": 1219.73035,
+   "multiplier": 1,
+   "via": "Precision"
+  }
+ ],
+ "context": {
+  "gameVersion": "0.8.1.24",
+  "shipType": "Loxagar",
+  "role": "Salvaging",
+  "equivalentTurrets": 0,
+  "equivalentTurretsMining": 0,
+  "equivalentTurretsSalvage": 7,
+  "poolCombatPower": 7216.21,
+  "poolCombatPowerMult": 1.76172459
+ }
+}
