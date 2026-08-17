@@ -24,7 +24,7 @@ namespace StationAssistant
 {
     internal enum SellTrigger { Manual, OnDock, OnUndock }
 
-    [BepInPlugin(Guid, "Station Assistant", "1.1.3")]
+    [BepInPlugin(Guid, "Station Assistant", "1.1.4")]
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "fulgan.vanguardgalaxy.stationassistant";
@@ -517,7 +517,8 @@ namespace StationAssistant
             if (amount <= 0)
                 return 0;
 
-            VG.Game.PurchaseExec.Apply(player, shop, offer, cargo, amount);
+            if (!VG.Game.PurchaseExec.Apply(player, shop, offer, cargo, amount))
+                return 0;
             return amount;
         }
 

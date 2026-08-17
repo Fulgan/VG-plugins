@@ -4,7 +4,7 @@
     <TargetFramework>netstandard2.1</TargetFramework>
     <AssemblyName>Hypercom</AssemblyName>
     <Product>Hypercom</Product>
-    <Version>0.3.1</Version>
+    <Version>0.3.2</Version>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
@@ -68,6 +68,7 @@
     <Compile Include="..\Shared\ModHost.cs" Link="ModHost.cs" />
     <!-- Name-based game access + the on-screen notification: needed by every plugin, so one owner each. -->
     <Compile Include="..\Shared\GameMembers.cs" Link="GameMembers.cs" />
+    <Compile Include="..\Shared\ViewDivergence.cs" Link="ViewDivergence.cs" />
     <Compile Include="..\Shared\Stall.cs" Link="Stall.cs" />
     <Compile Include="..\Shared\ConfigurationManagerAttributes.cs" Link="ConfigurationManagerAttributes.cs" />
     <Compile Include="..\Shared\Wallet.cs" Link="Wallet.cs" />

@@ -367,7 +367,8 @@ namespace StationAssistant
             if (amount <= 0)
                 return 0;
 
-            VG.Game.PurchaseExec.Apply(player, shop, offer, dest, amount);
+            if (!VG.Game.PurchaseExec.Apply(player, shop, offer, dest, amount))
+                return 0;
             return amount;
         }
 

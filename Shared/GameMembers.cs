@@ -86,6 +86,32 @@ namespace VG.Game
             catch { return null; }
         }
 
+        /// <summary>
+        /// An instance field or property by name INCLUDING non-public ones, walking the base chain.
+        ///
+        /// Separate from `Get` on purpose: `Get` is Public|Instance because reading a private member is normally
+        /// a mistake — the private one is a backing array whose shape the game is free to change, and reading it
+        /// instead of the public projection is what once reported an empty galaxy-wide inventory. This exists for
+        /// the cases where the private state IS the subject: `Inventory.allItems` (the data) against
+        /// `visibleItems` (what a panel draws) cannot be compared through any public member, because the public
+        /// `items` projects the first one only.
+        /// </summary>
+        public static object GetPrivate(object obj, string name)
+        {
+            if (obj == null) return null;
+            const BindingFlags F = BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance;
+            for (var t = obj.GetType(); t != null; t = t.BaseType)
+                try
+                {
+                    var fi = t.GetField(name, F);
+                    if (fi != null) return fi.GetValue(obj);
+                    var pi = t.GetProperty(name, F);
+                    if (pi != null && pi.CanRead) return pi.GetValue(obj);
+                }
+                catch { return null; }
+            return null;
+        }
+
         /// <summary>The public instance field or property behind a name, or null. Cached: a DTO pass resolves
         /// the same handful of names once per item.</summary>
         public static MemberInfo Member(Type t, string name)

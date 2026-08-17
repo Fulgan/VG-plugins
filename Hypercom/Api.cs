@@ -1596,7 +1596,8 @@ namespace Hypercom
             }
 
             var spent = barter ? 0L : (long)offer.cost * amount;
-            VG.Game.PurchaseExec.Apply(player, shop, offer, cargo, amount);
+            if (!VG.Game.PurchaseExec.Apply(player, shop, offer, cargo, amount))
+                return Result.Err(409, "the shop did not release the stock — nothing was bought");
 
             // Announce it in game as well as in the log: a purchase made from the web UI shouldn't be
             // invisible on the game screen.

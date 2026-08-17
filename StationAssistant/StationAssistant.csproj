@@ -4,7 +4,7 @@
     <TargetFramework>netstandard2.1</TargetFramework>
     <AssemblyName>StationAssistant</AssemblyName>
     <Product>Station Assistant</Product>
-    <Version>1.1.3</Version>
+    <Version>1.1.4</Version>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>

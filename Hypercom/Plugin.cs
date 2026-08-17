@@ -21,7 +21,7 @@ namespace Hypercom
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "fulgan.vanguardgalaxy.hypercom";
-        public const string Version = "0.3.1";
+        public const string Version = "0.3.2";
 
         internal static ManualLogSource Log;
 
@@ -372,8 +372,14 @@ namespace Hypercom
                 }
 
                 if (docked != _lastDocked)
+                {
                     EventBus.Emit(docked ? "dock" : "undock",
                         docked ? new Dictionary<string, object> { ["station"] = stationName } : null);
+                    // A dock or undock rebuilds panels, so it is the cheapest moment to ask whether the data and
+                    // the view agree — and the moment a player would notice an item missing.
+                    Diag.Note(docked ? "dock" : "undock");
+                    Diag.LogIfDiverged(docked ? "dock" : "undock");
+                }
                 else if (docked && stationName != _lastStation)
                     EventBus.Emit("stationChanged", new Dictionary<string, object> { ["station"] = stationName });
 
@@ -392,6 +398,10 @@ namespace Hypercom
                 {
                     _creditsDirty = false;
                     EventBus.Emit("credits", new Dictionary<string, object> { ["credits"] = credits });
+                    // Credits moved and then settled ⇒ a buy or a sell finished, whoever made it. That is the
+                    // exact window the buy-back divergence appears in, so it is worth the comparison.
+                    Diag.Note("a purchase or sale (credits moved)");
+                    Diag.LogIfDiverged("after a purchase or sale");
                 }
 
                 // Shop stock change while staying docked ⇒ a purchase/sale happened. Catches BARTER buys

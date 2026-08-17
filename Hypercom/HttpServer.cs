@@ -401,6 +401,7 @@ namespace Hypercom
             "/loadout/presets", "/loadout/presets/orphans", "/loadout/presets/export",
             "/catalog/equipment", "/catalog/types", "/catalog/prefabs", "/catalog/ships", "/catalog/aspects", "/ship/layout", "/ship/vitals", "/stat/sources", "/skills", "/reputation", "/reputation/log", "/client/state", "/galaxy", "/cycles", "/materials", "/ledger",
             "/missions/log", "/arena/probe", "/arena/vectors", "/ship/turrets/attack", "/combat/log",
+            "/diag/inventory",
         };
         /// <summary>
         /// Whether a GET is an API call at all — and therefore the SECOND place every GET endpoint is registered.
@@ -425,6 +426,7 @@ namespace Hypercom
                     return Api.Result.Err(404, "no such endpoint");
                 switch (method + " " + path)
                 {
+                    case "GET /diag/inventory": return Api.Result.Ok(Diag.Dto());
                     case "GET /status": return Api.Status();
                     case "GET /inventories": return Api.Inventories(QueryParam(query, "fresh") != null);
                     case "GET /shops": return Api.Shops(QueryParam(query, "buyback") != null, QueryParam(query, "fresh") != null);

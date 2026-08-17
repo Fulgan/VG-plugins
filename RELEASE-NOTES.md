@@ -7,6 +7,24 @@ Each mod versions on its own, so a date can carry one mod or all of them. Every 
 
 ---
 
+## 2026-08-17 - Hypercom 0.3.2 | Station Assistant 1.1.4
+
+Bug fix.
+
+### Hypercom 0.3.2
+
+- **Fixed: buying an item could leave it in the shop and let you buy it again.** The shop's stock now comes
+  off the shelf before the item is handed over, and a purchase that cannot do that buys nothing.
+- **Fixed: a barter purchase could take the goods without taking the barter currency.**
+- **New: `/diag/inventory`** reports when the game's inventory data and the panel drawing it disagree,
+  which is what makes bought items invisible until a reload. It is also written to the log when it happens.
+
+### Station Assistant 1.1.4
+
+- **Fixed: the decoy restock and the Quartermaster could count a purchase the shop never completed.**
+
+---
+
 ## 2026-08-17 - Hypercom 0.3.1 | Station Assistant 1.1.3
 
 Bug fix.
