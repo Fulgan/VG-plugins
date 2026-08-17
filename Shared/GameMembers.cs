@@ -145,23 +145,71 @@ namespace VG.Game
         ///
         /// `item` may be an `InventoryItemType` or an `Inventory.InventoryItem` entry: the overload is chosen by
         /// what the first parameter accepts, so the two are not interchangeable by arity alone (both are 2-arg).
-        /// Returns the count the game reports removed, or 0 when nothing could be called.
+        ///
+        /// ⚠️ THE TWO OVERLOADS RETURN DIFFERENT TYPES, and a caller that moves value must not treat one as the
+        /// other: the `InventoryItemType` form returns the `int` it removed, the entry form returns a `bool` and
+        /// answers `false` whenever `item.inventory != this` — i.e. the entry belongs to another store or is a
+        /// stale handle, which removes NOTHING while looking like an ordinary call.
+        ///
+        /// Returns how many units the game says it removed: `amount` on a `true`/full removal, the reported count
+        /// for the counting overload, `0` when the game refused, and <b>-1 when the call could not be made at
+        /// all</b> (no such overload, or it threw). A caller ! distinguish -1 from 0 — one is a broken build, the
+        /// other is a refusal about this item — and ! treat either as success.
         /// </summary>
         public static int RemoveItems(object inventory, object item, int amount)
         {
-            if (inventory == null || item == null || amount <= 0) return 0;
+            if (inventory == null || item == null || amount <= 0) return -1;
             var m = RemoveOverload(inventory.GetType(), item.GetType());
-            if (m == null) return 0;
+            if (m == null)
+            {
+                Complain(item, "no Remove overload takes " + item.GetType().Name);
+                return -1;
+            }
             try
             {
                 var args = m.GetParameters().Length == 2
                     ? new[] { item, (object)amount }
                     : new[] { item, (object)amount, false };
-                var r = m.Invoke(inventory, args);
-                return r is int n ? n : amount;
+                switch (m.Invoke(inventory, args))
+                {
+                    case int n: return n;
+                    case bool ok: return ok ? amount : 0;
+                    // A void or unrecognised return cannot be checked, so it is reported as uncallable rather
+                    // than assumed good: an unverifiable removal beside a credit is how an item gets duplicated.
+                    default:
+                        Complain(item, m.Name + " returned " + (m.ReturnType?.Name ?? "void") + ", which cannot be verified");
+                        return -1;
+                }
             }
-            catch { return 0; }
+            catch (Exception e)
+            {
+                Complain(item, e.GetBaseException().Message);
+                return -1;
+            }
         }
+
+        // Named for the log line it writes, not for a policy: whoever calls RemoveItems decides what a failure
+        // costs. This only makes sure a failure is never silent — the defect it exists for was invisible in
+        // every log while it moved items.
+        //
+        // `UnityEngine.Debug` is reached BY NAME so this file carries no Unity typeref and can be compiled into
+        // the test project, where there is no Unity at all: absent logger ⇒ no log, never a throw.
+        private static void Complain(object item, string why)
+        {
+            try
+            {
+                var log = LogWarning.Value;
+                if (log != null) log.Invoke(null, new object[] { "[VG] Inventory.Remove refused or unavailable for " + (item ?? "null") + ": " + why });
+            }
+            catch { }
+        }
+
+        private static readonly Lazy<MethodInfo> LogWarning = new Lazy<MethodInfo>(() =>
+        {
+            var t = FindType("UnityEngine.Debug");
+            try { return t?.GetMethod("LogWarning", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(object) }, null); }
+            catch { return null; }
+        });
 
         private static readonly ConcurrentDictionary<string, MethodInfo> Removers = new ConcurrentDictionary<string, MethodInfo>();
 

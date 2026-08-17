@@ -7,6 +7,23 @@ Each mod versions on its own, so a date can carry one mod or all of them. Every 
 
 ---
 
+## 2026-08-17 - Hypercom 0.3.1 | Station Assistant 1.1.3
+
+Bug fix.
+
+### Hypercom 0.3.1
+
+- **Fixed: selling or moving an item could pay you and keep the item.** The game can refuse to remove a row,
+  and the mod took that as done - so a sale credited you while the item stayed in your hold, and a transfer
+  could leave a copy in both stores.
+
+### Station Assistant 1.1.3
+
+- **Fixed: auto-sell, the ammo valet and the Quartermaster could pay for or duplicate an item they had not
+  removed.** Each one now checks that the item really left before it pays or adds.
+
+---
+
 ## 2026-08-17 - Hypercom 0.3.0 | Station Assistant 1.1.2
 
 A shopping list to go with the sell list, resonance counted on boosters, and a lot of fixes to the gear

@@ -1204,8 +1204,12 @@ namespace Hypercom
             if (n <= 0)
                 return Result.Err(400, "no space in destination");
 
+            // SOURCE FIRST: `Inventory.Remove(entry, n)` answers false when the entry is not this store's, and
+            // adding before that answer is known turns a refusal into a duplicated item.
+            var movedOut = VG.Game.GameMembers.RemoveItems(src, entry, n);
+            if (movedOut != n)
+                return Result.Err(409, $"the game released {movedOut} of {n} — nothing was moved");
             dst.Add(entry.item, n);
-            VG.Game.GameMembers.RemoveItems(src, entry, n);
             return Result.Ok(new Dictionary<string, object> { ["moved"] = n });
         });
 
@@ -1315,14 +1319,20 @@ namespace Hypercom
             var value = (long)item.sellValue * n;
 
             var player = GamePlayer.current;
-            // Refuse the sale outright if the balance cannot be written: handing over the goods and failing to
-            // pay for them is the one outcome worse than not selling.
+            // THE GOODS LEAVE FIRST, then the money is written. Both directions have to be refused: an unpaid
+            // sale hands over goods for nothing, and a paid sale that never removed the item pays for something
+            // the player still holds. The removal is the one that can refuse per ITEM, so it goes first.
+            var sold = VG.Game.GameMembers.RemoveItems(inv, entry, n);
+            if (sold != n)
+                return new Sale { Code = 409, Error = $"the game released {sold} of {n} — nothing was sold" };
+
             if (!VG.Game.Wallet.SetBalance(player, AddClamped(VG.Game.Wallet.Balance(player), value)))
-                return new Sale { Code = 500, Error = "could not credit the sale — nothing was sold" };
+            {
+                inv.Add(item, n);   // put it back: it left the store and was never paid for
+                return new Sale { Code = 500, Error = "could not credit the sale — the item was returned" };
+            }
 
             var back = Buyback(item, n);
-
-            VG.Game.GameMembers.RemoveItems(inv, entry, n);
             var name = Stores.Text(item.displayName);
             // A sale moves money too, so it gets the same in-game notice and log line as a purchase.
             if (!quiet) Notify.Transaction("sell", $"sold {n}x {name} for {value:N0} cr.");

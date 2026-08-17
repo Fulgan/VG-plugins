@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
@@ -14,6 +14,7 @@
     <Compile Include="..\..\Shared\Rarity.cs" Link="Rarity.cs" />
     <Compile Include="..\..\Shared\KeepMatch.cs" Link="KeepMatch.cs" />
     <Compile Include="..\..\Shared\Say.cs" Link="Say.cs" />
+    <Compile Include="..\..\Shared\GameMembers.cs" Link="GameMembers.cs" />
   </ItemGroup>
 
   <ItemGroup>

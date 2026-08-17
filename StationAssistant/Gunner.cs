@@ -259,8 +259,15 @@ namespace StationAssistant
                 var count = e.count;
                 try
                 {
+                    // SOURCE FIRST — see AutoSell: adding before the removal is confirmed duplicates the item
+                    // when the game refuses (a stale entry handle answers false and removes nothing).
+                    var removed = VG.Game.GameMembers.RemoveItems(ctx.Cargo, e, count);
+                    if (removed != count)
+                    {
+                        Plugin.Log.LogWarning($"Gunner: skipped stowing {Util.ItemName(e.item)} — the game removed {removed} of {count}.");
+                        continue;
+                    }
                     ctx.Armory.Add(e.item, count);
-                    VG.Game.GameMembers.RemoveItems(ctx.Cargo, e, count);
                     stowed += count;
                     MoveLog.Add(log?.Stowed, Util.ItemName(e.item), count);
                 }
@@ -279,8 +286,13 @@ namespace StationAssistant
                 return;
             try
             {
+                var removed = VG.Game.GameMembers.RemoveItems(ctx.Cargo, ammo, excess);
+                if (removed != excess)
+                {
+                    Plugin.Log.LogWarning($"Gunner: skipped stowing excess {Util.ItemName(ammo)} — the game removed {removed} of {excess}.");
+                    return;
+                }
                 ctx.Armory.Add(ammo, excess);
-                VG.Game.GameMembers.RemoveItems(ctx.Cargo, ammo, excess);
                 r.Stowed += excess;
                 MoveLog.Add(r.Moves?.Stowed, Util.ItemName(ammo), excess);
             }
@@ -304,7 +316,12 @@ namespace StationAssistant
                 {
                     try
                     {
-                        VG.Game.GameMembers.RemoveItems(ctx.Armory, ammo, take);
+                        var pulled = VG.Game.GameMembers.RemoveItems(ctx.Armory, ammo, take);
+                        if (pulled != take)
+                        {
+                            Plugin.Log.LogWarning($"Gunner: skipped pulling {Util.ItemName(ammo)} — the armory removed {pulled} of {take}.");
+                            return;
+                        }
                         ctx.Cargo.Add(ammo, take);
                         r.Pulled += take;
                         MoveLog.Add(r.Moves?.Pulled, Util.ItemName(ammo), take);

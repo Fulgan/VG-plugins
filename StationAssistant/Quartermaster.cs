@@ -299,8 +299,16 @@ namespace StationAssistant
                     continue;
                 try
                 {
+                    // SOURCE FIRST: a move is a removal plus an add, and doing the add first turns a refused
+                    // removal into a duplicated item. `Remove(entry, n)` refuses when the entry is not this
+                    // store's, which a cached list cannot rule out.
+                    var removed = VG.Game.GameMembers.RemoveItems(src, e, take);
+                    if (removed != take)
+                    {
+                        Plugin.Log.LogWarning($"Quartermaster: skipped {Util.ItemName(e.item)} — the game removed {removed} of {take}, so nothing was moved.");
+                        continue;
+                    }
                     dst.Add(e.item, take);
-                    VG.Game.GameMembers.RemoveItems(src, e, take);
                     moved += take;
                     amount -= take;
                 }

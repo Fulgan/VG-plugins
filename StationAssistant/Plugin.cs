@@ -24,7 +24,7 @@ namespace StationAssistant
 {
     internal enum SellTrigger { Manual, OnDock, OnUndock }
 
-    [BepInPlugin(Guid, "Station Assistant", "1.1.2")]
+    [BepInPlugin(Guid, "Station Assistant", "1.1.3")]
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "fulgan.vanguardgalaxy.stationassistant";
@@ -451,7 +451,10 @@ namespace StationAssistant
             // OnUse returns true when a charge is consumed.
             if (transponder != null && transponder.OnUse())
             {
-                VG.Game.GameMembers.RemoveItems(cargo, entry, 1);
+                // The charge is already spent, so a refused removal cannot be undone — it is REPORTED instead,
+                // because a transponder that stays in cargo after being used reads as the mod doing nothing.
+                if (VG.Game.GameMembers.RemoveItems(cargo, entry, 1) != 1)
+                    Plugin.Log.LogWarning("Decoy transponder was used but the game did not remove it from cargo.");
                 Plugin.Log.LogInfo("Decoy transponder activated.");
                 return true;
             }

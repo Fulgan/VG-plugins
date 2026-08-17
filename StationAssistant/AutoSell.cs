@@ -61,16 +61,29 @@ namespace StationAssistant
                     var count = entry.count;
                     var value = (long)entry.item.sellValue * count;
 
-                    // Stop before removing the goods if the balance cannot be written: an unpaid sale is worse
-                    // than an abandoned one.
+                    // THE GOODS LEAVE FIRST. `Inventory.Remove(entry, n)` answers false when the entry is not
+                    // this store's — a stale handle, another inventory — and removes nothing; crediting before
+                    // that answer is known pays for an item the player still holds.
+                    var removed = VG.Game.GameMembers.RemoveItems(cargo, entry, count);
+                    if (removed != count)
+                    {
+                        Plugin.Log.LogWarning($"Auto-sell: skipped {Util.ItemName(entry.item)} — the game removed {removed} of {count}, so nothing was paid or shelved.");
+                        continue;
+                    }
+
+                    // The balance is written second, and a failure to write it puts the goods back: an unpaid sale
+                    // and a paid-for phantom are both worse than an abandoned one.
                     if (!VG.Game.Wallet.SetBalance(player, AddClamped(VG.Game.Wallet.Balance(player), value)))
+                    {
+                        cargo.Add(entry.item, count);
+                        Plugin.Log.LogWarning($"Auto-sell: could not credit {value:N0} for {Util.ItemName(entry.item)} — the item was returned to cargo.");
                         break;
+                    }
 
                     // Sold goods go to the station's shelf — ONE owner (`VG.Game.GameShops.Shelve`), shared with
                     // the bridge, because the game adds them WHATEVER their buy-back flag says.
                     if (VG.Game.GameShops.Shelve(SpaceStation.current, entry.item, count).boughtBack)
                         buyback += count;
-                    VG.Game.GameMembers.RemoveItems(cargo, entry, count);
 
                     items += count;
                     credits = AddClamped(credits, value);

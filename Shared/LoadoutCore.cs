@@ -309,7 +309,13 @@ namespace VG.Loadout
                 if (e.status != "equip" || e.chosen == null) continue;
                 try
                 {
-                    VG.Game.GameMembers.RemoveItems(e.source, e.chosen, 1);
+                    // The store gives the item up BEFORE the ship takes it: equipping a copy the store still
+                    // holds is a duplicate, and the loadout is the one place it would go unnoticed.
+                    if (VG.Game.GameMembers.RemoveItems(e.source, e.chosen, 1) != 1)
+                    {
+                        Debug.LogWarning($"[VG.Loadout] apply {e.slot.kind}{e.slot.slot} refused: the store did not release {e.chosen}");
+                        continue;
+                    }
                     var displaced = EquipToData(ship, e.slot, e.chosen);
                     if (displaced != null) armory?.Add(displaced, 1);
                     changed++;
@@ -365,6 +371,22 @@ namespace VG.Loadout
             }
         }
 
+        // Who occupies a slot, without changing it. Needed because the store has to release an item BEFORE the
+        // ship takes it, and the no-op check ("already in this slot") has to happen before either.
+        private static InventoryItemType PeekSlot(SpaceShipData ship, LoadoutSlot slot)
+        {
+            try
+            {
+                switch (slot.kind)
+                {
+                    case "Turret": return ship.hardpoints[int.Parse(slot.slot)];
+                    case "Booster": return ship.boosters[int.Parse(slot.slot)];
+                    default: return ship.GetEquippedItem((EquipmentSlot)Enum.Parse(typeof(EquipmentSlot), slot.slot));
+                }
+            }
+            catch { return null; }
+        }
+
         // Apply a partial, additive transient: equip each gear slot's best match (finder plan) and assign
         // officers by guid. Touches ONLY the pushed slots; captures each prior occupant for undo. Displaced gear goes to the armory. Officers gate on `crewSupported`. Returns the
         // undo record (null only if there is no ship); `changed` = # slots actually altered.
@@ -381,8 +403,12 @@ namespace VG.Loadout
                     if (e.status != "equip" || e.chosen == null) continue;
                     try
                     {
+                        if (VG.Game.GameMembers.RemoveItems(e.source, e.chosen, 1) != 1)
+                        {
+                            Debug.LogWarning($"[VG.Loadout] apply gear {e.slot.kind}{e.slot.slot} refused: the store did not release {e.chosen}");
+                            continue;
+                        }
                         var prior = SetSlot(ship, e.slot, e.chosen);
-                        VG.Game.GameMembers.RemoveItems(e.source, e.chosen, 1);
                         if (prior != null) armory?.Add(prior, 1);
                         t.gear.Add(new SlotPrior { slot = e.slot, prior = prior });
                         changed++;
@@ -450,7 +476,13 @@ namespace VG.Loadout
             {
                 try
                 {
-                    if (g.prior != null) VG.Game.GameMembers.RemoveItems(armory, g.prior, 1); // apply put it here; take it back onto the ship
+                    // apply put it here; take it back onto the ship — and if the armory will not release it,
+                    // leave the slot alone rather than conjure a second copy onto the hull.
+                    if (g.prior != null && VG.Game.GameMembers.RemoveItems(armory, g.prior, 1) != 1)
+                    {
+                        Debug.LogWarning($"[VG.Loadout] undo gear {g.slot.kind}{g.slot.slot} refused: the armory did not release {g.prior}");
+                        continue;
+                    }
                     var applied = SetSlot(ship, g.slot, g.prior);    // prior null → unequip
                     if (applied != null) armory?.Add(applied, 1);
                     restored++;
@@ -496,9 +528,14 @@ namespace VG.Loadout
                 try
                 {
                     var ls = new LoadoutSlot { kind = d.kind, slot = d.kind == "Module" ? (d.slotName ?? "") : d.slot.ToString() };
-                    var prior = SetSlot(ship, ls, d.item);
+                    var prior = PeekSlot(ship, ls);
                     if (prior == d.item) continue; // already in this slot — no-op
-                    VG.Game.GameMembers.RemoveItems(d.source, d.item, 1);
+                    if (VG.Game.GameMembers.RemoveItems(d.source, d.item, 1) != 1)
+                    {
+                        Debug.LogWarning($"[VG.Loadout] direct equip {d.kind}{d.slot} refused: the store did not release {d.item}");
+                        continue;
+                    }
+                    prior = SetSlot(ship, ls, d.item);
                     if (prior != null) armory?.Add(prior, 1);
                     t.gear.Add(new SlotPrior { slot = ls, prior = prior });
                     changed++;
