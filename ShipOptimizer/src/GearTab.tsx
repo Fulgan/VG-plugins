@@ -4,7 +4,7 @@ import type { CatalogTypes, Inventories, Item, ShipHardpoint, ShipLayout, Vitals
 import { num, mainVal, effectiveMainVal } from "./format";
 import { aspectDamageFraction, damageAspects } from "./aspect";
 import { turretScore, scoreReasons, BASE_CRIT, type CritContext } from "./turretScore";
-import { activityOf, capacityWith, optimizeTurretSet, optimizeModuleSet, optimizeShipSet, poolsWithModules, optimizeTurretSetLayered, coversLayer, sameScale, background, setRank, rankGt, rankSub, worthSwitching, isCombat, moduleBetter, moduleGain, shortlist, MIN_GAIN, OBJECTIVE_TIE, type LayerRole, type LayerTarget, type ModuleCtx, type PowerActivity, defaultGoalOrder, goalReadingOf, goalRefuses, goalDrops, GOAL_LABEL, projectLayer, DEFAULT_LAYER_CAP, type LayerReading,
+import { activityOf, capacityWith, optimizeTurretSet, optimizeModuleSet, optimizeShipSet, poolsWithModules, optimizeTurretSetLayered, coversLayer, sameScale, background, setRank, rankGt, rankSub, worthSwitching, isCombat, moduleBetter, moduleGain, shortlist, MIN_GAIN, OBJECTIVE_TIE, type LayerRole, type LayerTarget, type ModuleCtx, type PowerActivity, defaultGoalOrder, goalReadingOf, goalRefuses, goalDrops, GOAL_LABEL, liveVeto, projectLayer, DEFAULT_LAYER_CAP, type LayerReading,
   type GoalKey, type Rank, type ReactorBudget, type ShipPools, type SlotChoice } from "./fleetDps";
 import { AspectMarks } from "./AspectMark";
 import { load, save, LAYER_CAP_KEY } from "./storage";
@@ -620,7 +620,11 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
   // asked for. `vetoed` is written by the suggest paths and read for the note: a plan withheld in silence is
   // indistinguishable from one that was never found.
   const goalOrder = useMemo(() => defaultGoalOrder(role ?? null), [role]);
-  const vetoed = useRef<GoalKey | null>(null);
+  // TIED TO THE RUN THAT WROTE IT, which a bare key was not: this component stays mounted across a ship change,
+  // so a refusal earned on the previous hull stayed on screen beside a ship whose order does not even contain
+  // that key (a salvage hull told its first goal was Combat Power). An explanation of an absence is only true
+  // of the run it came from, so it is stored with that run's signature and ignored once the signature moves.
+  const vetoed = useRef<{ sig: string; key: GoalKey } | null>(null);
 
   // THE DEFENSIVE CAP, in front of the order rather than inside it. An order with Combat first never reads a
   // hull key on a plan whose combat power ROSE, which is exactly the plan the player objected to — "it wants me
@@ -738,7 +742,7 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
         // AND THE PLAYER'S ORDER, which may only ever REFUSE (`goalRefuses`): a battery whose ranked key falls is
         // not an upgrade, whatever the objective's single scalar makes of it.
         const vetoT = goalRefuses(goalOrder, goalReadingOf(pools, now), goalReadingOf(pools, plan));
-        if (vetoT) vetoed.current = vetoT;
+        if (vetoT) vetoed.current = { sig: sigRef.current, key: vetoT };
         if (vetoT || !worthSwitching(plan, now)) {
           for (const hp of open) {
             const key = `t:${hp.index}`;
@@ -818,7 +822,7 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
 
         const vetoM = goalRefuses(goalOrder, goalReadingOf(pools, rankOf(outs)),
                                   goalReadingOf(planPools, rankOf(plan)));
-        if (vetoM) vetoed.current = vetoM;
+        if (vetoM) vetoed.current = { sig: sigRef.current, key: vetoM };
         if (vetoM || bounces || !worthSwitching(rankOf(plan), rankOf(outs))) {
           // No plan worth the trip. A slot may STILL be decided on what the objective cannot see — but only where
           // it genuinely cannot see: an EMPTY slot (anything beats nothing) or a difference inside the tie band
@@ -927,7 +931,7 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
         && worthSwitching(mirror(outs, nowGuns), mirror(planMods, planGuns));
       const vetoJ = goalRefuses(goalOrder, goalReadingOf(pools, rankOf(outs, nowGuns)),
                                 goalReadingOf(planPools, rankOf(planMods, planGuns)));
-      if (vetoJ) vetoed.current = vetoJ;
+      if (vetoJ) vetoed.current = { sig: sigRef.current, key: vetoJ };
       if (vetoJ || bounces || !worthSwitching(rankOf(planMods, planGuns), rankOf(outs, nowGuns))) {
         // Not worth the trip as a whole. Fall back to the two single-block answers, which have their own floors
         // and their own fall-throughs — a slot can still be decided on what the objective cannot see.
@@ -988,6 +992,9 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
   );
   const sigRef = useRef(autoSig);
   sigRef.current = autoSig;
+  // The refusal survives only while the run it describes is still the current question. `autoSig` opens with the
+  // ship guid, so a hull change alone invalidates it, and so does any edit to gear, filters or categories.
+  const vetoKey = liveVeto(vetoed.current, autoSig);
   // Per ship too: one watermark shared across hulls made a switch either re-run needlessly or skip a ship whose
   // signature happened to match the previous one's.
   const lastRunAll = useRef<Record<string, string | null>>({});
@@ -1058,10 +1065,10 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
           + ` apply it or change the slots yourself.`
         : null)
       // WITHOUT one, the only remaining refusal is the player's own goal order, which says which key may not fall.
-      : vetoed.current
-        ? `Nothing to change: no candidate raised ${GOAL_LABEL[vetoed.current]}, which is first in this ship's `
-          + `goal order, and a plan that lowers it is refused whatever else it gains. Reorder the goals to let `
-          + `another stat decide.`
+      : vetoKey
+        ? `Nothing to change: no candidate raised ${GOAL_LABEL[vetoKey]}, the highest-ranked goal in this ship's `
+          + `order that any candidate moved, and a plan that lowers it is refused whatever else it gains. `
+          + `Reorder the goals to let another stat decide.`
         : null,
     planDrops,
     ranking, setRanking, crit, pools, layerCap, setLayerCap,

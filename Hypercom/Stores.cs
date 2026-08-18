@@ -489,9 +489,7 @@ namespace Hypercom
             return new Dictionary<string, object>
             {
                 ["shipGuid"] = ship.guid,
-                // Unrenamed ships have no customShipName — fall back to the type name, not the guid.
-                ["name"] = !string.IsNullOrEmpty(ship.customShipName) ? ship.customShipName
-                    : (ship.shipClass?.displayName ?? ship.guid),
+                ["name"] = VG.Game.ShipNames.Label(ship),
                 ["shipType"] = ship.shipClass?.displayName, // ship class, e.g. "Chisel Mk I"
                 ["role"] = roleType != null ? roleType.GetRole().ToString() : null,
                 ["hardpoints"] = hardpoints,

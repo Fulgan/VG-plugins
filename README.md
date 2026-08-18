@@ -17,7 +17,7 @@ These mods need **[BepInEx 5](https://github.com/BepInEx/BepInEx/releases)** ins
 folder first (the mod loader they run on).
 
 Then grab the mod's zip from the **[Releases](https://github.com/Fulgan/VG-plugins/releases)** page and
-either install it with a mod manager (like Vortex) or extract it into your game folder - each zip has
+either install it with a mod manager (like Vortex) or extract it into your game folder: each zip has
 `BepInEx\` at its root. Restart the game to load it.
 
 Each mod is a single self-contained file: there is no shared dependency to install, and you can take one
@@ -27,28 +27,28 @@ mod without the others.
 
 ## Downloads
 
-One link per mod that never changes. The version behind it does — these are updated with every release, so a
+One link per mod that never changes. The version behind it does. These are updated with every release, so a
 bookmark (or a pinned message) keeps working.
 
-<!-- DOWNLOADS:BEGIN — rewritten by tools/publish-oss.ps1 from each mod's <Version>; edit the prose, not the
+<!-- DOWNLOADS:BEGIN. Rewritten by tools/publish-oss.ps1 from each mod's <Version>; edit the prose, not the
      links, or the next mirror run will overwrite what you wrote. -->
 
 ### Hypercom
 
-Ship Optimizer ships inside it — one download for both.
+Ship Optimizer ships inside it: one download for both.
 
 **[Download Hypercom 0.3.3](https://github.com/Fulgan/VG-plugins/releases/download/Hypercom-v0.3.3/Hypercom-v0.3.3.zip)**
-· [all Hypercom releases](https://github.com/Fulgan/VG-plugins/releases?q=Hypercom)
+([all Hypercom releases](https://github.com/Fulgan/VG-plugins/releases?q=Hypercom))
 
 ### Station Assistant
 
 **[Download Station Assistant 1.1.5](https://github.com/Fulgan/VG-plugins/releases/download/StationAssistant-v1.1.5/StationAssistant-v1.1.5.zip)**
-· [all Station Assistant releases](https://github.com/Fulgan/VG-plugins/releases?q=Station+Assistant)
+([all Station Assistant releases](https://github.com/Fulgan/VG-plugins/releases?q=Station+Assistant))
 
 ### Quick Save
 
 **[Download Quick Save 1.0.0](https://github.com/Fulgan/VG-plugins/releases/download/QuickSave-v1.0.0/QuickSave-v1.0.0.zip)**
-· [all Quick Save releases](https://github.com/Fulgan/VG-plugins/releases?q=Quick+Save)
+([all Quick Save releases](https://github.com/Fulgan/VG-plugins/releases?q=Quick+Save))
 
 <!-- DOWNLOADS:END -->
 
@@ -61,10 +61,10 @@ Questions, bug reports, or just want to chat? Join the **[Discord](https://disco
 
 ## Credits
 
-- **Vanguard Galaxy** is made by **Bat Roost Games** -
+- **Vanguard Galaxy** is made by **Bat Roost Games**:
   [buy it on Steam](https://store.steampowered.com/app/3471800/Vanguard_Galaxy/).
 - Some game info and images come from the community wiki
-  (<https://wiki.vanguardgalaxy.com>) - thanks to its maintainers.
+  (<https://wiki.vanguardgalaxy.com>), thanks to its maintainers.
 
 These are unofficial, fan-made mods, not affiliated with or endorsed by Bat Roost Games. Use at your
 own risk.

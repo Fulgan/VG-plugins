@@ -262,6 +262,31 @@ namespace VG.Game
             return best;
         }
 
+        /// <summary>
+        /// An instance method by name and arity INCLUDING non-public ones, walking the base chain. Null when
+        /// absent.
+        ///
+        /// Named `Deep` like <see cref="StaticGetDeep"/>, and not interchangeable with <see cref="Method"/>:
+        /// the game keeps rules a mod wants to read behind `protected` (a boarding gate, a damage check), and
+        /// re-deriving such a rule from its clauses produces a copy that compiles, runs, and disagrees with the
+        /// game the first patch that moves one of them. Reading the real thing is the cheaper answer.
+        /// </summary>
+        public static MethodInfo MethodDeep(Type type, string name, int argCount = -1)
+        {
+            const BindingFlags F = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                                   | BindingFlags.DeclaredOnly;
+            for (var t = type; t != null; t = t.BaseType)
+            {
+                try
+                {
+                    foreach (var m in t.GetMethods(F))
+                        if (m.Name == name && (argCount < 0 || m.GetParameters().Length == argCount)) return m;
+                }
+                catch { }
+            }
+            return null;
+        }
+
         /// <summary>A public instance method by name and arity, or null.</summary>
         public static MethodInfo Method(Type type, string name, int argCount = -1)
         {

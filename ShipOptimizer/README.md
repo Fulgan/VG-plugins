@@ -2,9 +2,9 @@
 
 A web app for **Vanguard Galaxy** that looks at your ship, your inventory, the station shops and the
 galaxy around you, suggests a better loadout, and applies it for you. It runs through the
-**[Hypercom](../Hypercom/)** mod, and ships inside it - there is nothing separate to install.
+**[Hypercom](../Hypercom/)** mod, and ships inside it: there is nothing separate to install.
 
-**Ships with Hypercom 0.2.0** - [what changed](../RELEASE-NOTES.md).
+**Ships with Hypercom 0.2.0**: [what changed](../RELEASE-NOTES.md).
 
 ## What it does
 
@@ -24,11 +24,11 @@ you exactly which items those rules picked, you untick anything you want to keep
 be named, saved, exported and imported, so a set of rules can move to your next playthrough.
 
 The **shopping list** button on the shop list writes the same kind of rules the other way round: what you are
-shopping *for*. Quality, type, size, aspect, level, how many substats it rolled — plus a price ceiling and
+shopping *for*. Quality, type, size, aspect, level, how many substats it rolled, plus a price ceiling and
 "only while I own fewer than this many". Anything a station has on offer that matches joins the shop list
-marked **★ on my list**, with the same buy button the upgrades have, so you find the spare or the aspect
+marked **starred on my list**, with the same buy button the upgrades have, so you find the spare or the aspect
 carrier you came for even though it beats nothing you currently fly with. Several ticked values read as "any
-of these" until you pick another reading — all of them, at least two of them, none of them. The rules never
+of these" until you pick another reading: all of them, at least two of them, none of them. The rules never
 buy anything on their own.
 
 ### Officers
@@ -61,8 +61,8 @@ the gear, so loading it puts your filters and priorities back.
 ### Map
 
 Work in progress, and a different take on the in-game one: only one thing is coloured in at a time, so you
-ask one question instead of reading five at once. You pick what that is - who owns what, your materials,
-level, how recently you were there, or stations - and zoom from quadrant to subsector. There's a heat map
+ask one question instead of reading five at once. You pick what that is (who owns what, your materials,
+level, how recently you were there, or stations) and zoom from quadrant to subsector. There's a heat map
 of where your materials are sitting and a "find my stuff" search for any of them. Distances are in jumps
 from where you are now.
 
@@ -124,7 +124,7 @@ The rest is what makes a gun better or worse than its number looks:
 ## Using it
 
 You don't run this yourself. Install **Hypercom**, start the game, press **F7** and use **Open web UI** on
-the Hypercom tab. For a phone or tablet, scan the QR code there instead (see Hypercom's pairing section) -
+the Hypercom tab. For a phone or tablet, scan the QR code there instead (see Hypercom's pairing section):
 the phone gets its own token and you can revoke that one on its own.
 
 - **Docked for anything that changes your ship.** Undocked you still get the app, but gear is read-only
@@ -146,5 +146,5 @@ Questions or bugs? Join the **[Discord](https://discord.gg/mFZ34Rzzqs)**.
 
 **Vanguard Galaxy** is made by **Bat Roost Games**
 ([Steam](https://store.steampowered.com/app/3471800/Vanguard_Galaxy/)). Game info and images come
-from the community wiki (<https://wiki.vanguardgalaxy.com>) - thanks to its maintainers. This is an
+from the community wiki (<https://wiki.vanguardgalaxy.com>), thanks to its maintainers. This is an
 unofficial, fan-made mod, not affiliated with or endorsed by Bat Roost Games.

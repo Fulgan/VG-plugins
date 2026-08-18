@@ -81,8 +81,15 @@
     <Compile Include="..\Shared\PurchaseExec.cs" Link="PurchaseExec.cs" />
     <Compile Include="..\Shared\GameShops.cs" Link="GameShops.cs" />
     <Compile Include="..\Shared\ItemNames.cs" Link="ItemNames.cs" />
+    <Compile Include="..\Shared\ShipNames.cs" Link="ShipNames.cs" />
     <!-- QR encoder for phone pairing. Game-free, so the test project links the same file. -->
     <Compile Include="..\Shared\QrCode.cs" Link="QrCode.cs" />
+    <!-- Update NOTIFICATION: reads the published version list and says so in the settings window. Downloads
+         nothing. Manifest reader, one HTTPS GET, the glue, and the three config keys. -->
+    <Compile Include="..\Shared\Updater.cs" Link="Updater.cs" />
+    <Compile Include="..\Shared\UpdateCheck.cs" Link="UpdateCheck.cs" />
+    <Compile Include="..\Shared\UpdateNotice.cs" Link="UpdateNotice.cs" />
+    <Compile Include="..\Shared\UpdateSettings.cs" Link="UpdateSettings.cs" />
   </ItemGroup>
 
   <!-- Drop the built DLL straight into the game's plugin folder on every build. -->

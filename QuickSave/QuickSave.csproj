@@ -56,6 +56,13 @@
     <Compile Include="..\Shared\GameState.cs" Link="GameState.cs" />
     <Compile Include="..\Shared\GameToast.cs" Link="GameToast.cs" />
     <Compile Include="..\Shared\Cooldown.cs" Link="Cooldown.cs" />
+    <!-- Update NOTIFICATION: it reads the published version manifest and says so on the settings window. It
+         downloads nothing, so the three files are the manifest reader, the one HTTPS GET, and the glue. -->
+    <Compile Include="..\Shared\Updater.cs" Link="Updater.cs" />
+    <Compile Include="..\Shared\UpdateCheck.cs" Link="UpdateCheck.cs" />
+    <Compile Include="..\Shared\UpdateNotice.cs" Link="UpdateNotice.cs" />
+    <Compile Include="..\Shared\UpdateSettings.cs" Link="UpdateSettings.cs" />
+    <Compile Include="..\Shared\ConfigurationManagerAttributes.cs" Link="ConfigurationManagerAttributes.cs" />
   </ItemGroup>
 
   <!-- Drop the built DLL straight into the game's plugin folder on every build. -->

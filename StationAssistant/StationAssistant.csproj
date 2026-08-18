@@ -68,11 +68,18 @@
     <Compile Include="..\Shared\GameMembers.cs" Link="GameMembers.cs" />
     <Compile Include="..\Shared\Stall.cs" Link="Stall.cs" />
     <Compile Include="..\Shared\ConfigurationManagerAttributes.cs" Link="ConfigurationManagerAttributes.cs" />
+    <!-- Update NOTIFICATION: reads the published version list and says so in the settings window. Downloads
+         nothing. Manifest reader, one HTTPS GET, the glue, and the three config keys. -->
+    <Compile Include="..\Shared\Updater.cs" Link="Updater.cs" />
+    <Compile Include="..\Shared\UpdateCheck.cs" Link="UpdateCheck.cs" />
+    <Compile Include="..\Shared\UpdateNotice.cs" Link="UpdateNotice.cs" />
+    <Compile Include="..\Shared\UpdateSettings.cs" Link="UpdateSettings.cs" />
     <Compile Include="..\Shared\GameState.cs" Link="GameState.cs" />
     <Compile Include="..\Shared\Wallet.cs" Link="Wallet.cs" />
     <Compile Include="..\Shared\ItemFlags.cs" Link="ItemFlags.cs" />
     <Compile Include="..\Shared\GameShops.cs" Link="GameShops.cs" />
     <Compile Include="..\Shared\ItemNames.cs" Link="ItemNames.cs" />
+    <Compile Include="..\Shared\ShipNames.cs" Link="ShipNames.cs" />
     <Compile Include="..\Shared\Say.cs" Link="Say.cs" />
   </ItemGroup>
 
@@ -84,7 +91,7 @@
   <!-- Drop the built DLL + language files straight into the game's plugin folder on every build. Nothing
        else is copied because nothing else is needed: the plugin is ONE self-contained assembly, and the game
        references resolve from the game itself (Private=false). -->
-  <Target Name="DeployToBepInEx" AfterTargets="Build" Condition="Exists('$(GameDir)\BepInEx\plugins')">
+  <Target Name="DeployToBepInEx" AfterTargets="Build" Condition="Exists('$(GameDir)\BepInEx\plugins') and '$(SkipDeploy)' != 'true'">
     <Copy SourceFiles="$(TargetPath)"
           DestinationFolder="$(GameDir)\BepInEx\plugins\$(AssemblyName)"
           SkipUnchangedFiles="false" />

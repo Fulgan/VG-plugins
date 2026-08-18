@@ -7,7 +7,7 @@ Each mod versions on its own, so a date can carry one mod or all of them. Every 
 
 ---
 
-## 2026-08-17 - Hypercom 0.3.3 | Station Assistant 1.1.5
+## 2026-08-17: Hypercom 0.3.3 | Station Assistant 1.1.5
 
 Bug fix.
 
@@ -24,7 +24,7 @@ Bug fix.
 
 ---
 
-## 2026-08-17 - Hypercom 0.3.2 | Station Assistant 1.1.4
+## 2026-08-17: Hypercom 0.3.2 | Station Assistant 1.1.4
 
 Bug fix.
 
@@ -42,14 +42,14 @@ Bug fix.
 
 ---
 
-## 2026-08-17 - Hypercom 0.3.1 | Station Assistant 1.1.3
+## 2026-08-17: Hypercom 0.3.1 | Station Assistant 1.1.3
 
 Bug fix.
 
 ### Hypercom 0.3.1
 
 - **Fixed: selling or moving an item could pay you and keep the item.** The game can refuse to remove a row,
-  and the mod took that as done - so a sale credited you while the item stayed in your hold, and a transfer
+  and the mod took that as done, so a sale credited you while the item stayed in your hold, and a transfer
   could leave a copy in both stores.
 
 ### Station Assistant 1.1.3
@@ -59,14 +59,14 @@ Bug fix.
 
 ---
 
-## 2026-08-17 - Hypercom 0.3.0 | Station Assistant 1.1.2
+## 2026-08-17: Hypercom 0.3.0 | Station Assistant 1.1.2
 
 A shopping list to go with the sell list, resonance counted on boosters, and a lot of fixes to the gear
 suggestions. Both mods also work on game beta 0.8.1.26.
 
 ### Hypercom 0.3.0
 
-**Shopping list.** Allow you to specify what you are shopping for - quality, type, aspect, substat count, a
+**Shopping list.** Allow you to specify what you are shopping for: quality, type, aspect, substat count, a
 price ceiling, or how many you already own. Matching offers in a station's shop are flagged for you.
 
 **Filters improvements.** More natural display for filters.
@@ -107,7 +107,7 @@ version.
 
 ---
 
-## 2026-08-05 - Hypercom 0.2.1 | Station Assistant 1.1.1
+## 2026-08-05: Hypercom 0.2.1 | Station Assistant 1.1.1
 
 A fix release, almost all of it from playing a long save: an 8,000-item armory found a lot of things that
 work fine on a fresh one.
@@ -117,23 +117,23 @@ work fine on a fresh one.
 **Selling a lot of things at once**
 
 - **Selling a long list took minutes and looked frozen.** Every row was its own request, and each one waited
-  for a frame — 7,891 items was over two minutes of that. The whole list now goes out as one request and
+  for a frame, and 7,891 items was over two minutes of that. The whole list now goes out as one request and
   takes a couple of seconds, and the game shows how far it has got while it works.
 - **Sold items now reach the station's shop.** They were only being put on the shelf when the game allowed
   them to be bought back; everything else was sold into nowhere.
 - **The station's shop panel updates when a sale fills it.** The goods were there, but the open panel kept
-  drawing the list it had when it opened — typing in its search box was the only way to see them.
+  drawing the list it had when it opened, and typing in its search box was the only way to see them.
 - **Boosters are no longer skipped** with "slot 25 now holds Combat Power I, not Combat Power I". The check
   was comparing an item's internal name against the one you were shown, and for a booster those differ. The
   same check guards buying, where it was refusing ammo and materials for the same reason.
 - **A big sale no longer makes the app reload your inventory dozens of times**, and the shop list no longer
-  drags the game down afterwards — what you sold is held back until you ask for it, with "show N you sold"
+  drags the game down afterwards. What you sold is held back until you ask for it, with "show N you sold"
   in the shop header.
 
 **In-game messages**
 
 - **Every notification the mod has ever sent was invisible.** It was created hidden and never shown, so
-  buys, sales and hires happened in silence. They appear now — and are readable, having first appeared in
+  buys, sales and hires happened in silence. They appear now, and are readable, having first appeared in
   black on a black banner.
 
 **The sell list**
@@ -142,11 +142,11 @@ work fine on a fresh one.
   though it were not equipment, so a rule that said to sell it did nothing and it survived every sale.
 - **Editing a rule no longer switches it off.** It left the rule set for as long as the editor was open, so
   a sale run while editing ignored it.
-- **A rule that names activities no longer sweeps up your modules and boosters** without saying so — "no
+- **A rule that names activities no longer sweeps up your modules and boosters** without saying so: "no
   activity (modules, boosters)" is a value you can tick, and so is "none" for a field an item simply has
   none of.
 - **"level vs mine" compares against your level**, not against the highest-level item you own.
-- A relative-level rule now reads as a sentence — "level is at least 10 levels below mine" — and every word
+- A relative-level rule now reads as a sentence ("level is at least 10 levels below mine"), and every word
   of it can be changed where it stands. "at or below mine" and "exactly mine" need no number at all.
 - The rule editor takes the room it needs, the field picker is no longer cut off, comparisons can be flipped
   in place, and the split's groups are nested and sorted the way the rule groups them.
@@ -157,23 +157,23 @@ work fine on a fresh one.
   pool they scale, and a "+% Combat Power" substat counts at all.
 - **Modules are judged by what they do to your battery**, not by their headline stat. A scanner with more
   Precision that gives up pooled Combat Power, a crit aspect and a reactor bracket is no longer an upgrade
-  on a combat ship — while armour, aspect slots and draw still decide between two modules the damage model
+  on a combat ship, while armour, aspect slots and draw still decide between two modules the damage model
   rates equally.
 - **A reactor swap counts the power budget it changes.** A smaller reactor is not an upgrade when the load
   it leaves you with costs the reactor bonus on every pool.
-- An empty aspect slot is valued by what you could put in it, and rolls your ship cannot use — Drone Power
-  with no drone bay, Salvage Power on a ship that neither salvages nor carries a salvage gun — are ignored.
+- An empty aspect slot is valued by what you could put in it, and rolls your ship cannot use (Drone Power
+  with no drone bay, Salvage Power on a ship that neither salvages nor carries a salvage gun) are ignored.
 
 ### Station Assistant 1.1.1
 
 - **The hotkeys answer even when there is nothing to do.** Auto-sell with no categories ticked, the gunner
-  with nothing to move, a restock while undocked — each said so only inside the mod's own settings window,
+  with nothing to move, a restock while undocked: each said so only inside the mod's own settings window,
   so the key looked broken.
 - **Items sold by auto-sell reach the station's shop**, not only the ones the game lets you buy back.
 
 ---
 
-## 2026-08-03 - Hypercom 0.2.0 | Station Assistant 1.1.0 | Quick Save 1.0.0
+## 2026-08-03: Hypercom 0.2.0 | Station Assistant 1.1.0 | Quick Save 1.0.0
 
 ### Hypercom 0.2.0
 
@@ -221,9 +221,9 @@ switch (so swapping weapon don't make you lose that 20% power bonus).
 
 - **Saved loadout are now properly shared** between Sattion Assistant and Hypercom if both are installed. A bug previously prevented changes made in Hypercom to appear in SA until the game was reloaded.
  
-- **Keep-rule Size is exact** not ">=" - a Medium rule no longer spares Large. Label "Min size" -> "Size".
+- **Keep-rule Size is exact** not ">=": a Medium rule no longer spares Large. Label "Min size" -> "Size".
 
-### Quick Save 1.0.0 - first release
+### Quick Save 1.0.0, first release
 
 The age-old "quick save/load hotkeys" feature. Quick load has an "undo" feature that creates an extra save right before reloading (you need to reload it manually though).
 
@@ -231,11 +231,11 @@ Note that both keys are **unbound** by default (Press F7 to bind them)
 
 ---
 
-## 2026-07-23 - Hypercom 0.1.0 | Station Assistant 1.0.0
+## 2026-07-23: Hypercom 0.1.0 | Station Assistant 1.0.0
 
 First public release of both mods.
 
-- **Hypercom 0.1.0** - runs a small local server inside the game so the Ship Optimizer web app can read
+- **Hypercom 0.1.0** runs a small local server inside the game so the Ship Optimizer web app can read
   and change your inventory and loadouts.
-- **Station Assistant 1.0.0** - station chore automation: decoy transponders, auto-sell, ammo valet, and
+- **Station Assistant 1.0.0**: station chore automation: decoy transponders, auto-sell, ammo valet, and
   loadout presets.

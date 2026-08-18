@@ -2,20 +2,20 @@
 
 Quality-of-life mod for **Vanguard Galaxy** that handles chores at the station for you.
 
-**Version 1.1.0** - [what changed](../RELEASE-NOTES.md).
+**Version 1.1.0**: [what changed](../RELEASE-NOTES.md).
 
 ## What it does
 
-- **Quartermaster** - keeps your consumables stocked: decoy transponders, ion and plasma fuel cells,
+- **Quartermaster** keeps your consumables stocked: decoy transponders, ion and plasma fuel cells,
   locator beacons and tracking tag bots. You set how many you want on the ship and how many in
   reserve, per ship, and it buys the shortfall from the station shops. It can also release a decoy
   when you undock. You can copy what you configured in another save or copy the setting for all the
   ships you own.
-- **Auto-sell** - sells surplus gear (turrets, modules, boosters) by rarity and level, and keeps
+- **Auto-sell** sells surplus gear (turrets, modules, boosters) by rarity and level, and keeps
   anything you favorite or write a keep-rule for.
-- **Gunner** - refills your ship's ammo and stows what your guns don't use. It can work out how much
+- **Gunner** refills your ship's ammo and stows what your guns don't use. It can work out how much
   you need the same way ECHO does, from the minutes of fire in your autopilot setting.
-- **Loadouts** - saves a ship's current gear setup and re-applies it later from the Personal Hangar
+- **Loadouts** saves a ship's current gear setup and re-applies it later from the Personal Hangar
   (shows you a preview first, and leaves slots you didn't save alone). Shared with Hypercom if you have
   both installed.
 
@@ -29,7 +29,7 @@ either install it with a mod manager (like Vortex) or extract it into your game 
 
 Press **F7** for the settings window, with tabs for **Quartermaster**, **Auto-sell**, **Gunner** and
 **Loadouts**. Quick keys: **F8** sells, **F9** runs the gunner, **F11** is your decoy key. All keys can
-be changed in the **Hotkeys** tab, and hotkeys do nothing at the main menu - settings belong to a save,
+be changed in the **Hotkeys** tab, and hotkeys do nothing at the main menu: settings belong to a save,
 so there is nothing for them to act on until one is loaded.
 
 Everything is per pilot, so two commanders can play differently.
@@ -38,7 +38,7 @@ Everything is per pilot, so two commanders can play differently.
 
 Stock targets are per ship and per item: how many to carry in **cargo**, how many to keep in the
 **armory** as reserve. `0` means "leave that container alone". A restock moves your surplus into the
-armory, buys the shortfall (all or nothing - it won't half-fill an order), then tops the ship up from
+armory, buys the shortfall (all or nothing: it won't half-fill an order), then tops the ship up from
 the armory.
 
 You choose **when** it runs: on dock, on undock (the default), or only when you press the key. There is
@@ -52,19 +52,26 @@ is already running (or while docked) and it switches the automation off instead.
 
 Two ways to decide how much ammo to carry:
 
-- **Auto** - enough for ECHO's minutes of fire, per equipped gun.
-- **Manual** - your own per-ammo targets, which you can seed from what's currently in your cargo.
+- **Auto**: enough for ECHO's minutes of fire, per equipped gun.
+- **Manual**: your own per-ammo targets, which you can seed from what's currently in your cargo.
 
 Either way it can stow ammo your equipped guns don't use, and buy what's missing from the shop.
 
 ### Auto-sell
 
-Rules match by category, minimum rarity, size, minimum level and aspect. **Size is exact** - a Medium
+Rules match by category, minimum rarity, size, minimum level and aspect. **Size is exact**: a Medium
 rule spares Medium and nothing else. Use **List matches** to see exactly what a rule set would sell
 before you press the sell key.
 
-Nothing sells while **ECHO** is flying, and items the game marks unsellable - mission
-items, favourites, anything with no sale value - are never touched.
+Nothing sells while **ECHO** is flying, and items the game marks unsellable (mission
+items, favourites, anything with no sale value) are never touched.
+
+### New versions
+
+The **Updates** tab of the settings window says whether a newer Station Assistant has been released, and
+links to its page. It checks once a day and **only looks**: nothing is downloaded or installed, so
+whatever manages your mods stays in charge of what is on disk. Turn it off with `Updates/Enabled` in
+`BepInEx\config\fulgan.vanguardgalaxy.stationassistant.cfg`.
 
 ## Help
 

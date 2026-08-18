@@ -11,8 +11,9 @@ namespace QuickSave
     // surface with the HTTP bridge or the station automation, and a player who wants only this should not install
     // either of those to get it.
     //
-    // No Update loop and no Harmony patch: the keys are registered with the shared settings host, which owns the
-    // polling and the rebinding UI (Shared/ModHost.cs). So this plugin is two config entries and two actions.
+    // No Harmony patch: the keys are registered with the shared settings host, which owns the polling and the
+    // rebinding UI (Shared/ModHost.cs). The one thing this plugin ticks per frame is the update notice, which
+    // hands over a finished version check on the main thread and does nothing else.
     [BepInPlugin(Guid, "Quick Save", "1.0.0")]
     public sealed class Plugin : BaseUnityPlugin
     {
@@ -23,6 +24,8 @@ namespace QuickSave
         // claiming F5/F9 unasked could silently shadow something the game already uses — the player opts in.
         private ConfigEntry<KeyCode> _saveKey;
         private ConfigEntry<KeyCode> _loadKey;
+
+        private VG.Core.UpdateNotice _notice;
 
         private void Awake()
         {
@@ -53,7 +56,18 @@ namespace QuickSave
             }
             catch (Exception ex) { Log.LogWarning($"could not register hotkeys: {ex.Message}"); }
 
+            // Version check only: it reads the published version list and reports what it says. Nothing is
+            // downloaded, written or run. The running version comes from BepInEx's own metadata — the
+            // [BepInPlugin] literal it parsed — never from a third copy written here.
+            _notice = VG.Core.UpdateSettings.Install(base.Config, "Quick Save", Guid,
+                Info.Metadata.Version.ToString(), m => VG.Game.GameToast.Show(m), m => Log.LogInfo(m));
+
             Log.LogInfo($"Quick Save ready (save={_saveKey.Value}, load={_loadKey.Value}; None = disabled)");
+        }
+
+        private void Update()
+        {
+            _notice?.Pump();
         }
     }
 }

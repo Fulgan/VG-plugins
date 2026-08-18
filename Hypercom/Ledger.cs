@@ -134,10 +134,7 @@ namespace Hypercom
         {
             try
             {
-                var ship = Source.Player.GamePlayer.current?.currentSpaceShip;
-                return ship == null ? null
-                     : !string.IsNullOrEmpty(ship.customShipName) ? ship.customShipName
-                     : ship.shipClass?.displayName;
+                return VG.Game.ShipNames.Label(Source.Player.GamePlayer.current?.currentSpaceShip);
             }
             catch { return null; }
         }

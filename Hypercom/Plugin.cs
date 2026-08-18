@@ -33,6 +33,7 @@ namespace Hypercom
         private ConfigEntry<bool> _allowRemote;
         private ConfigEntry<bool> _debugEndpoints;
         private HttpServer _server;
+        private VG.Core.UpdateNotice _notice;
 
         // Quick-save hotkey; `KeyCode.None` = disabled (the default).
 
@@ -134,12 +135,19 @@ namespace Hypercom
             // whether or not other mods are present, no separate window or hotkey of our own.
             try { VGModSettings.GetOrCreate().RegisterTab("Hypercom - WebUI", DrawBridgeSettings, 10); }
             catch (Exception ex) { Log.LogWarning($"could not register settings tab: {ex.Message}"); }
+
+            // Version check only: it reads the published version list and reports what it says. Nothing is
+            // downloaded, written or run. The running version comes from BepInEx's own metadata rather than the
+            // `Version` const beside it, so there is one reading of it at runtime.
+            _notice = VG.Core.UpdateSettings.Install(base.Config, "Hypercom", Guid,
+                Info.Metadata.Version.ToString(), m => Notify.Toast(m), m => Log.LogInfo(m));
         }
 
         // Service queued game-API jobs on the Unity main thread, then poll for state changes
         // to feed the SSE event bus.
         private void Update()
         {
+            _notice?.Pump();   // hand a finished version check onto the main thread
             MainThread.Watch();
             MainThread.Drain();
             if (_server != null)
@@ -263,7 +271,7 @@ namespace Hypercom
                 // Several plausible addresses is the normal case on a machine with a VPN or a hypervisor, and
                 // only the player can tell which one the phone can actually reach.
                 if (addresses.Count > 1 && GUILayout.Button(
-                        $"Address: {address}{(current == null ? "" : $" ({current.Label})")} — try another"))
+                        $"Address: {address}{(current == null ? "" : $" ({current.Label})")}, try another"))
                 {
                     _addressIndex = (_addressIndex + 1) % addresses.Count;
                     HttpServer.PairHostOverride = addresses[_addressIndex].Address;
@@ -274,7 +282,7 @@ namespace Hypercom
                 // A tailnet address is the one that also works when the phone is NOT on this network, which is
                 // otherwise a silent failure: the QR scans, the page never loads.
                 if (current != null && current.OffLan)
-                    GUILayout.Label("<color=#7fc8a0>This is a mesh-VPN address — works from anywhere your phone "
+                    GUILayout.Label("<color=#7fc8a0>This is a mesh-VPN address: works from anywhere your phone "
                                     + "is on the same tailnet.</color>");
                 else if (addresses.Exists(a => a.OffLan))
                     GUILayout.Label("<color=#e0a030>Only reachable from this network. Cycle to the "

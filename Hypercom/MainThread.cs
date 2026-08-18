@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
@@ -26,6 +27,11 @@ namespace Hypercom
         // A frame gap this long is a FREEZE the player sees, not a slow frame.
         private const double FreezeMs = 1000;
 
+        // Rows are kept from a LOWER bar than the log line. "It freezes sometimes" is a claim about a
+        // distribution, and a 400 ms hitch every few seconds and one 37 s stall are different problems that a
+        // single 1 s threshold reports identically: as silence in one case and one line in the other.
+        private const double RecordMs = 400;
+
         // Gaps before this much runtime are IGNORED: a scene load holds the frame for a second or more and does it
         // on every launch, so reporting it would put a FREEZE line in every log — which teaches a reader to skip
         // the line, and this line exists to be read exactly once.
@@ -43,6 +49,24 @@ namespace Hypercom
 
         private static long _lastFrame;
 
+        // WHAT MAKES A GAP ATTRIBUTABLE. A duration alone cannot separate "the game computed something enormous"
+        // from "something waited on a lock or on disk", and those have different owners. So each frame stamps the
+        // process CPU time and the GC counters, and a gap reports what changed across it:
+        //
+        //   cpu spent ~= the gap        -> a synchronous BUILD ran (the boarding simulation measured 37 s this way)
+        //   cpu spent ~= 0              -> the main thread WAITED: a lock, a disk write, a network call
+        //   gen0 collections in bursts  -> allocation pressure rather than one long computation
+        //
+        // Every read here is cheap and every one is behind WatchFrames, which is off for players.
+        private static System.Diagnostics.Process _self;
+        private static double _lastCpuMs;
+        private static int _lastGen0, _lastGen1;
+        private static long _lastHeap;
+
+        // Freezes outlive the log: BepInEx truncates LogOutput.log on every launch, so a player who reports "it
+        // hangs sometimes" has already lost the evidence of every session but the last.
+        private static readonly JsonlStore Freezes = new JsonlStore("hypercom-freezes.jsonl", 200);
+
         /// <summary>
         /// Report a frame that never came, and say whether any of it was ours.
         ///
@@ -59,22 +83,81 @@ namespace Hypercom
         internal static void Watch()
         {
             var now = Stopwatch.GetTimestamp();
+
+            var cpuMs = 0.0;
+            var gen0 = 0;
+            var gen1 = 0;
+            var heap = 0L;
+            if (WatchFrames)
+            {
+                try
+                {
+                    if (_self == null) _self = System.Diagnostics.Process.GetCurrentProcess();
+                    cpuMs = _self.TotalProcessorTime.TotalMilliseconds;
+                    gen0 = GC.CollectionCount(0);
+                    gen1 = GC.CollectionCount(1);
+                    heap = GC.GetTotalMemory(false);
+                }
+                catch { /* a counter this runtime does not keep is reported as 0, never as a throw */ }
+            }
+
             // `_lastFrame` is stamped either way (below), so switching this on mid-session cannot report the whole
             // time it was off as one enormous gap.
             if (WatchFrames && _lastFrame != 0 && UnityEngine.Time.realtimeSinceStartup > SettleSeconds)
             {
                 var ms = (now - _lastFrame) * 1000.0 / Stopwatch.Frequency;
-                if (ms >= FreezeMs)
+                if (ms >= RecordMs)
                 {
                     var queued = Queue.Count;
+                    var cpu = cpuMs - _lastCpuMs;
+                    var share = ms > 0 ? cpu / ms : 0;                      // >1 means several cores were busy
+                    var g0 = gen0 - _lastGen0;
+                    var g1 = gen1 - _lastGen1;
+                    var heapMb = (heap - _lastHeap) / (1024.0 * 1024.0);
+                    // Docked or in space, because the two have different suspects: an autosave and the station
+                    // panels on one side, spawning and combat on the other. Read straight from the game's own
+                    // static rather than through a helper that does not exist.
+                    var docked = false;
+                    try { docked = Source.Galaxy.POI.SpaceStation.current != null; } catch { }
+
+                    // The READING is stated, because a duration on its own has been read as "the last thing in the
+                    // log did it" more than once, and that is how the wrong owner gets blamed.
+                    var reading = share >= 0.6 ? "COMPUTE: something ran to completion on the main thread"
+                                : share <= 0.15 ? "WAIT: the main thread was blocked, not busy"
+                                : "MIXED: partly busy, partly waiting";
+
+                    // Only the real freezes reach the log; every hitch reaches the file.
+                    if (ms >= FreezeMs)
                     Plugin.Log.LogWarning(
-                        $"FRAME GAP {ms:F0}ms — no frame ran for that long. " +
+                        $"FRAME GAP {ms:F0}ms — no frame ran for that long. {reading} " +
+                        $"(cpu {cpu:F0}ms, {share:P0} of the gap; gc gen0 +{g0}, gen1 +{g1}, heap {heapMb:+0.0;-0.0;0} MB; " +
+                        $"{(docked ? "docked" : "in space")}). " +
                         $"Ours in flight: {(queued > 0 ? queued + " job(s) queued, last label '" + Label + "'" : "none")}. " +
                         "A gap with nothing queued was NOT a Hypercom request; check plugin patches (dock/undock " +
                         "automation) and the game's own autosave.");
+
+                    Freezes.Append(new Dictionary<string, object>
+                    {
+                        ["at"] = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+                        ["gapMs"] = Math.Round(ms),
+                        ["cpuMs"] = Math.Round(cpu),
+                        ["cpuShare"] = Math.Round(share, 3),
+                        ["reading"] = share >= 0.6 ? "compute" : share <= 0.15 ? "wait" : "mixed",
+                        ["gen0"] = g0,
+                        ["gen1"] = g1,
+                        ["heapDeltaMb"] = Math.Round(heapMb, 1),
+                        ["docked"] = docked,
+                        ["queued"] = queued,
+                        ["label"] = queued > 0 ? Label : null,
+                        ["playSeconds"] = Math.Round(UnityEngine.Time.realtimeSinceStartup),
+                    });
                 }
             }
             _lastFrame = now;
+            _lastCpuMs = cpuMs;
+            _lastGen0 = gen0;
+            _lastGen1 = gen1;
+            _lastHeap = heap;
         }
 
         // Call once per frame from the Unity main thread.

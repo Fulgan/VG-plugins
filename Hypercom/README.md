@@ -2,16 +2,16 @@
 
 A mod for **Vanguard Galaxy** that powers the **[Ship Optimizer](../ShipOptimizer/)** web app. It
 runs a small server inside the game so the optimizer can read your inventory, loadouts, shops and the
-galaxy around you, and change things for you - no need to fight the in-game menus or restart.
+galaxy around you, and change things for you: no need to fight the in-game menus or restart.
 
-**Version 0.2.0** - [what changed](../RELEASE-NOTES.md).
+**Version 0.2.0**: [what changed](../RELEASE-NOTES.md).
 
 In a normal install Hypercom is all you need: start the game and the Ship Optimizer opens in your
-browser. The app itself is where the gear ranking, sell lists, map and faction standing live - see its
+browser. The app itself is where the gear ranking, sell lists, map and faction standing live, see its
 [own page](../ShipOptimizer/) for what it can do.
 
 > /!\ **This is a power tool.** Anything that can reach the server and has the access token can move and
-> sell your items, so treat the token like a password. Out of the box it listens on `127.0.0.1` only -
+> sell your items, so treat the token like a password. Out of the box it listens on `127.0.0.1` only:
 > nothing outside your PC can connect. Turn on **Allow other devices** and it listens on *every* network
 > adapter this machine has, which is how a phone reaches it; the token is then forced on and cannot be
 > switched off.
@@ -24,7 +24,7 @@ browser. The app itself is where the gear ranking, sell lists, map and faction s
    it with a mod manager (like Vortex) or extract it into your game folder.
 3. Start the game. The Ship Optimizer opens in your browser automatically.
 
-One file is all of it - the web app is built into the plugin, so there is no folder of loose UI files to
+One file is all of it: the web app is built into the plugin, so there is no folder of loose UI files to
 keep in sync, and the page you load always matches the version you installed. If you are upgrading from
 0.1.0, the old `ui` folder beside the plugin is removed for you, but only the files a release actually
 put there: anything you changed yourself is left alone.
@@ -35,10 +35,10 @@ Press **F7** in-game for the settings window; Hypercom's controls are on the **H
 there you can open the web app, view or regenerate the access token, and turn access controls on or
 off. Changes apply right away. The **F7** key can be changed in the **Hotkeys** tab.
 
-### Turning the token on - you never have to copy it
+### Turning the token on: you never have to copy it
 
 **Require token** is off by default, which is fine for a PC only you use. When you switch it on, the
-**Open web UI** button relabels itself to **Open web UI (enrols this browser)** - press it and the browser
+**Open web UI** button relabels itself to **Open web UI (enrols this browser)**: press it and the browser
 that opens is signed in already. Behind the scenes it carries a short-lived enrolment code, and the page
 trades that code for its own token and remembers it.
 
@@ -53,11 +53,11 @@ There is nothing to read out of a file and nothing to paste. The same happens au
 Worth knowing:
 
 - **The code, not the token, is what travels.** It lasts two minutes, works once, and the browser gets its own
-  token - your main token never leaves the game.
+  token: your main token never leaves the game.
 - **Pressing the button twice is harmless.** An enrolment code that is still valid gets reused rather than
   replaced, so you don't spend a device slot per click (there are 16) or invalidate a pairing QR you have open.
 - **Already-enrolled browsers keep working.** Enrolling again just replaces that browser's stored token.
-- **A different browser, or a private window, needs its own enrolment** - press the button again from there.
+- **A different browser, or a private window, needs its own enrolment**: press the button again from there.
 - **Regenerating the main token** in the settings tab does not sign out enrolled browsers or paired phones;
   those are separate tokens, each revocable on its own.
 
@@ -67,10 +67,12 @@ You can also change these in `BepInEx\config\fulgan.vanguardgalaxy.hypercom.cfg`
 |---|---|---|
 | `Enabled` | on | Turns the server on or off. |
 | `Port` | 8777 | The port it uses. |
-| `RequireAuth` | off | Require the access token on every request. The **Open web UI** button then enrols the browser for you - see above. |
+| `RequireAuth` | off | Require the access token on every request. The **Open web UI** button then enrols the browser for you, see above. |
 | `AllowRemote` | off | Listen on every adapter instead of loopback only, so other devices can reach it. Forces the token on. Only use on a network you trust. |
 | `OpenBrowserOnStart` | on | Open the Ship Optimizer in your browser when the game starts. |
-| `PairHost` | empty | The address put in the pairing QR. Empty means "detect it" - see [picking the right adapter](#picking-the-right-adapter). |
+| `PairHost` | empty | The address put in the pairing QR. Empty means "detect it", see [picking the right adapter](#picking-the-right-adapter). |
+| `Updates/Enabled` | on | Check once a day whether a newer Hypercom has been released, and show it on the **Updates** tab of the mod settings window. It only looks: nothing is ever downloaded or installed. |
+| `Updates/CheckIntervalHours` | 24 | Hours to wait between checks. One check per game session at most, whatever this says. |
 
 ## Using your phone or tablet
 
@@ -79,7 +81,7 @@ The Ship Optimizer runs in any browser, so you can keep it on a phone beside you
 1. Open the **Hypercom** tab and click **Pair a phone**. If the server is still loopback-only you'll get
    **Enable LAN access & pair** instead, which switches it over first.
 2. Scan the QR code with your phone's camera. Can't scan it? Open the address shown above the code and type
-   the 8-character code by hand - it avoids the letters I, L, O and U so nothing is ambiguous.
+   the 8-character code by hand: it avoids the letters I, L, O and U so nothing is ambiguous.
 3. That's it. The phone gets its own access token and remembers it.
 
 **What LAN access means.** Anyone on your network can then load the Ship Optimizer *page*. They cannot read
@@ -95,26 +97,26 @@ netsh advfirewall firewall add rule name="Hypercom" dir=in action=allow protocol
 
 ## Picking the right adapter
 
-With **Allow other devices** on, the server listens on all of them - but the QR code can only contain
+With **Allow other devices** on, the server listens on all of them, but the QR code can only contain
 *one* address, and only one of your adapters is the one your phone can actually reach. A gaming PC often
 has several: the real network card, a Wi-Fi card, a VPN tunnel, and the virtual adapters that WSL, Hyper-V,
 Docker or Bluetooth add. They all look equally valid from inside the game.
 
 **What it picks on its own.** Best guess first:
 
-1. **The address this PC would route from** - the one your own traffic leaves by. On a normal single-network
+1. **The address this PC would route from**, the one your own traffic leaves by. On a normal single-network
    machine this is the right answer and there is nothing to do.
 2. **A mesh-VPN address** (Tailscale and friends, in the `100.64-100.127` range). This is the one that also
    works when your phone is *not* on your home network.
 3. **Any other real adapter.**
-4. **Virtual adapters last** - WSL, Hyper-V, vEthernet, Bluetooth. These reach nothing outside this PC, so
+4. **Virtual adapters last**: WSL, Hyper-V, vEthernet, Bluetooth. These reach nothing outside this PC, so
    they are only ever a fallback.
 
 Adapters that are switched off, loopback, or sitting on a `169.254.*` address (which is what Windows hands
 out when DHCP failed) are skipped entirely.
 
 **Choosing it yourself.** When more than one candidate exists, the pairing panel shows a button like
-`Address: 192.168.1.20 (Ethernet) - try another`. Each press moves to the next candidate, naming the adapter
+`Address: 192.168.1.20 (Ethernet), try another`. Each press moves to the next candidate, naming the adapter
 it belongs to, and rebuilds the QR. Your choice is written to `PairHost` in the config, so it sticks for
 next time. To set it by hand, put the address in `PairHost` directly.
 
@@ -161,14 +163,14 @@ a *tailnet*, which is the word the settings panel uses.
 1. Install it on the PC that runs the game, and on your phone. Sign both into the same account.
 2. Both devices now show a `100.x.y.z` address. Nothing else to configure.
 3. In Hypercom, pair as usual. That address is *preferred automatically* over your LAN addresses, and the
-   panel confirms it with "This is a mesh-VPN address - works from anywhere your phone is on the same
+   panel confirms it with "This is a mesh-VPN address: works from anywhere your phone is on the same
    tailnet." If it picked a LAN address instead, press **try another** until you see that message.
 4. Keep the VPN app running on the phone while you use the app. If the page stops loading when you leave the
    house, that is the first thing to check.
 
 **Why this is the safe way in:** your inventory is reachable by exactly the devices you signed in yourself,
 and nothing about your PC becomes visible to the internet. Removing a device from your tailnet cuts its
-access immediately, whatever tokens it holds - which is a second, independent switch on top of revoking the
+access immediately, whatever tokens it holds, which is a second, independent switch on top of revoking the
 paired device in Hypercom. And you still get the same protections as on a LAN: the token is forced on, each
 device holds only its own token, and a pairing code lasts two minutes and works once.
 
@@ -180,7 +182,7 @@ reach you over the tailnet too.
 
 - Selling never touches items the game marks unsellable (mission, favourite, or no sale value).
 - Nothing sells, buys, or moves while **ECHO** (autopilot) is flying your ship.
-- Items only move between your cargo, your armory, and station storage - never between ships and
+- Items only move between your cargo, your armory, and station storage, never between ships and
   never your equipped gear.
 - A sell list shows you the exact items it proposes, and you confirm before anything is sold.
 - A sale that can't take your credits is refused outright rather than handing the goods over unpaid.

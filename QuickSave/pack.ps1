@@ -13,9 +13,10 @@ param([string]$Configuration = "Release")
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 
-[xml]$proj = Get-Content "$root/QuickSave.csproj"
-$ver = ($proj.Project.PropertyGroup.Version | Where-Object { $_ }) | Select-Object -First 1
-if (-not $ver) { throw "Could not read <Version> from the csproj." }
+# One owner for the version: tools/mod-versions.ps1, which refuses to answer while <Version> and the
+# [BepInPlugin] literal disagree. A zip named for a number the running plugin does not report is a release
+# nobody can reason about — and it is what an update check would compare against.
+$ver = (& (Join-Path $root '../tools/mod-versions.ps1') -Mod QuickSave -Quiet).Version
 
 dotnet build "$root/QuickSave.csproj" -c $Configuration
 

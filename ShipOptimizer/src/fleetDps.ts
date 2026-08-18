@@ -1776,6 +1776,20 @@ export function layerRefuses(now: LayerReading, plan: LayerReading,
   return worst;
 }
 
+/**
+ * A refusal is only true of the run that produced it.
+ *
+ * The note explaining why nothing was proposed used to be a bare key remembered in a ref, and the gear builder
+ * stays MOUNTED across a ship change: a refusal earned on one hull was printed beside the next one, naming a stat
+ * that hull's goal order does not even contain (a salvage hull told its first goal was Combat Power). Pairing the
+ * key with the signature of the run that wrote it makes the staleness unrepresentable rather than something a
+ * second clearing rule has to remember to handle: any edit that changes the question changes the signature.
+ */
+export function liveVeto(recorded: { sig: string; key: GoalKey } | null | undefined,
+                         sig: string): GoalKey | null {
+  return recorded && recorded.sig === sig ? recorded.key : null;
+}
+
 /** How a refused key reads on screen. */
 export const GOAL_LABEL: Record<GoalKey, string> = {
   dps: "DPS", combat: "Combat Power", precision: "Precision", mining: "Mining Power",

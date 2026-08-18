@@ -33,6 +33,8 @@ namespace StationAssistant
         internal static Config Cfg;
         internal static SettingsWindow Window;
 
+        private VG.Core.UpdateNotice _notice;
+
         private void Awake()
         {
             Log = Logger;
@@ -65,10 +67,20 @@ namespace StationAssistant
                 k => Cfg.DecoyHotkey.Value = new KeyboardShortcut(k),
                 DecoyLogic.ToggleAuto);
 
+            // Version check only: it reads the published version list and reports what it says. Nothing is
+            // downloaded, written or run. The running version comes from BepInEx's own metadata — the
+            // [BepInPlugin] literal it parsed — never from a third copy written here.
+            _notice = VG.Core.UpdateSettings.Install(base.Config, "Station Assistant", Guid,
+                Info.Metadata.Version.ToString(), m => Util.Notify(m), m => Log.LogInfo(m));
+
             Log.LogInfo("Station Assistant loaded.");
         }
 
-        private void Update() => GameSettings.Poll(); // swap gameplay settings when the playthrough changes
+        private void Update()
+        {
+            GameSettings.Poll();  // swap gameplay settings when the playthrough changes
+            _notice?.Pump();      // hand a finished version check onto the main thread
+        }
     }
 
     internal sealed class Config
@@ -800,8 +812,7 @@ namespace StationAssistant
             }
             else
             {
-                var name = !string.IsNullOrEmpty(ship.customShipName) ? ship.customShipName
-                    : (ship.shipClass?.displayName ?? ship.guid); // type name when unrenamed, never the guid
+                var name = Util.ShipName(ship);
                 GUILayout.Label(Loc.F("qm.ship", name));
                 GUILayout.Label(Loc.T("qm.header"));
                 _qmScroll = GUILayout.BeginScrollView(_qmScroll, GUILayout.Height(230f));
@@ -948,8 +959,7 @@ namespace StationAssistant
             }
             else
             {
-                var name = !string.IsNullOrEmpty(ship.customShipName) ? ship.customShipName
-                    : (ship.shipClass?.displayName ?? ship.guid); // type name when unrenamed, never the guid
+                var name = Util.ShipName(ship);
                 GUILayout.Label(Loc.F("ammo.ship", name));
 
                 var ammos = Gunner.EquippedAmmoTypes(ship);

@@ -7,12 +7,12 @@ Its own mod on purpose: it shares nothing with the other Vanguard Galaxy mods, s
 install a station automation mod or a web server to get two hotkeys. It will be retired if the feature 
 is implemented in the game.
 
-**Version 1.0.0** - [what changed](../RELEASE-NOTES.md).
+**Version 1.0.0**: [what changed](../RELEASE-NOTES.md).
 
 ## Installing
 
 Needs **[BepInEx 5](https://github.com/BepInEx/BepInEx/releases)** in your game folder first (the mod
-loader). Then extract the zip into your game folder - it has `BepInEx\` at its root, so a mod manager
+loader). Then extract the zip into your game folder: it has `BepInEx\` at its root, so a mod manager
 (like Vortex) handles it too. Restart the game.
 
 ## Settings
@@ -27,21 +27,26 @@ Press **F7** for the shared mod settings window and set them on the **Hotkeys** 
 |---|---|---|
 | QuickSave | None | Key that saves your game to the `quicksave` slot. `None` = disabled. |
 | QuickLoad | None | Key that loads the `quicksave` slot. `None` = disabled. |
+| Updates/Enabled | true | Check once a day whether a newer Quick Save has been released, and show it on the **Updates** tab of the settings window. It only looks: nothing is ever downloaded or installed. |
+| Updates/CheckIntervalHours | 24 | Hours to wait between checks. One check per game session at most, whatever this says. |
 
 ## What to expect
 
-- **Saving** tells you it worked - and tells you if it didn't. A save that fails quietly is worse than
+- **Saving** tells you it worked, and tells you if it didn't. A save that fails quietly is worse than
   no save, because you find out only when you need it.
 - **Loading** goes through the game's own load, the same one the menu button uses, so you get the
   normal loading screen.
-- **A quick load discards everything since your last quick save** - that's what loading is. Treat the
+- **A quick load discards everything since your last quick save**: that's what loading is. Treat the
   load key as the one to bind carefully.
 - **An accidental load is recoverable.** Just before loading, your current game is written to a
   separate `quicksave-undo` slot. If you press load by mistake, that slot is in the game's own load
   menu, holding everything you were about to lose. It covers **one** press: the next quick load
   overwrites it, so recover before you load again.
 - **A second press is ignored** while a save or load is still going, rather than running twice. The key
-  comes back as soon as the game reports you back in control - it's the load that holds it, not a timer.
+  comes back as soon as the game reports you back in control: it's the load that holds it, not a timer.
+- **The update check only looks.** It reads a small published version list once a day, tells you on the
+  **Updates** tab if a newer release exists, and links to its page. It never downloads or installs
+  anything, so whatever manages your mods stays in charge of what is on disk.
 
 ## Help
 

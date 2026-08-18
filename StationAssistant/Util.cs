@@ -66,11 +66,8 @@ namespace StationAssistant
         // inflector pluralises the key into "@RailcannonAmmos".
         internal static string ItemName(InventoryItemType item) => VG.Game.ItemNames.Pretty(item);
 
-        // A ship's display name: custom name if set, else its class display name, else the guid.
-        internal static string ShipName(SpaceShipData ship)
-            => ship == null ? null
-             : !string.IsNullOrEmpty(ship.customShipName) ? ship.customShipName
-             : (ship.shipClass?.displayName ?? ship.guid);
+        // One owner for every surface that names a ship, shared with the bridge.
+        internal static string ShipName(SpaceShipData ship) => VG.Game.ShipNames.Label(ship);
 
         // In-game toast. warn = red + longer dwell (couldn't-do message); otherwise the green success tint.
         internal static void Notify(string text, bool warn = false)
