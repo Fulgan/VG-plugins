@@ -25,39 +25,30 @@ namespace VG.Core
             {
                 if (config == null || string.IsNullOrEmpty(guid) || string.IsNullOrEmpty(installedVersion)) return null;
 
-                var enabled = config.Bind(Section, "Enabled", true,
-                    "Check once a day whether a newer " + modName + " has been released, and say so in the mod " +
-                    "settings window. Nothing is ever downloaded or installed: the check reads a published version " +
-                    "list and shows a link to the release page.");
-
-                var interval = config.Bind(Section, "CheckIntervalHours", 24,
-                    new ConfigDescription(
-                        "Hours to wait between checks. One check per game session at most, whatever this says.",
-                        new AcceptableValueRange<int>(1, 720)));
-
-                // Hidden: it is a bookmark the plugin writes, not a setting. Editing it only moves when the next
-                // check is due, and a stamp in the future is treated as "check now" rather than "never again".
-                var last = config.Bind(Section, "LastCheckUtc", "",
-                    new ConfigDescription(
-                        "When the last check ran (UTC). Written by the plugin.",
-                        null, new VG.Shared.ConfigurationManagerAttributes { Browsable = false, IsAdvanced = true }));
-
+                // ⚠ NO KEYS AT ALL ANY MORE, and that is the whole change. `Enabled`, `CheckIntervalHours` and the
+                // `LastCheckUtc` bookmark existed to describe an AUTOMATIC check: when to run, how often, and
+                // whether to run at all. A button answers all three by being pressed, so three keys a player had
+                // to find in three separate .cfg files are gone. BepInEx leaves the old entries orphaned in an
+                // existing file, which is harmless and is not migrated: there is nothing to migrate them TO.
                 var notice = new UpdateNotice(modName, guid, installedVersion)
                 {
-                    Enabled = () => enabled.Value,
-                    IntervalHours = () => interval.Value,
-                    LastCheckIso = () => last.Value,
-                    SaveLastCheckIso = s => last.Value = s,
                     Toast = toast,
                     Log = log,
                 };
 
-                // One row on the host's one Updates tab. A host from an older mod has no such method and simply
-                // shows nothing: the check still runs and still toasts.
-                try { VGModSettings.GetOrCreate().RegisterUpdateRow(modName, notice.Status, notice.Url); }
+                // One row on the host's one Updates tab, plus the check it runs. A host from an older mod has
+                // neither method and simply shows nothing, which is now the whole feature rather than half of it:
+                // there is no unattended check left to run behind a missing row.
+                try
+                {
+                    var host = VGModSettings.GetOrCreate();
+                    host.RegisterUpdateRow(modName, notice.Status, notice.Url);
+                    host.RegisterUpdateCheck(modName, notice.CheckNow);
+                }
                 catch (Exception e) { Warn(log, "update row not registered: " + e.Message); }
 
-                notice.Begin();
+                // NOT STARTED HERE. It used to check from `Awake`, which is what made it something the player had
+                // to opt out of rather than into.
                 return notice;
             }
             catch (Exception e)

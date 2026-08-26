@@ -95,7 +95,12 @@ namespace StationAssistant
                 if (station == null)
                     return new QmResult { Reason = "not docked" };
 
-                var echoActive = player.currentAutopilotSessionStats != null;
+                // Refused for the whole restock rather than per supply: the reason to stand down is that ECHO is
+                // flying, which is not a fact about any one item. It is also stated ONCE here, so a run that does
+                // nothing says why instead of quietly reporting it had nothing to do.
+                if (player.currentAutopilotSessionStats != null && cfg.QmEchoSkip.Value)
+                    return new QmResult { Reason = "ECHO is flying" };
+
                 var armory = player.globalInventory;
                 // Search every facility shop the station has — a consumable can be sold at any of them
                 // (mining/salvage/patrol/…), not just the general or umbral shop.
@@ -123,8 +128,6 @@ namespace StationAssistant
                     int cargoTarget = t.inv, armoryTarget = t.res;
                     if (cargoTarget <= 0 && armoryTarget <= 0)
                         continue; // both containers ignored for this item
-                    if (echoActive && cfg.QmEchoSkip(sup.Key))
-                        continue; // per-item ECHO skip
 
                     bool manageCargo = cargoTarget > 0; // 0 = ignore the cargo container (leave it untouched)
                     int haveC = CountMatching(cargo, sup.Match);
@@ -233,8 +236,6 @@ namespace StationAssistant
                         {
                             var t = cfg.QmTarget(ship.guid, sup.Key);
                             if (t.inv <= 0 && t.res <= 0)
-                                continue;
-                            if (echoActive && cfg.QmEchoSkip(sup.Key))
                                 continue;
                             bool cargoShort = t.inv > 0 && CountMatching(cargo, sup.Match) < t.inv;
                             bool armoryShort = t.res > 0 && CountMatching(armory, sup.Match) < t.res;

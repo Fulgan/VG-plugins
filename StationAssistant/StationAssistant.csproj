@@ -4,7 +4,7 @@
     <TargetFramework>netstandard2.1</TargetFramework>
     <AssemblyName>StationAssistant</AssemblyName>
     <Product>Station Assistant</Product>
-    <Version>1.1.5</Version>
+    <Version>1.1.6</Version>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
@@ -63,6 +63,7 @@
     <Compile Include="..\Shared\Purchase.cs" Link="Purchase.cs" />
     <Compile Include="..\Shared\Rarity.cs" Link="Rarity.cs" />
     <Compile Include="..\Shared\KeepMatch.cs" Link="KeepMatch.cs" />
+    <Compile Include="..\Shared\AmmoPlan.cs" Link="AmmoPlan.cs" />
     <!-- Game-bound shared adapters (buy executor, station shop enumeration). -->
     <Compile Include="..\Shared\PurchaseExec.cs" Link="PurchaseExec.cs" />
     <Compile Include="..\Shared\GameMembers.cs" Link="GameMembers.cs" />
@@ -80,6 +81,8 @@
     <Compile Include="..\Shared\GameShops.cs" Link="GameShops.cs" />
     <Compile Include="..\Shared\ItemNames.cs" Link="ItemNames.cs" />
     <Compile Include="..\Shared\ShipNames.cs" Link="ShipNames.cs" />
+    <Compile Include="..\Shared\ShipSizes.cs" Link="ShipSizes.cs" />
+    <Compile Include="..\Shared\ShipLook.cs" Link="ShipLook.cs" />
     <Compile Include="..\Shared\Say.cs" Link="Say.cs" />
   </ItemGroup>
 

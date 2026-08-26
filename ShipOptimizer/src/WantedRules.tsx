@@ -72,9 +72,21 @@ export default function WantedRules(p: {
         return (
           <div key={r.id} className="want-rule">
             <div className="want-say">
-              <span className={isInert(r) ? "dim" : undefined}>{wantSentence(r)}</span>
+              {/* NAMING IS OPTIONAL and the field says so: the sentence below already states the rule, so a name
+                  earns its keystrokes only when matched rows have to be told apart on the rail. An empty name is
+                  stored as no name at all rather than as an empty string, so nothing has to trim it later. */}
+              <input className="want-name" value={r.name ?? ""} placeholder="name this list (optional)"
+                     aria-label="name this list"
+                     title="The tag on every offer this list claims"
+                     onChange={(e) => {
+                       const v = e.target.value;
+                       p.onChange(p.rules.map((x) => (x.id === r.id
+                         ? (v.trim() ? { ...x, name: v } : (({ name, ...rest }) => rest)(x))
+                         : x)));
+                     }} />
               <button className="mini" title="drop this want" onClick={() => drop(r.id)}>×</button>
             </div>
+            <div className={isInert(r) ? "want-sentence dim" : "want-sentence"}>{wantSentence(r)}</div>
             <span className="sl-chips">
               <WhereChips where={r.where} onChange={(w) => put(r.id, w)}
                           items={p.vocabulary} catalog={p.catalog} ctx={p.ctx}

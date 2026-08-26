@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { ANY_TYPE, boosterId, optimizeBoosters, resonanceRank, type BoosterCtx, type ResonanceOrder } from "./booster";
+import { ANY_TYPE, boosterId, boosterPinKey, optimizeBoosters, resonanceRank, type BoosterCtx, type ResonanceOrder } from "./booster";
 import { migrateOrder } from "./BoostersTab";
 import type { Item } from "./types";
 
@@ -150,7 +150,7 @@ describe("refusing a suggestion", () => {
     // Choosing a booster is an answer already given, not a preference to weigh — so it is placed before
     // anything is scored, and it sets the slot's type too (choosing the booster is the more specific statement).
     const pool = [boost("best", 9_000), boost("wanted", 100, "Shield HP")];
-    const pins = new Map([[1, boosterId(pool[1])]]);
+    const pins = new Map([[1, boosterPinKey(pool[1])]]);
     const { picks } = optimizeBoosters(pool, ["Combat Power", "Combat Power"], undefined, ctx([]), undefined, pins);
     expect(picks[1].chosen?.name).toBe("wanted");
     expect(picks[0].chosen?.name).toBe("best");     // the other slot is still optimized
@@ -158,7 +158,7 @@ describe("refusing a suggestion", () => {
 
   it("does not let one booster fill two slots when pinned", () => {
     const pool = [boost("only", 5_000)];
-    const pins = new Map([[0, boosterId(pool[0])]]);
+    const pins = new Map([[0, boosterPinKey(pool[0])]]);
     const { picks } = optimizeBoosters(pool, ["Combat Power", "Combat Power"], undefined, ctx([]), undefined, pins);
     expect(picks[0].chosen?.name).toBe("only");
     expect(picks[1].chosen).toBeNull();

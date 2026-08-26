@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import ApplyBar, { ApplyMsg } from "./ApplyBar";
 import type { ApplyApi } from "./useApply";
 import {
-  ANY_TYPE, boosterId, boosterScore, boosterType, boosterTypeColor, boosterTypes, boosterValue,
+  ANY_TYPE, boosterId, boosterPinKey, boosterScore, boosterType, boosterTypeColor, boosterTypes, boosterValue,
+  EMPTY_PIN,
   defaultSlotTypes, isBooster, optimizeBoosters, resonancePct, unlockBonusText,
   type BoosterCtx, type BoosterPick, type ResonanceOrder,
 } from "./booster";
@@ -10,13 +11,14 @@ import { defaultProfileForShip } from "./activityPresets";
 // What the hull can actually use, derived from the fit — one owner, shared with the gear tab and the rail.
 import { shipFit } from "./itemKind";
 import { DEFAULT_SCOPE, isScope, SCOPE_LABEL, type Scope } from "./scope";
+import { rankByValue, type StatMarginal } from "./statMarginals";
 import { load, save } from "./storage";
 import type { Inventories, Item, Loadout, Resonance } from "./types";
 import { itemIcon, type Conn } from "./api";
 import { RARITY_COLOR, fmt } from "./format";
 import { ItemTip } from "./ItemCard";
 import SlotPickList from "./SlotPickList";
-import SlotCard, { Vig, NewVig, FilterSelect } from "./SlotCard";
+import SlotCard, { Vig, NewVig, FilterSelect, SlotLock } from "./SlotCard";
 import { useEscape } from "./Modal";
 import "./officers.css";
 
@@ -31,14 +33,19 @@ const VIEW_KEY = "shipoptimizer.boosterView";
 // `order` is the player's resonance preference, best first, PER SHIP AND PER BOOSTER TYPE — the same argument
 // the blocklist makes for the ship (a Reload Speed bonus is worth chasing on a gunship and pointless on a
 // hauler), carried one level further because the bonus pools overlap: Drone Power rolls on a Combat, Drone,
-// Mining or Salvage booster, and ranking it once would answer for all four. `refused` holds booster ids the
-// player has rejected for this ship; the optimizer re-picks around them rather than freezing the slot.
+// Mining or Salvage booster, and ranking it once would answer for all four.
 interface BoosterView {
   scope: Scope;
   blacklist: Record<string, string[]>;
   order: Record<string, ResonanceOrder>;
-  refused: Record<string, string[]>;
-  locked: Record<string, number[]>;
+  /** Slots the player answered: slot index to pin key. Absorbed the old `locked` set, which was only ever a pin
+   *  to the booster already fitted. `locked` is still read once, to carry old saves across. */
+  pins: Record<string, Record<string, string>>;
+  locked?: Record<string, number[]>;
+  /** What each slot is FOR, per ship. A CHOICE, so it outlives the session like every other preference here:
+   *  it was being re-derived from whatever happened to be fitted, so saying "this slot is for Armor HP" survived
+   *  only until the next reload, and a slot the player had retyped silently went back to describing its cargo. */
+  slotTypes: Record<string, (string | null)[]>;
 }
 // A stored order is a bare array where it was written before the preference was asked per type. It becomes the
 // list every type falls back to, which is what that answer meant when it was given: one statement covering the
@@ -55,8 +62,9 @@ const loadView = (): BoosterView => {
     scope: isScope(v.scope) ? v.scope : DEFAULT_SCOPE,
     blacklist: v.blacklist ?? {},
     order: migrateOrder(v.order as Record<string, ResonanceOrder | string[]> | undefined),
-    refused: v.refused ?? {},
-    locked: v.locked ?? {},
+    pins: v.pins ?? {},
+    locked: v.locked,
+    slotTypes: v.slotTypes ?? {},
   };
 };
 
@@ -85,12 +93,9 @@ export interface BoosterBuilder {
   /** Resonance bonus stats in the player's own order, best first, per booster type. Read BEFORE the score. */
   resOrder: ResonanceOrder;
   setTypeOrder: (type: string, next: string[]) => void;
-  /** Boosters refused for this ship — out of the pool, so the slot re-picks instead of freezing. */
-  refused: Set<string>;
-  toggleRefuse: (id: string) => void;
-  clearRefused: () => void;
-  /** Slots locked to what is fitted — suggestions skip them. Persisted per ship. */
-  locked: Set<number>;
+  /** Slots the player answered rather than the optimizer. Same map as `pins`. */
+  locked: Map<number, string>;
+  /** Answer a slot with whatever is fitted, or hand it back when it is already answered. */
   toggleLock: (slot: number) => void;
   /** A booster the player chose for a specific slot, by slot index. In memory: a booster id carries a store
    *  slot, and a restock refills it with different goods. */
@@ -121,17 +126,30 @@ export function useBoosterBuilder(loadout: Loadout | null, inv: Inventories | nu
   const pool = useMemo(() => [...equipped, ...invBoosters], [equipped, invBoosters]);
   const types = useMemo(() => boosterTypes(pool), [pool]);
 
-  const [slotTypes, setSlotTypes] = useState<(string | null)[]>([]);
+  const [slotTypes, setSlotTypesLocal] = useState<(string | null)[]>([]);
   useEffect(() => {
-    setSlotTypes(defaultSlotTypes(equippedBySlot, slotCount, role, pool));
+    // A SAVED ANSWER BEATS A DERIVED ONE. The default reads the slot's own contents, which is the right FIRST
+    // answer and the wrong one to keep re-applying: it overwrites the player's choice every time the tab
+    // remounts. A stored list is only trusted at the current slot count, since a different hull of the class
+    // reads a different number of bays and a positional list does not survive that.
+    const saved = loadView().slotTypes[shipGuid];
+    setSlotTypesLocal(saved && saved.length === slotCount
+      ? saved
+      : defaultSlotTypes(equippedBySlot, slotCount, role, pool));
   }, [shipGuid, slotCount]); // eslint-disable-line react-hooks/exhaustive-deps
-  const setType = (i: number, t: string) => setSlotTypes((s) => s.map((x, j) => (j === i ? t : x)));
 
   const [forced, setForced] = useState<Set<string>>(new Set());
   const toggleForce = (id: string) => setForced((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   const [view, setView] = useState<BoosterView>(loadView);
   const writeView = (next: BoosterView) => { setView(next); save(VIEW_KEY, next); };
+  // Both writers go through one place, so a slot type set from the foot select and one restored with a loadout
+  // are stored the same way and neither can forget to persist.
+  const setSlotTypes = (next: (string | null)[]) => {
+    setSlotTypesLocal(next);
+    writeView({ ...view, slotTypes: { ...view.slotTypes, [shipGuid]: next } });
+  };
+  const setType = (i: number, t: string) => setSlotTypes(slotTypes.map((x, j) => (j === i ? t : x)));
   const setScope = (scope: Scope) => writeView({ ...view, scope });
   const blacklist = useMemo(() => new Set(view.blacklist[shipGuid] ?? []), [view, shipGuid]);
   const toggleBlacklist = (stat: string) => {
@@ -145,32 +163,62 @@ export function useBoosterBuilder(loadout: Loadout | null, inv: Inventories | nu
   // would silently restore the fallback the player just cleared.
   const setTypeOrder = (type: string, next: string[]) =>
     writeView({ ...view, order: { ...view.order, [shipGuid]: { ...resOrder, [type]: next } } });
-  const refused = useMemo(() => new Set(view.refused[shipGuid] ?? []), [view, shipGuid]);
-  const toggleRefuse = (id: string) => {
-    const cur = new Set(view.refused[shipGuid] ?? []);
-    cur.has(id) ? cur.delete(id) : cur.add(id);
-    writeView({ ...view, refused: { ...view.refused, [shipGuid]: [...cur] } });
-  };
-  const clearRefused = () => writeView({ ...view, refused: { ...view.refused, [shipGuid]: [] } });
-  // Slots locked to what is fitted. PERSISTED per ship, unlike a pin: a lock is about the SLOT ("this one is
-  // fine, stop offering") and survives a restock, where a pin names an item whose store handle does not.
-  const locked = useMemo(() => new Set(view.locked[shipGuid] ?? []), [view, shipGuid]);
-  const toggleLock = (slot: number) => {
-    const cur = new Set(view.locked[shipGuid] ?? []);
-    cur.has(slot) ? cur.delete(slot) : cur.add(slot);
-    writeView({ ...view, locked: { ...view.locked, [shipGuid]: [...cur] } });
-  };
+  // NO BAN LIST ON BOOSTERS. It was added without being asked for, and boosters are few enough per type that
+  // "never offer me this one" is overhead rather than help: the slot has a handful of candidates and the
+  // resonance order already says which the player wants. GEAR is where a ban earns its keep — a large armory and
+  // many candidates per hardpoint — so the plumbing it needs is left standing (`optimizeBoosters`' own `refused`
+  // parameter and its tests) rather than deleted and rewritten there.
+  //
+  // ⚠ THE PERSISTED `refused` KEY IS NO LONGER READ. An existing saved blob may still carry one; it is ignored
+  // rather than migrated, so nothing a player banned before keeps filtering a pool they can no longer see.
+  // ONE ANSWER PER SLOT. A slot belongs to the optimizer or to the player, and when it is the player's it names
+  // a booster. "Lock" used to be a second control for the same idea: locking a slot was pinning it to the
+  // booster already fitted, and nothing on screen distinguished the two, so the tab carried a lock, a pin, a
+  // lightning bolt and a cross to express what is really one switch.
+  //
+  // Pins persist now, which the lock always did. The old reason not to (a `boosterId` carries a store slot, and
+  // a restock puts something else there) died with the key: `boosterPinKey` names what the player CHOSE (name,
+  // level, rarity), so it survives a restock, an apply, and a reload.
+  const pins = useMemo(() => {
+    const saved = view.pins[shipGuid];
+    if (saved) return new Map(Object.entries(saved).map(([k, v]) => [Number(k), v] as const));
+    // Carried over from a save written when a lock was its own thing: a locked slot was "keep what is fitted",
+    // which is a pin to that booster, or to emptiness when the slot was empty.
+    const old = view.locked?.[shipGuid];
+    if (!old?.length) return new Map<number, string>();
+    return new Map(old.map((i) => {
+      const eq = equippedBySlot[i];
+      return [i, eq ? boosterPinKey(eq) : EMPTY_PIN] as const;
+    }));
+  }, [view, shipGuid, equippedBySlot]);
 
-  // A booster the player chose for a SPECIFIC slot. In memory and per ship, deliberately not persisted: a
-  // `boosterId` carries a store slot, and a restock puts something else there (V20's argument for the gear
-  // tab's `assign`) — a pin restored next session could point at a different booster entirely.
-  const [pins, setPins] = useState<Map<number, string>>(new Map());
-  useEffect(() => { setPins(new Map()); }, [shipGuid]);
-  const pinSlot = (slot: number, it: Item | null) => setPins((m) => {
-    const n = new Map(m);
-    if (it) n.set(slot, boosterId(it)); else n.delete(slot);
-    return n;
-  });
+  const writePins = (next: Map<number, string>) =>
+    writeView({ ...view, pins: { ...view.pins, [shipGuid]: Object.fromEntries(next) } });
+
+  // The whole of "this slot is mine" and "this slot is yours", in one toggle: it answers the slot with whatever
+  // is fitted, which is what the lock did, and the picker answers it with a booster by name.
+  const toggleLock = (slot: number) => {
+    const n = new Map(pins);
+    if (n.has(slot)) n.delete(slot);
+    else {
+      const eq = equippedBySlot[slot];
+      n.set(slot, eq ? boosterPinKey(eq) : EMPTY_PIN);
+    }
+    writePins(n);
+  };
+  // PINNING A BOOSTER SAYS WHAT THE SLOT IS FOR. The pin used to record the item alone, leaving the slot's own
+  // TYPE at whatever it was: a slot headed `COMBAT POWER`, with its foot select on Combat Power, proposing a
+  // Drone R-Booster. The card contradicted itself, and the stale type went on driving what the picker offered
+  // for a slot the player had already decided differently about.
+  const pinSlot = (slot: number, it: Item | null) => {
+    const n = new Map(pins);
+    if (it) n.set(slot, boosterPinKey(it)); else n.delete(slot);
+    writePins(n);
+    // THE SLOT TYPE IS THE PLAYER'S SETTING, and picking a booster does not rewrite it. It used to, so that a
+    // slot could not be headed `COMBAT POWER` while holding a Drone booster; but the type is also a saved
+    // choice about what the slot is FOR, and silently changing it discards that. A slot whose type has nothing
+    // to offer says so on the card instead.
+  };
 
   // What the ship is FOR, read off the SHIP and not off its role label: `shipFit` (the owner the gear tab and the
   // opportunity rail already use) takes the fitted turrets and the module slots, so a Combat hull carrying a
@@ -190,7 +238,7 @@ export function useBoosterBuilder(loadout: Loadout | null, inv: Inventories | nu
   }), [view.scope, role, loadout, blacklist, resOrder]);
 
   const { picks, unplaceableForced } = useMemo(
-    () => optimizeBoosters(pool, slotTypes, forced, ctx, refused, pins, locked), [pool, slotTypes, forced, ctx, refused, pins, locked],
+    () => optimizeBoosters(pool, slotTypes, forced, ctx, undefined, pins), [pool, slotTypes, forced, ctx, pins],
   );
   const assigned = useMemo(() => new Set(picks.filter((p) => p.chosen).map((p) => boosterId(p.chosen!))), [picks]);
   const unplaceable = useMemo(() => new Set(unplaceableForced.map(boosterId)), [unplaceableForced]);
@@ -208,11 +256,11 @@ export function useBoosterBuilder(loadout: Loadout | null, inv: Inventories | nu
     .filter((p) => p.chosen && p.chosen !== equippedBySlot[p.slot] && p.chosen.location !== "equipped" && p.chosen.key != null)
     .map((p) => ({ kind: "Booster", slot: p.slot, store: p.chosen!.location, key: p.chosen!.key, name: p.chosen!.name, level: p.chosen!.level }));
 
-  return { loadout, slotCount, equippedBySlot, pool, invBoosters, types, slotTypes, setType, setSlotTypes, forced, toggleForce, picks, assigned, unplaceable, totals, scope: view.scope, setScope, blacklist, toggleBlacklist, resOrder, setTypeOrder, refused, toggleRefuse, clearRefused, locked, toggleLock, pins, pinSlot, ctx, changed, unfilled, applyPayload };
+  return { locked: pins, loadout, slotCount, equippedBySlot, pool, invBoosters, types, slotTypes, setType, setSlotTypes, forced, toggleForce, picks, assigned, unplaceable, totals, scope: view.scope, setScope, blacklist, toggleBlacklist, resOrder, setTypeOrder, toggleLock, pins, pinSlot, ctx, changed, unfilled, applyPayload };
 }
 
-export default function BoostersTab({ builder, docked, conn, goSummary, apply }: { builder: BoosterBuilder; docked: boolean; conn: Conn; goSummary: () => void; apply?: ApplyApi }) {
-  const { loadout, slotCount, equippedBySlot, pool, types, slotTypes, setType, forced, toggleForce, picks, assigned, unplaceable, totals, scope, setScope, blacklist, toggleBlacklist, resOrder, setTypeOrder, refused, toggleRefuse, clearRefused, locked, toggleLock, pins, pinSlot, ctx, changed, unfilled } = builder;
+export default function BoostersTab({ builder, docked, conn, goSummary, apply, marginals }: { builder: BoosterBuilder; docked: boolean; conn: Conn; goSummary: () => void; apply?: ApplyApi; marginals?: StatMarginal[] }) {
+  const { loadout, slotCount, equippedBySlot, pool, types, slotTypes, setType, forced, toggleForce, picks, assigned, unplaceable, totals, scope, setScope, blacklist, toggleBlacklist, resOrder, setTypeOrder, toggleLock, pins, pinSlot, ctx, changed, unfilled } = builder;
   // The cursor-following card, the same one the gear and inventory tabs use (`ItemTip`, one owner). The booster
   // cards showed a name, a level and one number; everything else an item carries — its own stat lines, its
   // aspects, its resonance detail, what it would replace — was only visible by leaving this tab.
@@ -272,6 +320,48 @@ export default function BoostersTab({ builder, docked, conn, goSummary, apply }:
   }, [resStatsByType, resOrder]);
   const [blockPick, setBlockPick] = useState(false);
   const [orderPick, setOrderPick] = useState<string | null>(null);
+
+  // WHAT EACH BONUS IS WORTH ON THIS SHIP. Computed from the damage model by the caller and passed in, so the tab
+  // states a measurement rather than an opinion. Absent (no pool reading, a parked hull) ⇒ nothing is shown and the
+  // ranking button does not appear: a silent guess is worse than a manual list.
+  const worth = useMemo(() => new Map((marginals ?? []).map((m) => [m.stat, m])), [marginals]);
+
+  const worthOf = (stat: string) => {
+    const m = worth.get(stat);
+    if (!m) return null;
+    const pct = m.perPoint * 100;
+    // A figure under a hundredth of a percent reads as `0.00%`, which looks like a measurement failure rather than
+    // like a stat that does nothing. Said in words instead.
+    return pct < 0.005 ? "nothing here" : `${pct.toFixed(2)}%${m.approximate ? "?" : ""}`;
+  };
+
+  const worthTitle = (stat: string) => {
+    const m = worth.get(stat);
+    if (!m) return undefined;
+    const unit = m.unit === "point" ? "one point" : "1% of the pool";
+    const head = `${(m.perPoint * 100).toFixed(3)}% DPS per ${unit}, on this ship's own guns`;
+    return m.approximate
+      ? `${head}. Indicative: the game reports crit chance as a product it will not factorise, so Precision's share of it cannot be separated exactly.`
+      : head;
+  };
+
+  /** The bonuses in this type's vocabulary that the model can actually value. */
+  const rankable = (type: string) => {
+    const vocab = type === ANY_TYPE ? resStats : (resStatsByType.get(type) ?? []);
+    return vocab.filter((s) => worth.has(s));
+  };
+
+  /**
+   * This type's list, reordered by measured value.
+   *
+   * Bonuses the model cannot judge KEEP THEIR RELATIVE PLACES at the end rather than being dropped or interleaved:
+   * `Hull HP` is not a damage stat, and sorting it against damage figures would state something the measurement does
+   * not support. A bonus that is ranked but no longer in the vocabulary stays too — removing it is the player's call.
+   */
+  const byValue = (list: readonly string[]) => {
+    const { ranked, unranked } = rankByValue([...list], marginals ?? []);
+    return [...ranked, ...unranked];
+  };
   const [pickFor, setPickFor] = useState<number | null>(null);
   const [pickQ, setPickQ] = useState("");
   const [resDrag, setResDrag] = useState<{ type: string; from: number; over: number } | null>(null);
@@ -312,7 +402,7 @@ export default function BoostersTab({ builder, docked, conn, goSummary, apply }:
         {hasResonance && <>
           {(["current", "potential"] as Scope[]).map((sc) => (
             <button key={sc} className={`seg ${scope === sc ? "on" : ""}`} onClick={() => setScope(sc)}
-                    title="Resonance pays in proportion to its progress, and only progresses while the booster is equipped. Price it as it stands, or as it will be once flown.">{SCOPE_LABEL[sc]}</button>
+                    title="Price resonance as it stands now, or as it will be once flown">{SCOPE_LABEL[sc]}</button>
           ))}
         </>}
         <span className="up">{changed > 0 ? `${changed} slot${changed === 1 ? "" : "s"} would change` : "matches current"}</span>
@@ -334,7 +424,7 @@ export default function BoostersTab({ builder, docked, conn, goSummary, apply }:
                       onClick={() => toggleBlacklist(stat)}>×</button>
             </span>
           ))}
-          <button className="mini" title="Bonuses this ship should not chase. A blocked bonus is worth nothing to the score; the booster is still picked on its own main stat."
+          <button className="mini" title="Bonuses this ship should not chase. The booster is still picked on its main stat."
                   onClick={() => setBlockPick(!blockPick)}>+ block a bonus…</button>
           {blockPick && (
             <div className="sl-vpop">
@@ -390,9 +480,17 @@ export default function BoostersTab({ builder, docked, conn, goSummary, apply }:
                         [n[i + d], n[i]] = [n[i], n[i + d]];
                         write(n);
                       };
+                      // A RANK NOTHING CAN ROLL IS A LEFTOVER, ⊥ a wish. The add-picker offers this type's own
+                      // vocabulary only, so a stat outside it got here by outliving the booster that carried it: the
+                      // row is inert until such a booster is owned again. It is dimmed rather than badged, because
+                      // a badge only restates the state while the row's own remove button is the answer to it.
+                      // NAMED `prio-inert`, ⊥ `stale`: `.stale` is the app-wide STALE-DATA banner (amber on brown,
+                      // `App.css`), so a row carrying that word inherited a warning colour it had no business wearing
+                      // and every unrollable rank turned brown.
+                      const inert = !vocab.includes(stat);
                       return (
                         <div key={stat}
-                             className={`prio-row${over ? " over" : ""}${dragHere && resDrag.from === i ? " dragging" : ""}`}
+                             className={`prio-row${inert ? " prio-inert" : ""}${over ? " over" : ""}${dragHere && resDrag.from === i ? " dragging" : ""}`}
                              draggable
                              onDragStart={() => setResDrag({ type, from: i, over: i })}
                              onDragOver={(e) => { e.preventDefault(); setResDrag((d) => (d && d.type === type ? { ...d, over: i } : d)); }}
@@ -412,13 +510,19 @@ export default function BoostersTab({ builder, docked, conn, goSummary, apply }:
                           <span className="pos">{i + 1}</span>
                           <div className="prio-main">
                             <div className="prio-name-row">
-                              <span className="prio-name">{stat}</span>
-                              {!vocab.includes(stat) && (
-                                <span className="prio-wanted" title="No booster of this type that you own carries this resonance yet — one that does will outrank one that does not">wanted</span>
+                              <span className="prio-name"
+                                    title={inert
+                                      ? `${stat} — no ${type} booster you own carries this, so this rank does nothing until one does. Remove it with the x.`
+                                      : stat}>{stat}</span>
+                              {/* WHAT IT IS WORTH ON THIS SHIP, measured through the damage model. Shown beside the
+                                  rank because the rank is the decision it informs: an ordering with the figures next
+                                  to it can be checked, and one without has to be trusted. */}
+                              {worthOf(stat) && (
+                                <span className="prio-worth" title={worthTitle(stat)}>{worthOf(stat)}</span>
                               )}
                               <span className="spacer" />
                               {blacklist.has(stat) && (
-                                <span className="prio-rank" title="This ship is also told not to chase this bonus, which wins — the block is the narrower statement">blocked</span>
+                                <span className="prio-rank" title="Also blocked on this ship, which wins: the block is the narrower statement">blocked</span>
                               )}
                             </div>
                           </div>
@@ -431,7 +535,15 @@ export default function BoostersTab({ builder, docked, conn, goSummary, apply }:
                       );
                     })}
                     <div className="prio-add">
-                      <button className="mini" title="Ranked resonance bonuses for this booster type, best first. Read BEFORE the value: a booster whose resonance ranks higher wins its slot over one that ranks lower, whatever the main stats say — so this can hand you a smaller booster. Unranked bonuses tie for last."
+                      {/* ONE CLICK INSTEAD OF A HAND-SORTED LIST. The order comes from this ship's own measured
+                          values, so it is not a wiki opinion: a bonus that does nothing for these guns sinks, and a
+                          bonus this model cannot judge (Hull HP on a damage ranking) is LEFT WHERE IT IS rather than
+                          buried, since "not a damage stat" is a different claim from "worth nothing". */}
+                      {!!rankable(type).length && (
+                        <button className="mini" title={`Order this list by what each bonus is worth on ${loadout?.name ?? "this ship"} right now, strongest first. Bonuses this model cannot value keep their places at the end.`}
+                                onClick={() => write(byValue(list))}>rank by value</button>
+                      )}
+                      <button className="mini" title="Resonance bonuses for this type, best first. Read before the value."
                               onClick={() => setOrderPick(orderPick === type ? null : type)}>+ rank a bonus…</button>
                       {orderPick === type && (
                         <div className="sl-vpop">
@@ -451,14 +563,6 @@ export default function BoostersTab({ builder, docked, conn, goSummary, apply }:
           })}
         </div>
       )}
-      {refused.size > 0 && (
-        // A refusal with no way back is a trap: the booster simply stops being offered and nothing says why.
-        <div className="bblock">
-          <span className="dim">refused on this ship</span>
-          <span className="sl-vchip">{refused.size} booster{refused.size === 1 ? "" : "s"}</span>
-          <button className="mini" onClick={clearRefused}>consider them again</button>
-        </div>
-      )}
       {!hasResonance && <p className="hint">No resonances on anything you own — nothing to rank.</p>}
         </div>
 
@@ -471,11 +575,22 @@ export default function BoostersTab({ builder, docked, conn, goSummary, apply }:
         {slotTypes.map((t, i) => {
           const eq = equippedBySlot[i], best = picks[i]?.chosen ?? null;
           const same = !!best && !!eq && boosterId(best) === boosterId(eq);
+          // A SLOT TYPED FOR ONE THING AND HOLDING ANOTHER IS A STATE THE CARD HAS TO SAY OUT LOUD. It is
+          // legitimate (asking for Armor HP in a slot that currently carries a Combat booster is how you
+          // ask the optimizer to change it), but with nothing owned of the wanted type the slot falls
+          // through to a bare `keep current`, which reads as the optimizer having no opinion rather than
+          // as it having nothing to offer.
+          const wantedMissing = !!t && !!eq && boosterType(eq) !== t && !best;
           // What a booster's vignette SAYS, where a turret's says its damage type and power: the stat it boosts,
           // its value, and where it lives. The frame around it is `SlotCard`'s — the same one the gear tab draws.
           const bSub = (b: Item) => `${boosterType(b)} · +${fmt(boosterValue(b))} · ${locLabel(b.location)}`;
           const bMark = (b: Item) => (b.resonance
-            ? <span className={`bres mini-res${b.resonance.unlocked ? " done" : ""}`} title={`${unlockBonusText(b.resonance)} — ${progText(b.resonance)}`}>RES</span>
+            // A bare `RES` says only that the booster HAS a resonance, which the player can see from the fact
+            // that the badge is there. What they need is whether it is paying yet, so it carries the figure.
+            ? <span className={`bres mini-res${b.resonance.unlocked ? " done" : ""}`}
+                    title={`${unlockBonusText(b.resonance)} · ${progText(b.resonance)}`}>
+                {b.resonance.unlocked ? "RES ✓" : `RES ${resonancePct(b.resonance)}%`}
+              </span>
             : null);
           return (
           <SlotCard key={i}
@@ -484,37 +599,21 @@ export default function BoostersTab({ builder, docked, conn, goSummary, apply }:
             title={`Slot ${i + 1}`}
             sub={t ?? "no type"}
             head={<>
-              {/* The slot's own buttons, right of its name — where the gear tab keeps ⚡ and the lock. */}
-              {pins.has(i) && (
-                <button className="slot-pin" title="You chose this booster yourself, so the optimizer skips this slot. Click to release it."
-                        onClick={(e) => { e.stopPropagation(); pinSlot(i, null); }}>📌 pinned</button>
+              {wantedMissing && (
+                <span className="slot-warn"
+                      title={`Set to ${t}, but you own no ${t} booster. Change the type below, or leave it.`}>no {t}</span>
               )}
-              {/* LOCK THE SLOT TO WHAT IS FITTED — the gear tab's own control, and the same argument: not every
-                  slot deserves optimizing, and one that keeps being offered an upgrade forever is noise.
-                  Distinct from the pin, which fixes a slot to a booster you PICKED, and from refuse, which
-                  rejects one candidate and lets the optimizer try again. */}
-              <button className={`slot-lock${locked.has(i) ? " on" : ""}`}
-                      title={locked.has(i)
-                        ? "Locked to the fitted booster — suggestions skip this slot. Click to release."
-                        : "Keep what is fitted here and stop suggesting for this slot (remembered for this ship)"}
-                      onClick={(e) => { e.stopPropagation(); toggleLock(i); }}>{locked.has(i) ? "🔒" : "🔓"}</button>
-              {best && !same && (
-                <button className="slot-refuse" title="Refuse this booster on this ship — the slot is answered again with the next best"
-                        onClick={(e) => { e.stopPropagation(); toggleRefuse(boosterId(best)); }}>✖</button>
+              <SlotLock locked={pins.has(i)} onToggle={() => toggleLock(i)} what={eq ? eq.name : "nothing"} />
+              {picks[i]?.pinUnresolved && (
+                <span className="slot-warn" title="You no longer own the booster this slot is pinned to">pin unmet</span>
               )}
-              <button className="slot-sug" disabled={pins.has(i) || locked.has(i)}
-                      title={pins.has(i) || locked.has(i)
-                        ? "This slot is yours — release the pin or the lock to have it answered"
-                        : "choose a booster for this slot yourself"}
-                      onClick={(e) => { e.stopPropagation(); setPickFor(pickFor === i ? null : i); }}>⚡</button>
             </>}
-            current={<Vig it={eq} label="current" conn={conn}
+            current={<Vig it={eq} conn={conn}
                           sub={eq ? bSub(eq) : null} extra={eq ? bMark(eq) : null}
                           onHover={(h) => setHover(h ? { ...h, vs: null } : null)} />}
-            next={<NewVig it={same ? null : best} conn={conn} mine={pins.has(i)}
+            next={<NewVig it={best} conn={conn} mine={pins.has(i)} unchanged={same}
                           onClear={pins.has(i) ? () => pinSlot(i, null) : undefined}
-                          sub={best && !same ? bSub(best) : null} extra={best && !same ? bMark(best) : null}
-                          verdict={same ? { text: "kept", why: "The best owned booster of this type is already in this slot" } : null}
+                          sub={best ? bSub(best) : null} extra={best ? bMark(best) : null}
                           onHover={(h) => setHover(h ? { ...h, vs: eq } : null)} />}
             // WHAT THIS SLOT IS FOR, in the gear tab's own selector at the foot of the card — the same control
             // in the same place, so changing a slot is one gesture across both tabs.
@@ -537,18 +636,21 @@ export default function BoostersTab({ builder, docked, conn, goSummary, apply }:
                   <SlotPickList
                     title={`Slot #${i + 1}`}
                     items={rows}
-                    conn={conn}
                     query={pickQ}
                     setQuery={setPickQ}
                     placeholder="search name / type / resonance…"
                     onPick={(b) => { pinSlot(i, b); setPickFor(null); }}
                     onClose={() => setPickFor(null)}
                     keyOf={(b) => boosterId(b)}
+                    iconOf={(b) => itemIcon(conn, b)}
+                    nameOf={(b) => b.name}
+                    rarityOf={(b) => b.rarity}
+                    trailOf={(b) => `Lv ${b.level}`}
                     emptyText={docked ? "Nothing owned matches." : "Dock to read the armory."}
                     hoverProps={(b) => hoverProps(b, equippedBySlot[i])}
                     // Only one of each physical booster exists, so one already placed is SAID to be spoken for
                     // rather than hidden — picking it here moves it, exactly as a turret does.
-                    spokenFor={(b) => (assigned.has(boosterId(b)) && pins.get(i) !== boosterId(b) ? "another slot" : null)}
+                    spokenFor={(b) => (assigned.has(boosterId(b)) && pins.get(i) !== boosterPinKey(b) ? "another slot" : null)}
                     mainCell={(b) => `+${fmt(boosterValue(b))}`}
                     cells={(b) => b.resonance?.bonusStat
                       ? <span className="li-asp" title={unlockBonusText(b.resonance)}>{b.resonance.bonusStat}</span>

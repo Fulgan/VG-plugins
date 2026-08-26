@@ -60,6 +60,7 @@ function builderStub(overrides: Partial<OfficerBuilder> = {}): OfficerBuilder {
     catalog: [{ id: "s1", name: "Iron Rage", major: false, roles: ["Combat"], drone: false }],
     prio: [], setPrio: () => {},
     forced: new Set<string>(), togglePin: () => {}, setForced: () => {},
+    slotPins: new Map<number, string>(), pinSlot: () => {},
     result: null,
     profile: { main: "combat", combatStance: "brawler", combatLayer: "surface", echo: false, drone: false, boarding: false },
     setProfile: () => {},

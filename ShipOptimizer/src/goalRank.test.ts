@@ -7,7 +7,8 @@
 // about the design is only correct if it holds.
 import { describe, expect, it } from "vitest";
 import {
-  defaultGoalOrder, goalCompare, goalPrefers, goalRefuses, goalSign, goalVector, GOAL_KEYS, GOAL_LABEL, OBJECTIVE_TIE,
+  defaultGoalOrder, goalCompare, goalDrops, goalPrefers, goalRefuses, goalSign, goalVector, GOAL_KEYS, GOAL_LABEL,
+  OBJECTIVE_TIE,
   type GoalCandidate, type GoalKey, type GoalReading,
   expectedCrit,
 } from "./fleetDps";
@@ -205,5 +206,50 @@ describe("the mega-crit cascade stops paying", () => {
     const gain = expectedCrit(0.585, CD, 3) / expectedCrit(0.571, CD, 3) - 1;
     expect(gain).toBeGreaterThan(0.02);
     expect(gain).toBeLessThan(0.03);
+  });
+});
+
+// THE DROP WARNING WATCHES THE LAYER THE HULL TANKS ON, and nothing else.
+//
+// This is a percentage problem, not a policy one. A drop is `(a - b) / a` with no absolute floor, and the layer a
+// hull has no module for is whatever its guns happen to roll: measured on a real armour hull, shield read 10,646
+// against armour 1,729,044, with two fitted turrets carrying 2,900 and 2,459 of that shield. Swapping either gun
+// is a 23% to 27% "drop" in Shield and a fifth of a percent of the ship's survivability. A warning that fires
+// there is a warning the player learns to ignore.
+describe("which layer a drop warning is allowed to name", () => {
+  // The figures above, as read off the ship.
+  const NOW: GoalReading = { armor: 1_729_044, shield: 10_646, hull: 1_017_056, dps: 200_000 };
+  const SWAPPED: GoalReading = { armor: 1_729_044, shield: 7_746, hull: 1_017_056, dps: 204_000 };
+
+  it("says nothing about the vestigial layer on a hull that tanks on the other one", () => {
+    expect(goalDrops(NOW, SWAPPED, 0.10, "armor")).toEqual([]);
+  });
+
+  it("names it when that IS the layer the hull tanks on", () => {
+    const drops = goalDrops(NOW, SWAPPED, 0.10, "shield");
+    expect(drops.map((d) => d.key)).toEqual(["shield"]);
+    expect(drops[0].drop).toBeCloseTo(2_900 / 10_646, 6);
+  });
+
+  it("watches BOTH when the hull carries no defensive module at all", () => {
+    // With nothing to be primary, either layer falling is worth saying.
+    for (const tanks of [null, undefined]) {
+      expect(goalDrops(NOW, SWAPPED, 0.10, tanks).map((d) => d.key)).toEqual(["shield"]);
+    }
+  });
+
+  it("never gates hull, which every ship carries a kit for", () => {
+    const gutted: GoalReading = { ...NOW, hull: 500_000 };
+    for (const tanks of ["armor", "shield", null] as const) {
+      expect(goalDrops(NOW, gutted, 0.10, tanks).some((d) => d.key === "hull")).toBe(true);
+    }
+  });
+
+  it("still watches every non-layer key whatever the hull tanks on", () => {
+    // The axis that matters is the one the plan happens to spend: a swap costing 4.9% of Combat Power on a combat
+    // hull said nothing at all while a hull cap was busy refusing plans.
+    const spent: GoalReading = { ...NOW, combat: 95_100 };
+    const drops = goalDrops({ ...NOW, combat: 100_000 }, spent, 0.02, "armor");
+    expect(drops.map((d) => d.key)).toEqual(["combat"]);
   });
 });

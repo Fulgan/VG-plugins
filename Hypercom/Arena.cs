@@ -116,8 +116,10 @@ namespace Hypercom
             unit.RegisterStatSource(lines);
 
             // A layer with no HP gets NO module, not an empty one: `DamagePrevention` tests the module
-            // reference, so an empty module and an absent one are different code paths.
-            if (p.ShieldHP > 0f)
+            // reference, so an empty module and an absent one are different code paths. `*Absorbs = false` is the
+            // THIRD case, and it is the one real NPCs are in: the stat is set above and no module is attached, so the
+            // pool exists on paper and absorbs nothing.
+            if (p.ShieldHP > 0f && p.ShieldAbsorbs)
             {
                 var shield = Attach<ShieldGeneratorModule>(go, unit, "Shield");
                 shield.rechargeRate = p.ShieldRechargeRate;
@@ -125,7 +127,7 @@ namespace Hypercom
                 shield.overrideBaseCapacity = 0f;
                 SetShieldM.Invoke(unit, new object[] { shield });
             }
-            if (p.ArmorHP > 0f)
+            if (p.ArmorHP > 0f && p.ArmorAbsorbs)
             {
                 var armor = Attach<ArmorModule>(go, unit, "Armor");
                 armor.resistAmount = p.ArmorResist;
@@ -147,6 +149,10 @@ namespace Hypercom
                 ["hpBalanceMultiplier"] = GameMath.HpBalanceMultiplier(data.level),
                 ["maxHullHP"] = unit.maxHullHP,
                 ["maxArmorHP"] = unit.maxArmorHP,
+                // Reported because the two together are the whole story: a max above zero with no module is a pool
+                // that never absorbs, and a reader comparing runs needs to see which case this was.
+                ["armorModule"] = unit.armorModule != null,
+                ["shieldGeneratorModule"] = unit.shieldGeneratorModule != null,
                 ["maxShieldHP"] = unit.maxShieldHP,
                 ["maxTotalHP"] = unit.maxTotalHP,
             };

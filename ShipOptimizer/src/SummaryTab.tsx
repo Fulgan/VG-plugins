@@ -15,7 +15,7 @@ import type { ActivityProfile } from "./activityPresets";
 import type { Item, LoadoutPresetInfo, Officer } from "./types";
 import { RARITY_COLOR, fmt } from "./format";
 import { load, save } from "./storage";
-import { useCursorTip } from "./useCursorTip";
+import { OfficerTip } from "./OfficerCard";
 
 // Persistent action log (localStorage) — records every apply/undo: request payload + the ship's equipped
 // state at click time + the raw response. Survives reloads so a mis-apply can be inspected after the fact.
@@ -27,7 +27,9 @@ import { useCursorTip } from "./useCursorTip";
 // restore. All fields optional so an older preset (no blob) or a partial one restores what it has.
 interface LoadoutSettings {
   prio?: string[];                       // officer priority-skill order
-  forced?: string[];                     // pinned officer guids
+  forced?: string[];                     // WRITTEN BY AN OLDER VERSION: officer guids with no slot. Ignored on
+                                         // restore, because a pin now names the seat it belongs to.
+  slotPins?: [number, string][];         // crew slot index -> officer guid
   scope?: Scope;                         // current vs full-potential
   profile?: ActivityProfile;             // activity suggestion profile
   gearFilters?: Record<number, GearFilter>; // per-hardpoint filter
@@ -152,7 +154,7 @@ export default function SummaryTab({
   // fingerprint below — changing a preference is a change to the loadout, so it enables "Update".
   const settings = useMemo<LoadoutSettings>(() => ({
     prio: officer.prio,
-    forced: [...officer.forced].sort(), // a Set — sort so insertion order can't fake a change
+    slotPins: [...officer.slotPins].sort((a, b) => a[0] - b[0]), // sorted so map order cannot fake a change
     scope: officer.scope,
     profile: officer.profile,
     gearFilters: gear.filters,
@@ -203,7 +205,7 @@ export default function SummaryTab({
     let s: LoadoutSettings;
     try { s = JSON.parse(raw) as LoadoutSettings; } catch { return; }
     if (s.prio) officer.setPrio(s.prio);
-    if (s.forced) officer.setForced(s.forced);
+    if (s.slotPins) officer.setSlotPins(s.slotPins);
     if (s.scope) officer.setScope(s.scope);
     if (s.profile) officer.setProfile(s.profile);
     if (s.gearFilters) gear.setFilters(() => s.gearFilters!);
@@ -390,25 +392,4 @@ function Cell({ side, placeholder, onHover }: { side: Side | null; placeholder: 
 }
 
 // Compact officer tooltip (game-style card) for the change rows.
-function OfficerTip({ o, x, y, portraitUrl }: { o: Officer; x: number; y: number; portraitUrl: (g: string | null) => string | null }) {
-  // Same cursor tracking as the item tip: measured + clamped in the DOM, no re-render per move.
-  const { ref, style } = useCursorTip(x, y);
-  const pu = portraitUrl(o.guid);
-  const skills = (o.potential ?? []).slice(0, 10);
-  return (
-    <div className="git" ref={ref} style={style}>
-      <div className="git-top">
-        <div>
-          <div className="git-cls">{o.profession}</div>
-          <div className="git-name" style={{ color: RARITY_COLOR[o.rarity] ?? "#cfcfcf" }}>{o.name}</div>
-          {o.callsign && <div className="git-mfr">“{o.callsign}”</div>}
-        </div>
-        <div className="git-lvl">Lv {o.level}</div>
-      </div>
-      {pu && <span className="git-img" style={{ backgroundImage: `url("${pu}")` }} />}
-      {o.bonusValue ? <div className="git-main">+{(o.bonusValue * 100).toFixed(1)}% {o.chosenBonus}</div> : null}
-      {skills.length > 0 && <div className="git-subs">{skills.map((s, i) => <div key={i} className="git-sub">{s.name}</div>)}</div>}
-    </div>
-  );
-}
 

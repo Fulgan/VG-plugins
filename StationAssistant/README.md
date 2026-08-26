@@ -2,17 +2,17 @@
 
 Quality-of-life mod for **Vanguard Galaxy** that handles chores at the station for you.
 
-**Version 1.1.0**: [what changed](../RELEASE-NOTES.md).
+[What changed in the latest release](../RELEASE-NOTES.md).
 
 ## What it does
 
 - **Quartermaster** keeps your consumables stocked: decoy transponders, ion and plasma fuel cells,
   locator beacons and tracking tag bots. You set how many you want on the ship and how many in
   reserve, per ship, and it buys the shortfall from the station shops. It can also release a decoy
-  when you undock. You can copy what you configured in another save or copy the setting for all the
-  ships you own.
+  when you undock. You can copy what you configured on another ship, or copy this ship's settings to
+  every ship you own.
 - **Auto-sell** sells surplus gear (turrets, modules, boosters) by rarity and level, and keeps
-  anything you favorite or write a keep-rule for.
+  anything you favourite or write a keep-rule for.
 - **Gunner** refills your ship's ammo and stows what your guns don't use. It can work out how much
   you need the same way ECHO does, from the minutes of fire in your autopilot setting.
 - **Loadouts** saves a ship's current gear setup and re-applies it later from the Personal Hangar
@@ -68,10 +68,8 @@ items, favourites, anything with no sale value) are never touched.
 
 ### New versions
 
-The **Updates** tab of the settings window says whether a newer Station Assistant has been released, and
-links to its page. It checks once a day and **only looks**: nothing is downloaded or installed, so
-whatever manages your mods stays in charge of what is on disk. Turn it off with `Updates/Enabled` in
-`BepInEx\config\fulgan.vanguardgalaxy.stationassistant.cfg`.
+The **Updates** tab has a button that looks for newer versions and links to the release page. Nothing is
+downloaded or installed.
 
 ## Help
 

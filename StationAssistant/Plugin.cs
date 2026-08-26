@@ -24,7 +24,7 @@ namespace StationAssistant
 {
     internal enum SellTrigger { Manual, OnDock, OnUndock }
 
-    [BepInPlugin(Guid, "Station Assistant", "1.1.5")]
+    [BepInPlugin(Guid, "Station Assistant", "1.1.6")]
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "fulgan.vanguardgalaxy.stationassistant";
@@ -118,8 +118,9 @@ namespace StationAssistant
         internal readonly ConfigEntry<string> QmTargetsRaw;
         // key = shipGuid + sep + itemKey -> (inventory target in cargo, reserve target in armory)
         private readonly Dictionary<string, (int inv, int res)> _qmTargets = new Dictionary<string, (int inv, int res)>();
-        // per-item (not per-ship) "skip while ECHO drives" toggles, keyed by item key
-        private readonly Dictionary<string, ConfigEntry<bool>> _qmEchoSkip = new Dictionary<string, ConfigEntry<bool>>();
+        // ONE toggle for the whole restock, because buying and selling under ECHO is a single question: the
+        // reason to refuse is that ECHO is running the ship, which is not a fact about any one supply.
+        internal readonly ConfigEntry<bool> QmEchoSkip;
 
         // Gameplay settings that swap per playthrough (UI keybinds stay global). Filled at ctor end.
         internal readonly List<ConfigEntryBase> Gameplay = new List<ConfigEntryBase>();
@@ -195,7 +196,8 @@ namespace StationAssistant
                 "Activate one decoy transponder when leaving a station, if one isn't already active.");
 
             DecoyDisableDuringEcho = file.Bind("DecoyTransponder", "DisableDuringEcho", true,
-                "Skip decoy buy/activate while ECHO (autopilot) is running the ship. Avoids it being an AFK cheat.");
+                "Skip ACTIVATING a decoy on undock while ECHO (autopilot) is running the ship. Buying one is " +
+                "covered by Quartermaster/EchoSkip: deploying a decoy is a separate decision from stocking it.");
 
             DecoyHotkey = file.Bind("DecoyTransponder", "Hotkey", new KeyboardShortcut(KeyCode.F11),
                 "Hotkey: toggle auto-decoy (activate-one-on-undock). If it turns ON while you're undocked "
@@ -256,9 +258,8 @@ namespace StationAssistant
                 "Format: shipGuid|itemKey|inventory|reserve, entries joined by ';'.");
             LoadQmTargets();
 
-            foreach (var sup in Quartermaster.Supplies)
-                _qmEchoSkip[sup.Key] = file.Bind("Quartermaster.EchoSkip", sup.Key, true,
-                    $"Skip restocking '{sup.Key}' while ECHO (autopilot) drives the ship.");
+            QmEchoSkip = file.Bind("Quartermaster", "EchoSkip", true,
+                "Skip buying and selling while ECHO (autopilot) is running the ship. Avoids it being an AFK farm.");
 
             // Everything except the UI keybinds is per-playthrough.
             Gameplay.AddRange(new ConfigEntryBase[]
@@ -269,7 +270,7 @@ namespace StationAssistant
                 QmMode, QmTargetsRaw,
             });
             Gameplay.AddRange(_sellCategories.Values);
-            Gameplay.AddRange(_qmEchoSkip.Values);
+            Gameplay.Add(QmEchoSkip);
         }
 
         // Re-derive cached collections after per-playthrough values are swapped in.
@@ -320,12 +321,6 @@ namespace StationAssistant
         internal (int inv, int res) QmTarget(string shipGuid, string itemKey)
             => _qmTargets.TryGetValue(QmKey(shipGuid, itemKey), out var v) ? v : (0, 0);
 
-        internal bool QmEchoSkip(string itemKey)
-            => _qmEchoSkip.TryGetValue(itemKey, out var e) && e.Value;
-
-        internal ConfigEntry<bool> QmEchoSkipEntry(string itemKey)
-            => _qmEchoSkip.TryGetValue(itemKey, out var e) ? e : null;
-
         internal void SetQmTarget(string shipGuid, string itemKey, int inv, int res)
         {
             Put(shipGuid, itemKey, inv, res);
@@ -357,6 +352,60 @@ namespace StationAssistant
         // Serialises once at the end rather than per write: SetQmTarget rebuilds the entire packed string each
         // call, so doing it per ship per supply would be needlessly quadratic.
         // Returns how many other ships were written.
+        /// <summary>
+        /// Every OTHER ship in the fleet, BIGGEST HULL FIRST, each with its size and its display row. The
+        /// copy-from picker's source list, ordered so the caller can group on `sizeName` in one pass.
+        ///
+        /// A ship with no targets set is still offered: "copy the blank one over" is a way of clearing this ship,
+        /// and refusing it would be second-guessing.
+        /// </summary>
+        internal List<(string guid, string name, string sizeName, string what)> OtherShips(string exceptGuid)
+        {
+            var list = new List<(string, string, string, string)>();
+            var p = GamePlayer.current;
+            if (p?.spaceShips == null) return list;
+            foreach (var s in p.spaceShips)
+            {
+                if (s?.guid == null || s.guid == exceptGuid) continue;
+                if (list.Exists(e => e.Item1 == s.guid)) continue;
+                list.Add((s.guid, Util.ShipName(s), VG.Game.ShipLook.SizeNameOf(s) ?? "",
+                          VG.Game.ShipLook.RoleTypeOf(s) ?? ""));
+            }
+            // Biggest first, then by name so the order is stable between draws. An unknown size ranks -1 and
+            // therefore sorts LAST, which is where a hull nobody can identify belongs.
+            list.Sort((a, b) =>
+            {
+                var ra = VG.Game.ShipLook.SizeRank(a.Item3);
+                var rb = VG.Game.ShipLook.SizeRank(b.Item3);
+                if (ra != rb) return rb.CompareTo(ra);
+                return string.Compare(a.Item2, b.Item2, StringComparison.OrdinalIgnoreCase);
+            });
+            return list;
+        }
+
+        /// <summary>
+        /// Copy one ship's stock targets ONTO another. The mirror of `CopyQmTargetsToAllShips` and deliberately
+        /// its own method rather than a direction flag on it: that one overwrites the whole fleet from here and
+        /// this one overwrites here from one ship, and a boolean between two irreversible writes is the kind of
+        /// argument a caller gets backwards exactly once.
+        /// </summary>
+        internal bool CopyQmTargetsFromShip(string fromShipGuid, string toShipGuid, IEnumerable<string> supplyKeys)
+        {
+            if (string.IsNullOrEmpty(fromShipGuid) || string.IsNullOrEmpty(toShipGuid) || fromShipGuid == toShipGuid)
+                return false;
+
+            var keys = supplyKeys?.ToList() ?? new List<string>();
+            if (keys.Count == 0) return false;
+
+            foreach (var k in keys)
+            {
+                var t = QmTarget(fromShipGuid, k);
+                Put(toShipGuid, k, t.inv, t.res);
+            }
+            SaveQmTargets();
+            return true;
+        }
+
         internal int CopyQmTargetsToAllShips(string fromShipGuid, IEnumerable<string> supplyKeys)
         {
             var p = GamePlayer.current;
@@ -416,7 +465,7 @@ namespace StationAssistant
                 {
                     var player = GamePlayer.current;
                     var cargo = player?.currentSpaceShip?.cargo;
-                    var echo = cfg.QmEchoSkip("decoy") && player?.currentAutopilotSessionStats != null;
+                    var echo = cfg.DecoyDisableDuringEcho.Value && player?.currentAutopilotSessionStats != null;
                     if (cargo != null && !player.hasUmbralTransponder && !echo)
                         DecoyLogic.ActivateDecoy(cargo);
                 }
@@ -588,6 +637,11 @@ namespace StationAssistant
         // "Copy to all ships" is armed by the first click and performed by the second — it overwrites the
         // other ships' targets with no undo, so a stray click shouldn't do it.
         private bool _qmCopyArmed;
+        private bool _qmCopyFromOpen; // the source-ship picker is showing
+        private Vector2 _qmCopyScroll; // the picker scrolls on its own: a big fleet must not push the buttons off
+        // Which size groups are unfolded. Session-only on purpose: it is a reading position, not a preference, and
+        // persisting it would reopen a group whose ships the player has since sold.
+        private readonly HashSet<string> _qmCopyOpenSizes = new HashSet<string>();
         private string _qmCopyMsg = "";
         private string _rulesMsg = "";
         private bool _pasteArmed;
@@ -803,6 +857,9 @@ namespace StationAssistant
             GUILayout.Space(6f);
             GUILayout.Label(Loc.T("qm.flags"));
             _cfg.AutoBuy.Value = GUILayout.Toggle(_cfg.AutoBuy.Value, Loc.T("qm.autobuy"));
+            // Buying and selling under ECHO is one question for the whole restock, so it belongs with the flags.
+            // Deploying a decoy is a different act and sits under the decoy itself, where the thing it qualifies is.
+            _cfg.QmEchoSkip.Value = GUILayout.Toggle(_cfg.QmEchoSkip.Value, Loc.T("qm.echoSkip"));
 
             GUILayout.Space(6f);
             var ship = GamePlayer.current?.currentSpaceShip;
@@ -839,8 +896,96 @@ namespace StationAssistant
                 {
                     _qmCopyArmed = true;
                     _qmCopyMsg = "";
+                    _qmCopyFromOpen = false;
+                }
+
+                // The other direction, beside it: take one ship's targets ONTO this one. Setting a ship up by
+                // hand and then pointing the next one at it is the common case, and the fleet-wide button was
+                // the only way to move targets at all — which meant overwriting every ship to copy one.
+                if (!_qmCopyArmed && GUILayout.Button(Loc.T("qm.copyFrom"), GUILayout.Width(190f)))
+                {
+                    _qmCopyFromOpen = !_qmCopyFromOpen;
+                    _qmCopyMsg = "";
                 }
                 GUILayout.EndHorizontal();
+
+                if (_qmCopyFromOpen && !_qmCopyArmed)
+                {
+                    var others = _cfg.OtherShips(ship.guid);
+                    if (others.Count == 0)
+                    {
+                        GUILayout.Label("<size=11>" + Loc.T("qm.copyFrom.none") + "</size>");
+                    }
+                    else
+                    {
+                        // One click per ship, no arming step: this overwrites THIS ship only, and the ship it
+                        // came from is still there to copy again. The fleet-wide button arms because it cannot
+                        // be undone from anywhere.
+                        //
+                        // SIZE FIRST, SHIPS ON DEMAND. A flat list of every hull is long enough to need scrolling
+                        // before it is useful, and size is the one thing a player picks a ship BY ∴ one button per
+                        // size that UNFOLDS its ships. Only sizes the player actually owns a hull in get a button:
+                        // the sizes come from the fleet, so an empty class cannot appear.
+                        GUILayout.Label("<size=11>" + Loc.T("qm.copyFrom.pick") + "</size>");
+                        _qmCopyScroll = GUILayout.BeginScrollView(_qmCopyScroll, GUILayout.Height(190f));
+                        // Distinct sizes in the order `OtherShips` sorted them: biggest hull first.
+                        var sizes = new List<string>();
+                        foreach (var o in others) if (!sizes.Contains(o.sizeName)) sizes.Add(o.sizeName);
+
+                        foreach (var sizeName in sizes)
+                        {
+                            var label = VG.Game.ShipLook.SizeLabel(sizeName) ?? Loc.T("qm.copyFrom.unknownSize");
+                            var n = others.FindAll(o => o.sizeName == sizeName).Count;
+                            var open = _qmCopyOpenSizes.Contains(sizeName);
+
+                            GUILayout.BeginHorizontal();
+                            // The tint is the TEXT colour here rather than a highlight: on a button the highlight
+                            // sat behind the label and made it the least readable thing in the row.
+                            // ⚠ NO COLOUR TAG ON THE COUNT. Every other label in this window uses the skin's own
+                            // colour, which is legible against the window by construction; a hand-picked grey is
+                            // not, and two of them were added here and both were unreadable. The tint is for the
+                            // size TOKEN only, where it carries meaning.
+                            var head = "<b><color=" + VG.Game.ShipLook.SizeTint(sizeName) + ">"
+                                       + (open ? "- " : "+ ") + label + "</color></b>  " + Say.Count(n, "ship");
+                            if (GUILayout.Button(head, GUILayout.Width(150f)))
+                            {
+                                if (open) _qmCopyOpenSizes.Remove(sizeName); else _qmCopyOpenSizes.Add(sizeName);
+                            }
+                            GUILayout.FlexibleSpace();
+                            GUILayout.EndHorizontal();
+                            if (!open) continue;
+
+                            foreach (var other in others)
+                            {
+                                if (other.sizeName != sizeName) continue;
+                                GUILayout.BeginHorizontal();
+                                GUILayout.Space(18f);
+                                // TWO FIXED-WIDTH CONTROLS, ⊥ one composed string. Role and type vary in length, so
+                                // baking them into the label put every ship name at a different x. The name is the
+                                // button (it is what you click) and what the hull IS sits beside it in its own
+                                // column, bright enough to read on this background — the dim grey it had was the
+                                // reported defect.
+                                if (GUILayout.Button(other.name, GUILayout.Width(190f)))
+                                {
+                                    var ok = _cfg.CopyQmTargetsFromShip(
+                                        other.guid, ship.guid, Quartermaster.Supplies.Select(s => s.Key));
+                                    _qmCopyMsg = ok ? Loc.F("qm.copyFrom.done", other.name) : "";
+                                    _qmCopyFromOpen = false;
+                                    _qmBufs.Clear(); // the steppers cache the old numbers
+                                }
+                                // NO COLOUR AND NO FIXED WIDTH. The colour was a grey I picked and could not read;
+                                // the width clipped "Combat Battlecruiser". Alignment comes from the BUTTON before
+                                // it having a fixed width, so this can size to its content and still line up.
+                                if (other.what.Length > 0)
+                                    GUILayout.Label("<size=11>" + other.what + "</size>");
+                                GUILayout.FlexibleSpace();
+                                GUILayout.EndHorizontal();
+                            }
+                        }
+                        GUILayout.EndScrollView();
+                    }
+                }
+
                 if (_qmCopyMsg.Length > 0)
                     GUILayout.Label("<size=11>" + _qmCopyMsg + "</size>");
             }
@@ -864,27 +1009,28 @@ namespace StationAssistant
             // Line 2: cargo & armory targets (0 = ignore that container). Indented, left-aligned.
             GUILayout.BeginHorizontal();
             GUILayout.Space(16f);
-            GUILayout.Label(Loc.T("qm.inv"), GUILayout.Width(28f));
+            GUILayout.Label(Loc.T("qm.inv"), GUILayout.Width(46f));
             QmStepper(ship, sup, reserve: false);
             GUILayout.Space(14f);
-            GUILayout.Label(Loc.T("qm.res"), GUILayout.Width(30f));
+            GUILayout.Label(Loc.T("qm.res"), GUILayout.Width(52f));
             QmStepper(ship, sup, reserve: true);
             GUILayout.FlexibleSpace();
             GUILayout.EndHorizontal();
 
-            // Line 3: per-item options — skip during ECHO, and (decoy only) activate one on undock.
-            GUILayout.BeginHorizontal();
-            GUILayout.Space(16f);
-            var echoEntry = _cfg.QmEchoSkipEntry(sup.Key);
-            if (echoEntry != null)
-                echoEntry.Value = GUILayout.Toggle(echoEntry.Value, Loc.T("qm.echoSkip"));
+            // Line 3, decoy only: deploying one, and the ECHO exception that qualifies it. The exception reads as
+            // a clause on the toggle beside it ("activate on undock / unless ECHO is driving") ∴ it sits here
+            // rather than up in the flags, where it was a third switch with nothing next to it to qualify.
             if (sup.AutoUse)
             {
-                GUILayout.Space(14f);
+                GUILayout.BeginHorizontal();
+                GUILayout.Space(16f);
                 _cfg.ActivateOnUndock.Value = GUILayout.Toggle(_cfg.ActivateOnUndock.Value, Loc.T("qm.autoActivate"));
+                GUILayout.Space(14f);
+                _cfg.DecoyDisableDuringEcho.Value =
+                    GUILayout.Toggle(_cfg.DecoyDisableDuringEcho.Value, Loc.T("qm.echoSkipDecoy"));
+                GUILayout.FlexibleSpace();
+                GUILayout.EndHorizontal();
             }
-            GUILayout.FlexibleSpace();
-            GUILayout.EndHorizontal();
 
             GUILayout.Space(8f); // gap between items
         }

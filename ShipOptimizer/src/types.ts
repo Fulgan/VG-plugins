@@ -35,9 +35,15 @@ export interface Resonance {
   progress: number;
   threshold: number;
   unit: string; // kills | boardings | ore | scrap | profit | absorbed
-  bonus?: string; // game-formatted unlock bonus at FULL progress, e.g. "+2.22% Reload Speed"
-  /** What it pays TODAY, formatted by the game (`GetScaledUnlockBonus`). Absent on an older bridge. */
-  bonusNow?: string;
+  /**
+   * Game-formatted unlock bonus at FULL progress, e.g. "+2.22% Reload Speed". NULLABLE, and it really does arrive
+   * null: the bridge builds it from `EquipStatLine.ToReadableString`, whose one argument a name-only reflected call
+   * used to miss, and it then falls back to the bare stat NAME with no figure in it. So a caller must check for a
+   * number in the string rather than assume the value is there.
+   */
+  bonus?: string | null;
+  /** What it pays TODAY, formatted by the game (`GetScaledUnlockBonus`). Null|absent on an older bridge. */
+  bonusNow?: string | null;
   /**
    * The numbers behind the line, because the two kinds are worth entirely different things: `bonusAmount` ADDS to
    * the ship's pool for that stat, while `bonusMultiplier` scales the WHOLE pool — every gun, booster and hull
@@ -65,6 +71,12 @@ export interface Item {
   damageType?: string | null; // turrets
   gameplayType?: string | null; // turrets: Combat | Mining | Salvage
   targetLayer?: string | null; // mining/salvage turrets: Surface | Core | Both
+  /**
+   * `AbstractTurret.powerMultiplier` — the PREFAB's own factor on attack power, 0.9 to 1.15 and not 1 for a
+   * quarter of the turrets in the game. `CalculateAttackPower` applies it to the gun's own main power and to its
+   * share of the pool alike. Absent on an older bridge, where it must read as 1 rather than as zero.
+   */
+  powerMultiplier?: number | null;
   powerUsage?: number | null; // energy draw (effective; changed by aspects)
   // Base draw (`capacityCost`), the same basis whether or not the item is fitted. `powerUsage` is effective for a
   // FITTED item and base for a stored one, so only this field can compare the two.
@@ -74,6 +86,12 @@ export interface Item {
   manufacturer?: string | null; // brand, e.g. "Spirit Design"
   fireRate?: number | null; // turrets: attacks per second (sustained, incl. burst + reload) — BASE rate:
                             // built from raw _fireDelay/_maxMagSize/_reloadDelay, so no speed bonuses
+  // ---- torpedo bay (null on everything else) ----
+  // BOTH ARE PERIODS IN SECONDS, not rates, which is why they are not folded into `fireRate` above: one key
+  // holding a turret's rate and a bay's period would be wrong on whichever it was not named for, and silently.
+  // Prefab constants, so they travel with a loose candidate and a bay can be compared before it is fitted.
+  torpedoFireDelay?: number | null;  // `TorpedoBayModule.fireRate` — wait after a launch
+  torpedoReloadTime?: number | null; // `TorpedoBayModule.reloadSpeed` — per latch, in parallel with the sequence
   // ---- turret ranking inputs (absent on a bridge older than these fields) ----
   // RAW serialized cycle components, so a client can rebuild defaultAttacksPerSecond and re-run it with the
   // item's OWN speed rolls. Deliberately not the boosted properties: those divide by GetStat(), which on a

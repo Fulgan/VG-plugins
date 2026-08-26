@@ -3,8 +3,9 @@ import { aspectDamageFraction } from "./aspect";
 import { mainVal, statTotals } from "./format";
 import { catOf, compareModulesWhy, isTurret } from "./itemKind";
 import type { ShipFit } from "./roleStats";
-import { energyDraw, poolReactorFactor, reactorModifier } from "./reactor";
+import { energyDraw, poolReactorFactor, reactorModifier, repowered } from "./reactor";
 import { turretScore } from "./turretScore";
+import { bayOf, torpedoDps, torpedoPower, type TorpedoBay } from "./torpedo";
 
 // Total ship DPS for a SET of turrets — the objective the expanded gear ranking optimises.
 //
@@ -53,6 +54,12 @@ export interface ShipPools {
   poolCombatPower: number;
   poolPrecision: number;
   equivalentTurrets: number;
+  // THE TORPEDO POOL AND THE BAY THAT SPENDS IT. Optional together and absent on most hulls: a torpedo bay is
+  // one module slot that most ships do not have, and where there is none the whole term is zero rather than a
+  // number nothing produced. `torpedo` rides here for the same reason `energy` does — the bay is in a module
+  // slot, so it is never in the turret set `setDps` walks, and at most one is ever fitted.
+  poolTorpedoPower?: number;
+  torpedo?: TorpedoBay | null;
   precisionDivisor: number;   // 25 × GameMath.DamageMultiplier(level)
   critDamage: number;         // effective, pooled
   megaCrit: number;
@@ -157,12 +164,22 @@ export function poolsFromStatus(s: {
   caps?: { extraTurretPenalty?: boolean } | null;
   energyCapacity?: number | null; energyUsed?: number | null; energyUsage?: number | null;
   reactorBonus?: number | null;
+  poolTorpedoPower?: number | null; torpedoLatches?: number | null;
+  torpedoFireDelay?: number | null; torpedoReloadTime?: number | null;
 }): ShipPools | null {
   if (s.poolCombatPower == null || s.precisionDivisor == null) return null;
   return {
     poolCombatPower: s.poolCombatPower,
     poolPrecision: s.poolPrecision ?? 0,
     equivalentTurrets: s.equivalentTurrets ?? 1,
+    // Both left UNDEFINED on a hull with no bay, and undefined on a bridge too old to send them: the torpedo term
+    // is then absent rather than 0, and absent is the honest reading — 0 would say this ship has a bay that does
+    // nothing. The cadence needs BOTH periods, so one without the other is no bay at all.
+    poolTorpedoPower: s.poolTorpedoPower ?? undefined,
+    torpedo: s.torpedoFireDelay != null && s.torpedoReloadTime != null
+      ? { fireDelay: s.torpedoFireDelay, reloadTime: s.torpedoReloadTime,
+          latches: s.torpedoLatches != null && s.torpedoLatches > 0 ? s.torpedoLatches : 1 }
+      : null,
     // Left UNDEFINED rather than defaulted: a 0 pool reads as "this ship has no mining power", which a candidate
     // set's own contribution would then stand in for, making its guns look like the whole ship.
     poolMiningPower: s.poolMiningPower ?? undefined,
@@ -365,6 +382,13 @@ export interface Contribution {
   critDamage: number;
   typedDamage: Map<string, number>;   // damage type → fraction
   allDamage: number;
+  /**
+   * `DamageVsShield` / `DamageVsArmor`, as rolled. Kept APART from `allDamage` and from each other because they
+   * are worth different amounts: `ApplyVsLayerBonus` fires only while the layer it names still has capacity, and
+   * the two layers are not present at the same rate. Priced by `vsLayerCredit`, never added raw to a damage term.
+   */
+  vsShield: number;
+  vsArmor: number;
   // Fire-cycle stats. Pooled like everything else — `AbstractTurret.fireDelay` divides by the UNIT's
   // AttackSpeed — so a roll here belongs to the whole battery and not to the hardpoint carrying it.
   attackSpeed: number;
@@ -378,7 +402,8 @@ export interface Contribution {
    * term in `setDps` and must never be summed into a pool: `Critical Attenuation` (+25% critical damage) is
    * worth one gun's crits, and pooling it would credit the whole battery with a bonus one hardpoint carries.
    */
-  local: { critDamage: number; attackSpeed: number; reloadSpeed: number; magazineSize: number };
+  local: { critDamage: number; attackSpeed: number; reloadSpeed: number; magazineSize: number;
+           vsShield: number; vsArmor: number };
 }
 
 const norm = (s: string) => s.replace(/[^a-z0-9]/gi, "").toLowerCase();
@@ -529,6 +554,11 @@ function deriveContribution(it: Item): Contribution {
     critDamage: critDamage.add,
     typedDamage: typed,
     allDamage: folded(it, "Damage"),
+    // The game ships no translation for these two, so the bridge falls back to the EquipStat spelling and the
+    // line arrives as `DamageVsShield`. `norm` erases the difference between that and a display name that ever
+    // appears, so this reads either.
+    vsShield: folded(it, "DamageVsShield"),
+    vsArmor: folded(it, "DamageVsArmor"),
     attackSpeed: attackSpeed.add,
     reloadSpeed: reloadSpeed.add,
     magazineSize: magazineSize.add,
@@ -542,8 +572,57 @@ function deriveContribution(it: Item): Contribution {
       attackSpeed: localPart(it, "Attack Speed"),
       reloadSpeed: localPart(it, "Reload Speed"),
       magazineSize: localPart(it, "Magazine Size"),
+      vsShield: localPart(it, "DamageVsShield"),
+      vsArmor: localPart(it, "DamageVsArmor"),
     },
   };
+}
+
+/**
+ * WHAT ONE POINT OF A VS-LAYER ROLL IS WORTH, blind to the target.
+ *
+ * `ApplyVsLayerBonus` multiplies a shot by `1 + turret.GetStat(stat)` and fires ONLY while the layer it names
+ * still holds capacity, so the roll's worth is the chance the fight even reaches that layer. The two are not one
+ * term at one rate, and that asymmetry is the whole reason these are separate constants: a pool carrying armor HP
+ * with no armour MODULE absorbs nothing, and two of every three armour pools are in exactly that state, while a
+ * shield is usually live and its regeneration keeps putting capacity back between shots.
+ *
+ * The figures are label movement measured over a population of real units against one battery, per unit of roll,
+ * and they are stated for fights that HAVE a duration: half the population dies before the clock advances, and a
+ * target no gear choice can be wrong about must not dilute the rate every gear choice is ranked by.
+ *
+ * A BLIND RATE IS THE HONEST FORM ONLY UNTIL THE TARGET IS AN INPUT. Pricing at zero is wrong by this much on
+ * every fight; pricing at the rate is wrong by the remainder only where the target turns out to carry the other
+ * layer. Whichever is used, the surface that reports a gain must name which.
+ */
+export const VS_SHIELD_PER_POINT = 0.862;   // 0.25 of the roll moved the label 21.54%
+export const VS_ARMOR_PER_POINT = 0.096;    // the same roll, the other layer: 2.39%
+
+/**
+ * The blind credit for one gun's vs-layer rolls, as a fraction of its damage.
+ *
+ * SUMMED, not maximised: these are two expectations over the same population of targets, so a gun rolling both
+ * collects both chances. Only one can ever pay on a single shot, which is what the per-point rates already carry.
+ *
+ * NEGATIVE ROLLS ARE HONOURED. A stat line can read below zero and the game applies it as written.
+ */
+export function vsLayerCredit(vsShield: number, vsArmor: number): number {
+  const s = Number.isFinite(vsShield) ? vsShield : 0;
+  const a = Number.isFinite(vsArmor) ? vsArmor : 0;
+  return s * VS_SHIELD_PER_POINT + a * VS_ARMOR_PER_POINT;
+}
+
+/**
+ * ONE ITEM's own vs-layer rolls and what they are credited at, for a surface that has to explain a number.
+ *
+ * Both halves of each roll, pooled and weapon-local, because that is what the gun collects. `credit` is what
+ * `setDps` pays for them, so a card cannot state a figure the objective did not use.
+ */
+export function vsRollsOf(it: Item): { shield: number; armor: number; credit: number } {
+  const c = contributionOf(it);
+  const shield = c.vsShield + c.local.vsShield;
+  const armor = c.vsArmor + c.local.vsArmor;
+  return { shield, armor, credit: vsLayerCredit(shield, armor) };
 }
 
 /** Π of one pooled stat's multiplier across a set — the product `statMultipliers[st]` holds for those items. */
@@ -922,6 +1001,24 @@ const EXTRA_TURRET_PENALTY: ReadonlyArray<readonly [above: number, factor: numbe
  * The floor matters at the bottom of the range: a lone Tiny gun rates 0.45, and `pool / 0.45` is more than the
  * pool — the game floors the DIVISOR, so a single small gun cannot out-damage the whole pool.
  */
+/**
+ * THE PREFAB'S OWN FACTOR ON ATTACK POWER, and it is not 1 for a quarter of the turrets in the game.
+ *
+ * `AbstractTurret.powerMultiplier` is a serialized per-prefab field spanning **0.9 to 1.15** — Railgun 1.1, Laser
+ * 0.95, Laser Repeater 0.9, Plasma Repeater 1.15 — and `CalculateAttackPower` applies it to the WHOLE figure: the
+ * gun's own main power AND its share of the pool. Measured against the game's own `/ship/turrets/attack` on a live
+ * six-hardpoint battery, leaving it out put the model 9.09% LOW on both Railguns and 5.26% HIGH on the Laser while
+ * three other hardpoints matched exactly; applying it made all six exact.
+ *
+ * ⊥ A TABLE HERE. The value travels on the item (`Stores.AddDpsInputs`), because a client-side list of prefab
+ * names is the drift this project pays for most and a balance patch moves these numbers. Absent ⇒ 1, so an older
+ * bridge ranks exactly as it did before rather than by an invented factor.
+ */
+export const powerFactor = (it: Item): number => {
+  const m = it.powerMultiplier;
+  return m != null && Number.isFinite(m) && m > 0 ? m : 1;
+};
+
 export function poolShare(pool: number, nEq: number, bg: ShipPools): number {
   const eq = Math.max(0.45, nEq);
   if (!bg.extraTurretPenalty) return pool / eq;
@@ -985,11 +1082,48 @@ export function setDps(set: Item[], bg: ShipPools): number {
     // worth the whole battery, which is how giving one up could read as free.
     const loc = contribs[i].local;
     const crit = expectedCrit(critChance, critDamage + loc.critDamage, bg.megaCrit);
-    total += ((own + poolShare(shared, nEq, bg) * rating(it)) * mult / 5)
+    // POOLED PLUS THIS GUN'S OWN, like crit damage: `AbstractEquipment.GetStat` is `parent.GetStat(s)` plus the
+    // equipment's own lines, and `ApplyVsLayerBonus` reads it through the SOURCE TURRET, so a module's roll
+    // reaches every gun and an aspect's reaches one.
+    const vsLayer = vsLayerCredit(
+      contribs.reduce((n, c) => n + c.vsShield, 0) + loc.vsShield,
+      contribs.reduce((n, c) => n + c.vsArmor, 0) + loc.vsArmor);
+    total += ((own + poolShare(shared, nEq, bg) * rating(it)) * mult * powerFactor(it) / 5)
       * speedRatio(it, attackSpeed + loc.attackSpeed, reloadSpeed + loc.reloadSpeed, magazineSize + loc.magazineSize)
       * crit
       * (1 + typed + allDamage)
-      * (1 + aspectDamageFraction(it));
+      // THE ASPECT SHARE IS OUTSIDE THE VS-LAYER TERM, not merely beside it: `DamageOverTime.Tick` re-copies with
+      // `includeTurret: false`, which nulls `sourceTurret`, and `ApplyVsLayerBonus` is guarded on it ∴ no aspect
+      // payload ever collects the bonus, the instant ones included. Multiplying the two together would credit a
+      // roll on damage the game routes around it.
+      * (1 + vsLayer + aspectDamageFraction(it));
+  }
+
+  // THE TORPEDO BAY, added after the loop because it is not in `set`: it sits in a module slot, so no hardpoint
+  // walk can reach it. It is added rather than averaged in because a bay is extra output on top of the battery,
+  // not a share of it.
+  //
+  // ⚠ IT DRAWS ON THE SAME POOL THE GUNS DIVIDE, which is why the pool is rebuilt here from the loop's own
+  // pieces rather than read off `bg`: `GetNormalizedPower(CombatPower)` is `GetStat(CombatPower) / nEq`, and
+  // `GetStat` is the WHOLE pool — every gun's own main power included — so it has to be the same figure the loop
+  // spent or the two disagree about what the ship has. Fitting another Large turret therefore lowers every
+  // torpedo's damage, which is real and is the reason a bay cannot be priced as an independent slot.
+  //
+  // A gunless hull with a bay still scores 0, and deliberately: `nEq` is then 0, which is exactly the case where
+  // `GetNormalizedPower` hands back the UNDIVIDED pool, so a figure taken there is inflated by the whole turret
+  // count rather than merely uncertain.
+  if (bg.torpedo) {
+    const combatPool = mult * (shared + contribs.reduce((n, c) => n + c.combatPower, 0));
+    // A torpedo is ALWAYS Heat and never rolled, so Heat is the only typed bonus that reaches one. The crit is
+    // the battery's pooled figure with no gun's local lines: a torpedo has no source turret, so no aspect or
+    // per-gun boost is in its chain.
+    const heat = contribs.reduce((n, c) => n + (c.typedDamage.get("Heat") ?? 0), 0);
+    total += torpedoDps(
+      bg.torpedo,
+      torpedoPower(bg.poolTorpedoPower ?? 0, combatPool, nEq),
+      expectedCrit(critChance, critDamage, bg.megaCrit),
+      heat,
+      allDamage);
   }
   return total;
 }
@@ -1028,7 +1162,8 @@ export function setPower(set: Item[], bg: ShipPools, act: PowerActivity): number
 
   let total = 0;
   for (const it of set)
-    if (catOf(it) === act) total += (own(contributionOf(it)) + poolShare(shared, nEq, bg) * rating(it)) * mult;
+    if (catOf(it) === act)
+      total += (own(contributionOf(it)) + poolShare(shared, nEq, bg) * rating(it)) * mult * powerFactor(it);
   return total;
 }
 
@@ -1079,7 +1214,7 @@ export function setPowerByLayer(set: Item[], bg: ShipPools, act: PowerActivity, 
   const nEq = count && count > 0 ? count : mine.reduce((n, it) => n + rating(it), 0);
   if (!(nEq > 0)) return null;
   const mainOf = (it: Item) => (act === "Mining" ? contributionOf(it).miningPower : contributionOf(it).salvagePower);
-  return own.reduce((n, it) => n + (mainOf(it) + poolShare(shared, nEq, bg) * rating(it)) * mult, 0);
+  return own.reduce((n, it) => n + (mainOf(it) + poolShare(shared, nEq, bg) * rating(it)) * mult * powerFactor(it), 0);
 }
 
 /** Which non-combat pool a set is judged against. Mining wins a mixed non-combat battery — one number has to be
@@ -1151,18 +1286,28 @@ const MODULE_POOLS: ReadonlyArray<readonly [pool: keyof ShipPools, mult: keyof S
   ["poolAttackSpeed", null, "Attack Speed"],
   ["poolReloadSpeed", null, "Reload Speed"],
   ["poolMagazineSize", null, "Magazine Size"],
+  // A REAL POOL, not a courtesy entry: a bay's `TorpedoPower` roll enters it additively and `setDps` spends it,
+  // so a swap that changes it changes the answer. No reported multiplier to fold (the bridge sends no
+  // `poolTorpedoPowerMult`) ∴ null, and a `× Torpedo Power` line still applies through `poolPart`'s own factor.
+  ["poolTorpedoPower", null, "Torpedo Power"],
 ];
 
 /**
  * Does the objective PRICE this stat on a module, or merely notice it?
  *
- * `MODULE_POOLS` is the whole list a module swap can move, so a stat outside it — Torpedo Power, Kinetic
- * Resistance, Hull HP — changes the score by exactly nothing. That is ⊥ a claim it is worthless: it is a
- * statement that the objective has NO OPINION, and the difference matters on a card where a player is weighing
- * "+3,892 Torpedo Power" against "−1,220 Precision" and cannot otherwise know which of the two the app acted on
- *. Derived from the table itself ∴ adding a pool teaches every surface at once.
+ * `MODULE_POOLS` is the whole list a module swap can move, so a stat outside it — Kinetic Resistance, Weapon
+ * Range — changes the score by exactly nothing. That is ⊥ a claim it is worthless: it is a statement that the
+ * objective has NO OPINION, and the difference matters on a card where a player is weighing "+0.07 Kinetic
+ * Resistance" against "−1,220 Precision" and cannot otherwise know which of the two the app acted on.
+ * Derived from the table itself ∴ adding a pool teaches every surface at once.
+ *
+ * ⚠ ONE ASYMMETRY THIS TABLE CANNOT EXPRESS: it is read by `poolsWithModule` and by nothing on the TURRET path,
+ * so a pool a GUN also contributes to is moved by a module swap and ⊥ by a hardpoint swap. `Torpedo Power` is the
+ * live case — a fitted Burst Railcaster carries +2,617 of it — so swapping that gun for one without the line
+ * leaves the torpedo term where it was and flatters the candidate. Bounded: the term is a few percent of a
+ * gunship's output, and fixing it means the turret contribution reading this table too.
  */
-export type StatChannel = "pool" | "bracket" | null;
+export type StatChannel = "pool" | "bracket" | "layer" | null;
 
 /**
  * Stats priced through the REACTOR BRACKET rather than as a pool of their own.
@@ -1182,6 +1327,20 @@ export type StatChannel = "pool" | "bracket" | null;
 const BRACKET_STATS = ["Energy", "Power use"] as const;
 
 /**
+ * The three LAYER stats, which are priced — just not as pools.
+ *
+ * `Hull HP`, `Armor HP` and `Shield HP` never enter `MODULE_POOLS`, so the card called them "not scored — your
+ * call" while three separate mechanisms were reading them: the ranked goal (`goalReadingOf`'s `hull|armor|shield`,
+ * projected by `projectLayer`), the layer floor a frontier point is solved under, and `goalDrops`, which warns on
+ * any tracked key a plan sheds. An Armor Plating's whole worth is its `× Armor HP` ∴ marking it unscored beside a
+ * swap that halves it is the panel contradicting the objective.
+ *
+ * A MULTIPLIER and a flat amount are both here: `projectLayer` divides the outgoing product out and puts the
+ * incoming one back, so it prices the two halves together.
+ */
+const LAYER_STATS = ["Hull HP", "Armor HP", "Shield HP"] as const;
+
+/**
  * WHICH channel prices a stat, or `null` where the objective genuinely has no opinion.
  *
  * `compareStats` names the two halves of one stat line DIFFERENTLY — `Precision` for the additive delta and
@@ -1195,6 +1354,9 @@ export const moduleStatChannel = (stat: string): StatChannel => {
   // The umbrella feeds all three power pools, additive and multiplier alike (`poolPart`).
   if (want === "power") return "pool";
   if (BRACKET_STATS.some((s) => norm(s) === want)) return "bracket";
+  // A layer stat is priced through the PROJECTION, not a pool: the ranked goal reads hull, armor and shield off
+  // `/ship/vitals` moved by `projectLayer`, and the drop warning watches all three whatever the order says.
+  if (LAYER_STATS.some((s) => norm(s) === want)) return "layer";
   return null;
 };
 
@@ -1233,6 +1395,17 @@ export function poolsWithModule(pools: ShipPools, out: Item | null, inn: Item | 
     write[pool] = Math.max(0, (reported + add * m) * mul);
     if (multKey && pools[multKey] != null) write[multKey] = m * mul;
   }
+  // THE BAY'S CADENCE MOVES WITH THE BAY, and it is not covered by the pool loop above: `MODULE_POOLS` moves
+  // `poolTorpedoPower`, which is what a bay's roll is worth, while HOW OFTEN it launches is a prefab constant
+  // that belongs to the module itself. Miss this and two bays with different cycles compare on their power roll
+  // alone — the same shape of defect as pricing the roll at zero, one level in.
+  //
+  // ⚠ LATCHES DO NOT MOVE: they are the HULL's (`SetDoorMechanismAndLatchPoints` walks the parent's own door
+  // children), so the count survives a bay swap and the incoming bay inherits it.
+  const inBay = bayOf(inn, pools.torpedo?.latches);
+  if (inBay) next.torpedo = inBay;
+  else if (bayOf(out, pools.torpedo?.latches)) next.torpedo = null;  // the bay came out and nothing replaced it
+
   // THE REPORTED CRIT CHANCE MOVES WITH PRECISION, or the change cancels itself.
   //
   // `background` recovers the ship's additive crit sources (skill tree, officers, crit aspects) by subtracting
@@ -1653,9 +1826,42 @@ export function projectLayer(cur: number | null, stat: string, curSet: Item[], n
  *  live in the pools at all — they are the GAME's own `/ship/vitals` reading, projected by `projectLayer` — so
  *  they arrive as `layers` or not at all, and a key with no reading orders nothing (`goalSign`) rather than
  *  silently counting as unchanged. */
-export function goalReadingOf(p: ShipPools | null | undefined, rank?: Rank,
+/**
+ * THE POWER POOLS AS THE PLANNED BUILD WOULD ACTUALLY READ THEM, bracket included.
+ *
+ * `poolsWithModule` moves a pool by the module's own stat lines and moves the ENERGY budget, but it does not
+ * re-scale the pools by the bracket that budget lands in — the scorers do that themselves (`poolParts`
+ * de-brackets and re-brackets around each candidate). A ranked READING taken straight off those pools therefore
+ * cannot see a reactor collapse: a swap halving capacity took the load 41% → 82% and the bonus +20% → 0%, the
+ * panel said in as many words that the plan was WORSE, and the goal key barely moved — so the gate accepted it
+ *. Same two-projections family as one layer further in.
+ *
+ * The three power pools scale; Precision does not (no bracket applies to it), and the layers arrive already
+ * projected. `/status` pools carry the CURRENT modifier baked in ∴ `repowered` divides it out before applying
+ * the new one, or the factor compounds.
+ */
+export function bracketed(p: ShipPools): ShipPools {
+  const e = p.energy;
+  if (!e || !(e.capacity > 0)) return p;
+  const was = e.mod ?? 0;                       // the modifier the reported pools were measured under
+  const now = reactorModifier(loadWith(e, 0));  // and the one this build's own draw lands in
+  if (Math.abs(now - was) < 1e-9) return p;
+  const move = (v: number | undefined) => (v == null ? v : repowered(v, was, now));
+  return {
+    ...p,
+    poolCombatPower: move(p.poolCombatPower) as number,
+    poolMiningPower: move(p.poolMiningPower),
+    poolSalvagePower: move(p.poolSalvagePower),
+    energy: { ...e, mod: now },
+  };
+}
+
+export function goalReadingOf(pools: ShipPools | null | undefined, rank?: Rank,
                               layers?: { hull?: number | null; armor?: number | null; shield?: number | null }): GoalReading {
-  if (!p) return {};
+  if (!pools) return {};
+  // EVERY RANKED READING IS BRACKETED, at the one owner rather than at each caller: a reading that skipped it
+  // would be the same defect back in whichever surface forgot.
+  const p = bracketed(pools);
   return {
     combat: p.poolCombatPower,
     precision: p.poolPrecision,
@@ -1706,17 +1912,72 @@ export function defaultGoalOrder(role?: string | null): GoalKey[] {
  *
  * A key missing from either reading is skipped rather than treated as zero — absent and "fell to nothing" are
  * different claims, and a bridge that stops reporting a pool must not read as every plan destroying it.
+ *
+ * ⚠ ONLY THE LAYER THE HULL ACTUALLY TANKS ON IS WATCHED, and this is a PERCENTAGE problem rather than a policy
+ * one. A drop is `(a - b) / a` with no absolute floor, and the layer a hull has no module for is whatever its guns
+ * happen to roll: measured on an armour hull, shield read 10,646 against armour 1,729,044, with two fitted turrets
+ * carrying 2,900 and 2,459 of that shield between them ∴ swapping either gun is a 23% to 27% "drop" in Shield and
+ * a fifth of a percent of the ship's actual survivability. Warning on it trains the player to ignore the warning,
+ * which costs the cases that matter.
+ *
+ * `tanks` is the hull's own defensive slot (`defenseLayerOf`), so it is STRUCTURAL: a gear swap cannot move it.
+ * Null means the hull has NO defensive module at all, and then BOTH layers are watched — with nothing to be
+ * primary, either falling is worth saying. HULL is always watched: every hull carries a hull kit, so it is never
+ * the vestigial case this excludes.
  */
 export function goalDrops(fitted: GoalReading, planned: GoalReading,
-                          threshold: number): { key: GoalKey; drop: number }[] {
+                          threshold: number,
+                          tanks?: "armor" | "shield" | null): { key: GoalKey; drop: number }[] {
   const out: { key: GoalKey; drop: number }[] = [];
   for (const k of GOAL_KEYS) {
+    // The OTHER layer is a nicety on this hull, and a nicety measured as a percentage of almost nothing.
+    if (tanks && (k === "armor" || k === "shield") && k !== tanks) continue;
     const a = fitted[k], b = planned[k];
     if (a == null || b == null || !Number.isFinite(a) || !Number.isFinite(b) || !(a > 0)) continue;
     const drop = (a - b) / a;
     if (drop > threshold) out.push({ key: k, drop });
   }
   return out.sort((x, y) => y.drop - x.drop);
+}
+
+/**
+ * THE ALLOWANCE, and it is what an ORDER cannot be: a price.
+ *
+ * An order SEQUENCES keys — any gain on the first outranks any loss below it, however large, and the tie band only
+ * widens the dead zone ( measured a plan spending 21% of Combat Power and 6% of armor for 2.66% of a DPS
+ * index, accepted because DPS was ranked first). A WEIGHT would price the trade and stays refused for V31's
+ * reason: nobody knows what a hull point is worth in damage.
+ *
+ * What a player CAN state without an exchange rate is a floor under what they already fly: **this ranked stat may
+ * fall by at most `allow`**, as a fraction of the fitted build. No magnitude, no cross-stat rate — the same
+ * argument `DEFAULT_LAYER_CAP` already won for the layers, applied to every key the player ranked.
+ *
+ * THE MAXIMAND IS EXEMPT, because it is the thing being bought: an allowance on `order[0]` would refuse the plan
+ * for succeeding. Keys the player did NOT rank are exempt too — a constraint nobody asked for is the churn V70's
+ * incumbency rule exists to stop, and a salvage refit legitimately sheds combat power.
+ *
+ * ABSENT ON EITHER SIDE IS SKIPPED, never zero: a bridge that stops reporting a pool must not read as every plan
+ * destroying it (`goalDrops`' own rule).
+ *
+ * Reports the WORST breach, with the drop and the allowance, because a refusal that cannot say which stat bound
+ * it and by how much is one the player can do nothing with.
+ */
+export const DEFAULT_ALLOWANCE = 0.02;
+
+export interface Breach { key: GoalKey; drop: number; allow: number }
+
+export function allowanceBreach(order: readonly GoalKey[], fitted: GoalReading, planned: GoalReading,
+                                allow: number): Breach | null {
+  if (!(allow >= 0) || order.length < 2) return null;
+  let worst: Breach | null = null;
+  // `slice(1)`: the first key is the maximand.
+  for (const k of order.slice(1)) {
+    const a = fitted[k], b = planned[k];
+    if (a == null || b == null || !Number.isFinite(a) || !Number.isFinite(b) || !(a > 0)) continue;
+    const drop = (a - b) / a;
+    if (drop > allow && (!worst || drop > worst.drop)) worst = { key: k, drop, allow };
+  }
+  return worst;
 }
 
 export function goalRefuses(order: readonly GoalKey[], fitted: GoalReading, planned: GoalReading,
@@ -1790,6 +2051,57 @@ export function liveVeto(recorded: { sig: string; key: GoalKey } | null | undefi
   return recorded && recorded.sig === sig ? recorded.key : null;
 }
 
+/**
+ * Is this plan worth offering — the ONE gate, with the order and the floor each owning the case it can answer.
+ *
+ * V17 puts the worth-it floor in the objective rather than in the tab, so the rule about WHEN the floor still
+ * applies belongs here too, beside it.
+ *
+ * Three cases, and each is the only honest answer to its own question:
+ *
+ *   no order stated       `worthSwitching`, exactly as before. Nothing about this path changes for a player who
+ *                         has stated nothing, which is what makes the feature additive.
+ *   order, and it speaks  the band decides. `goalSign` has already applied `OBJECTIVE_TIE` against the fitted
+ *                         build, so a move too small to mean anything reads as `same` and never reaches here as a
+ *                         gain — the anti-churn job `MIN_GAIN` was built for, done by the band instead. Applying
+ *                         the floor on top would withhold a plan that is better on the key the player ranked
+ *                         FIRST because the battery's own scalar moved less than 1%, which is the objective
+ *                         overruling the person it belongs to.
+ * order, and it is mute every ranked key tied ∴ the objective is silent, and a tie-break may
+ *                         decide only where it is. The floor is that tie-break, unchanged.
+ */
+export function goalAccepts(order: readonly GoalKey[], fitted: GoalReading, planned: GoalReading,
+                            plan: Rank, now: Rank, band = OBJECTIVE_TIE, allow?: number): boolean {
+  // THE ALLOWANCE IS ABOVE THE ORDER, and that is the whole change: an order can only sequence keys, so a plan
+  // spending a ranked stat past what the player allowed used to be accepted on the strength of the key above it.
+  // Checked here as well as inside the search, because the search's answer is a plan and this is the gate that
+  // decides whether a plan is OFFERED — a constraint applied at one of the two is the half-applied helper V17
+  // names.
+  if (allow != null && allowanceBreach(order, fitted, planned, allow)) return false;
+  if (!order.length) return worthSwitching(plan, now);
+  const signs = goalVector(order, planned, fitted, band);
+  if (signs.every((s) => s === 0)) return worthSwitching(plan, now);
+  return goalPrefers({ signs });
+}
+
+/**
+ * The ranked keys this plan cannot be judged on, in the player's own order.
+ *
+ * V48: a key the search cannot MOVE and a key it moved to a tie are the same pixels — nothing — and the second is
+ * a verdict while the first is an absence. A turret plan is the case that matters: the battery's own pools are read
+ * from the same `/status` figures on both sides, so `combat`, `precision` and the layers come back identical no
+ * matter which guns are chosen, and an order of `[combat, armor]` would silently rank on nothing at all.
+ *
+ * ABSENT ON EITHER SIDE, never "equal": two readings that are genuinely equal are a measurement, and this reports
+ * only the keys where no measurement exists.
+ */
+export function goalUnread(order: readonly GoalKey[], fitted: GoalReading, planned: GoalReading): GoalKey[] {
+  return order.filter((k) => {
+    const a = fitted[k], b = planned[k];
+    return a == null || b == null || !Number.isFinite(a) || !Number.isFinite(b);
+  });
+}
+
 /** How a refused key reads on screen. */
 export const GOAL_LABEL: Record<GoalKey, string> = {
   dps: "DPS", combat: "Combat Power", precision: "Precision", mining: "Mining Power",
@@ -1839,14 +2151,14 @@ const MAX_ENUMERATED_SLOTS = 8;
  */
 export function optimizeTurretSetLayered(
   slots: SlotChoice[], bg: ShipPools, act: PowerActivity,
-  opts: { target?: LayerTarget; maxPasses?: number; fixed?: Item[] } = {},
+  opts: { target?: LayerTarget; maxPasses?: number; fixed?: Item[]; goal?: TurretGoal } = {},
 ): Map<string, Item> {
-  const { target = "balanced", maxPasses = 4, fixed = [] } = opts;
+  const { target = "balanced", maxPasses = 4, fixed = [], goal } = opts;
 
   // A single-layer target needs no enumeration at all: filter to that layer and maximise one number.
   if (target !== "balanced") {
     const layer = LAYER_OF[target];
-    return optimizeTurretSet(slots.map((s) => forLayer(s, act, layer)), bg, maxPasses, fixed, target, act);
+    return optimizeTurretSet(slots.map((s) => forLayer(s, act, layer)), bg, maxPasses, fixed, target, act, goal);
   }
 
   // A hull with one hardpoint cannot cover two layers, so `balanced` would score every option 0 and the pick would
@@ -1865,7 +2177,7 @@ export function optimizeTurretSetLayered(
   // Past the cap the enumeration stops being interactive; the plain ascent is still monotone and still correct,
   // just no longer proof against a local optimum.
   if (free.length > MAX_ENUMERATED_SLOTS) {
-    return optimizeTurretSet(slots, bg, maxPasses, fixed, target, act);
+    return optimizeTurretSet(slots, bg, maxPasses, fixed, target, act, goal);
   }
 
   const pinned = new Map<string, Layer>();
@@ -1885,7 +2197,7 @@ export function optimizeTurretSetLayered(
     const l = pinned.get(s.key);
     return l ? forLayer(s, act, l) : s;
   });
-  let best: Map<string, Item> = optimizeTurretSet(underPins, bg, maxPasses, fixed, target, act);
+  let best: Map<string, Item> = optimizeTurretSet(underPins, bg, maxPasses, fixed, target, act, goal);
   let bestScore: Rank = setRank([...fixed, ...best.values()], bg, target, act);
   for (let mask = 0; mask < 1 << free.length; mask++) {
     const layerFor = new Map(pinned);
@@ -1896,7 +2208,7 @@ export function optimizeTurretSetLayered(
     if (reach.size < 2) continue;
 
     const chosen = optimizeTurretSet(
-      slots.map((s) => forLayer(s, act, layerFor.get(s.key)!)), bg, maxPasses, fixed, target, act,
+      slots.map((s) => forLayer(s, act, layerFor.get(s.key)!)), bg, maxPasses, fixed, target, act, goal,
     );
     const score = setRank([...fixed, ...chosen.values()], bg, target, act);
     if (best == null || rankGt(score, bestScore)) { best = chosen; bestScore = score; }
@@ -1922,10 +2234,51 @@ export function optimizeTurretSetLayered(
 // `fixed` are turrets the ship keeps but this call is not choosing (hand-set slots, hardpoints outside the filter).
 // They take part in every evaluation: the objective is the WHOLE battery, so scoring a subset answers a question
 // about a ship that does not exist.
-export function optimizeTurretSet(slots: SlotChoice[], bg: ShipPools, maxPasses = 4, fixed: Item[] = [], target: LayerTarget = "balanced", act?: PowerActivity): Map<string, Item> {
+/**
+ * What a TURRET-only search needs to read the player's order: the order, the fitted reference, and the REPORTED
+ * pools the reading is projected from.
+ *
+ * The pools are the missing half and the reason this exists: a background has the fitted battery's own
+ * contributions already stripped out of it, so a ranked key cannot be read off one. Without this the turret
+ * search ordered candidates by the DPS index ALONE and the player's order spoke only as a veto at the end —
+ * which is how a gun the index likes and every other key dislikes kept coming back.
+ */
+export interface TurretGoal {
+  order: readonly GoalKey[];
+  fitted: GoalReading;
+  pools: ShipPools;
+  /**
+   * Hull, armor and shield as a candidate BATTERY would read them. A gun moves a layer: a turret's own `Armor HP`
+   * or `Hull HP` line is additive, and the Armor Plating's or Hull Kit's multiplier scales it, so one hardpoint's
+   * few thousand points land as hundreds of thousands on a ship carrying a large plating multiplier.
+   *
+   * Absent leaves those three keys unread, and an unread key orders nothing (`goalSign`) ∴ the search and the
+   * allowance are both blind to a layer the player ranked, and a battery may spend it without bound.
+   */
+  layers?: (guns: (Item | null)[]) => LayerReading;
+  allow?: number;
+}
+
+export function optimizeTurretSet(slots: SlotChoice[], bg: ShipPools, maxPasses = 4, fixed: Item[] = [], target: LayerTarget = "balanced", act?: PowerActivity, goal?: TurretGoal): Map<string, Item> {
+  // Positional against the assignment below, so a slot nobody re-picks swaps its own gun for itself and the
+  // projection moves nothing.
+  const gunsOut = slots.map((s) => s.current ?? null);
+  const gunsIn = (chosen: ReadonlyMap<string, Item>) =>
+    slots.map((s) => chosen.get(s.key) ?? s.current ?? null);
   return optimizeGearSet({
     slots,
     maxPasses,
+    goal: goal && goal.order.length ? {
+      order: goal.order,
+      fitted: goal.fitted,
+      allow: goal.allow,
+      // A ranked key is a figure of the SHIP ∴ the hardpoint deltas are folded onto the reported pools, and
+      // the layers are projected from the same assignment — they are vitals rather than pools, so they arrive by
+      // their own callback or not at all.
+      reading: (chosen, rank) =>
+        goalReadingOf(poolsWithModules(goal.pools, gunsOut, gunsIn(chosen)), rank,   // goal-projection
+                      goal.layers?.(gunsIn(chosen))),
+    } : undefined,
     score: (chosen) => setRank([...fixed, ...chosen.values()], bg, target, act),
     alone: (it) => setRank([...fixed, it], bg, target, act),
   });
@@ -1946,8 +2299,51 @@ export function optimizeTurretSet(slots: SlotChoice[], bg: ShipPools, maxPasses 
  * `ctx` carries the parts of the decision the objective cannot see — role, fit, layer target, activity. Its
  * `pools`, `turrets` and `energy` are supplied per evaluation and whatever the caller sets is ignored.
  */
+/**
+ * What a caller states about the player's order. Narrower than `GearSearch["goal"]` on purpose: only the search
+ * knows how to project a candidate assignment onto the pools, so the caller supplies the ORDER and the fixed
+ * reference and lets the search build the reading.
+ *
+ * `layers` is optional because hull, armor and shield are the GAME's `/ship/vitals` figures rather than pools ∴
+ * only a caller holding those maxima can project them, and it supplies them or nothing. Left absent, those keys
+ * read as unset, which orders nothing (`goalSign`) rather than reading as unchanged — so a search without them
+ * cannot refuse a plan for spending a layer.
+ *
+ * IT RECEIVES BOTH HALVES, because both move a layer: a turret's flat `Armor HP` is scaled by the plating
+ * multiplier exactly as a module's is. `guns` is what the CANDIDATE battery holds in the slots this search is
+ * choosing, absent where the battery is not moving. A closure that projects from the FITTED battery while the
+ * search is picking guns prices every candidate's armor identically, and the plan is then refused by a gate that
+ * can see what the search could not.
+ */
+export interface GoalInput {
+  order: readonly GoalKey[];
+  fitted: GoalReading;
+  layers?: (mods: (Item | null)[], guns?: (Item | null)[]) => LayerReading;
+  /**
+   * How much of a RANKED key (other than the maximand) a plan may spend, as a fraction of the fitted build. A
+   * candidate breaching it is INFEASIBLE rather than merely lower-ranked, so the ascent orders it below every
+   * feasible build and can still climb out through it. Absent ⇒ no allowance, which is the old behaviour exactly.
+   */
+  allow?: number;
+}
+
+/**
+ * A floor on the ONE layer this hull tanks on — the constraint a frontier point is solved under.
+ *
+ * ONE layer, never a sum: the hull's own slots say whether it is an armor or a shield ship, so the other
+ * two are things not to wreck rather than things to maximise, and a summed EHP would hide one layer collapsing
+ * while another rose to cover it. That also means no cross-layer exchange rate is needed anywhere here.
+ */
+export interface LayerFloor {
+  layer: keyof LayerReading;
+  /** The projected HP a plan must keep, absolute. Below it the assignment is infeasible. */
+  min: number;
+  read: (mods: (Item | null)[]) => LayerReading;
+}
+
 export function optimizeModuleSet(
   slots: SlotChoice[], pools: ShipPools, turrets: Item[], ctx: ModuleCtx = {}, maxPasses = 4,
+  goal?: GoalInput,
 ): Map<string, Item> {
   // What each open slot holds now. Positional against the assignment below, so a slot nobody re-picks swaps its
   // own item for itself and moves nothing.
@@ -1955,11 +2351,25 @@ export function optimizeModuleSet(
   const inn = (chosen: ReadonlyMap<string, Item>, override?: { at: string; item: Item }) =>
     slots.map((s) => (override && s.key === override.at ? override.item : chosen.get(s.key) ?? s.current ?? null));
 
+  // The pools this candidate implies, kept from `score` so the goal reading does not fold the whole module
+  // assignment onto the pools a SECOND time for every candidate — that is the expensive half of the loop.
+  // Sound because `optimizeGearSet` judges one assignment by calling `score` and then `reading`, in that order,
+  // and never between two assignments.
+  let scored: ShipPools | null = null;
+
   return optimizeGearSet({
     slots,
     maxPasses,
+    goal: goal && {
+      order: goal.order,
+      fitted: goal.fitted,
+      allow: goal.allow,
+      reading: (chosen, rank) =>
+        goalReadingOf(scored ?? pools, rank, goal.layers?.(inn(chosen))),
+    },
     score: (chosen) => {
       const next = poolsWithModules(pools, out, inn(chosen));
+      scored = next;
       return setRank(turrets, background(next, turrets), ctx.target, ctx.act);
     },
     // `moduleBetter` is asked, never re-derived: its bands decide when the objective is SILENT rather than
@@ -1994,6 +2404,10 @@ export interface ShipSearch {
   target?: LayerTarget;
   act?: PowerActivity;
   maxPasses?: number;
+  /** The player's stated order. Absent, the ascent ranks on the objective's scalar exactly as it always did. */
+  goal?: GoalInput;
+  /** A floor on the tanking layer. Absent, every assignment is feasible and the search is unchanged. */
+  floor?: LayerFloor;
 }
 
 /**
@@ -2010,7 +2424,8 @@ export interface ShipSearch {
  * the order, because capacity moves before the guns that spend it.
  */
 export function optimizeShipSet({
-  turretSlots, moduleSlots, pools, fittedTurrets, fixedTurrets = [], ctx = {}, target, act, maxPasses = 4,
+  turretSlots, moduleSlots, pools, fittedTurrets, fixedTurrets = [], ctx = {}, target, act, maxPasses = 4, goal,
+  floor,
 }: ShipSearch): Map<string, Item> {
   // Positional against `inn` below, so a module slot nobody re-picks swaps its own item for itself.
   const out = moduleSlots.map((s) => s.current ?? null);
@@ -2027,16 +2442,50 @@ export function optimizeShipSet({
   // per candidate instead of a full re-derivation of every pool.
   let lastMods: (Item | null)[] | null = null;
   let lastBg: ShipPools | null = null;
-  const bgFor = (mods: (Item | null)[]): ShipPools => {
-    if (lastBg && lastMods && lastMods.length === mods.length && lastMods.every((m, i) => m === mods[i])) return lastBg;
+  // The same derivation, one step earlier: the goal reads the POOLS this assignment implies while the objective
+  // reads the background stripped out of them, and deriving each separately would fold the modules on twice.
+  let lastPools: ShipPools | null = null;
+  const fill = (mods: (Item | null)[]) => {
+    if (lastBg && lastMods && lastMods.length === mods.length && lastMods.every((m, i) => m === mods[i])) return;
     lastMods = mods;
-    lastBg = background(poolsWithModules(pools, out, mods), fittedTurrets);
-    return lastBg;
+    lastPools = poolsWithModules(pools, out, mods);
+    lastBg = background(lastPools, fittedTurrets);
   };
+  const bgFor = (mods: (Item | null)[]): ShipPools => { fill(mods); return lastBg!; };
+  const poolsFor = (mods: (Item | null)[]): ShipPools => { fill(mods); return lastPools!; };
+
+  // WHAT THE PLAYER'S KEY IS A FIGURE OF: the SHIP, ⊥ the battery. `poolsFor` folds the module assignment alone,
+  // which is right for the background a battery is scored against (`setDps` adds each candidate gun's own
+  // contribution, so folding the guns in there counts them twice) and WRONG for a ranked reading: a plan that
+  // trades 6,188 of Salvage Power on a hardpoint for a module's `Power` line then reads as pure gain on the very
+  // key the player ranked. So the guns are folded on top, positionally against what each hardpoint holds now.
+  // `fixedTurrets` are on both sides of the swap ∴ they are not listed at all.
+  const gunsOut = turretSlots.map((s) => s.current ?? null);
+  const gunsIn = (chosen: ReadonlyMap<string, Item>) =>
+    turretSlots.map((s) => chosen.get(s.key) ?? s.current ?? null);
+  const shipPoolsFor = (chosen: ReadonlyMap<string, Item>, mods: (Item | null)[]): ShipPools =>
+    poolsWithModules(poolsFor(mods), gunsOut, gunsIn(chosen));
 
   return optimizeGearSet({
     slots: [...moduleSlots, ...turretSlots],
     maxPasses,
+    goal: goal && {
+      order: goal.order,
+      fitted: goal.fitted,
+      allow: goal.allow,
+      reading: (chosen, rank) => {
+        const mods = inn(chosen);
+        // BOTH halves of the candidate reach the projection: this search moves guns as well as modules, and a
+        // layer read off the fitted battery would price every candidate's armor the same.
+        return goalReadingOf(shipPoolsFor(chosen, mods), rank, goal.layers?.(mods, gunsIn(chosen)));
+      },
+    },
+    feasible: floor && ((chosen) => {
+      const got = floor.read(inn(chosen))[floor.layer];
+      // A layer with NO reading cannot be judged against a floor, and refusing every build for that would turn a
+      // missing `/ship/vitals` into "nothing is possible". Absent is unconstrained, as it is everywhere else.
+      return got == null || !Number.isFinite(got) || got >= floor.min;
+    }),
     // ONE evaluation for both halves: the modules decide the pools (capacity included), the battery is scored
     // against them, and `setDps` adds the candidate battery's own draw — so a bracket edge is crossed, or
     // cleared, by the WHOLE plan rather than by either half's guess about the other.
@@ -2064,8 +2513,98 @@ export function optimizeShipSet({
     },
   });
 }
+/**
+ * ONE BUILD THE SEARCH FOUND AT ONE ALLOWANCE.
+ *
+ * WHY THE ALLOWANCE IS THE AXIS. A ranked order is lexicographic ∴ it can only express the extremes: `[dps,
+ * shield]` is near-full-damage with shield breaking exact ties, and no ordering of two keys lands between them.
+ * A weight would land between them and cannot be stated, there being no knowable exchange rate between a hull
+ * point and a point of damage. The ALLOWANCE is the thing a player CAN state, since it is a fraction of the build
+ * they already fly rather than a rate between two stats, and sweeping it enumerates the middle: each point is
+ * what the search returns when it may spend that much, and the pick implies the rate without anyone writing it
+ * down. ∴ this is one mechanism with the `allow` control, ⊥ a second one beside it.
+ */
+export interface FrontierPoint {
+  /** The allowance this build was solved under, as a fraction of the fitted build. 0 = spend nothing. */
+  allow: number;
+  /** The assignment, ready to become the plan. */
+  chosen: Map<string, Item>;
+  rank: Rank;
+  /** Every ranked key as this build reads it, so a row can print the figures the player ordered by. */
+  reading: GoalReading;
+}
+
+/**
+ * Sweep the allowance and collect the builds it produces.
+ *
+ * DEDUPED BY ASSIGNMENT: neighbouring allowances usually solve to the same build, and a list showing one answer
+ * five times reads as five choices. The caller gets the distinct ones, in the order they were solved, and learns
+ * how many steps collapsed so a short list cannot be mistaken for a small armory.
+ *
+ * A GOAL IS REQUIRED. Without one there is nothing for an allowance to bound, so every step solves identically
+ * and the sweep is one row that says nothing.
+ */
+export function frontier(search: ShipSearch, steps: readonly number[]): FrontierPoint[] {
+  const out: FrontierPoint[] = [];
+  const seen = new Set<string>();
+  if (!search.goal || !search.goal.order.length) return out;
+
+  for (const allow of steps) {
+    const goal = { ...search.goal, allow };
+    const chosen = optimizeShipSet({ ...search, goal });
+
+    const sig = [...chosen.entries()].map(([k, v]) => `${k}=${v.key}`).sort().join("|");
+    if (seen.has(sig)) continue;
+    seen.add(sig);
+
+    const mods = search.moduleSlots.map((s) => chosen.get(s.key) ?? s.current ?? null);
+    // Positional over the slots this search chose, which is what the projection expects: the pinned hardpoints
+    // are added by the caller's closure, on both sides.
+    const picked = search.turretSlots.map((s) => chosen.get(s.key) ?? s.current ?? null);
+    const guns = [...(search.fixedTurrets ?? []), ...picked.filter((x): x is Item => !!x)];
+    const projected = poolsWithModules(search.pools, search.moduleSlots.map((s) => s.current ?? null), mods);
+    const rank = setRank(guns, background(projected, search.fittedTurrets), search.target, search.act);
+
+    // ⚠ TWO DIFFERENT POOL READINGS, and using one for both is the defect this replaces.
+    //
+    // `projected` folds the MODULES only, which is what a battery must be scored against: `setDps` adds each
+    // candidate gun's own contribution, so folding the guns in there would count them twice.
+    //
+    // A RANKED READING needs the guns folded on top as well, exactly as `shipPoolsFor` does inside the search that
+    // produced this assignment. Without it a row that swaps a salvage or mining turret printed `Salvage Power`
+    // unchanged and 0% against the fitted build, on the very key the player ranked it by — the trap the comment
+    // above `shipPoolsFor` describes, one call site over.
+    const ranked = poolsWithModules(projected, search.turretSlots.map((s) => s.current ?? null), picked); // goal-projection
+    out.push({
+      allow,
+      chosen,
+      rank,
+      // BOTH halves of the candidate reach the projection, or a row prints the fitted battery's layers beside a
+      // battery the search actually replaced.
+      reading: goalReadingOf(ranked, rank, goal.layers?.(mods, picked)),
+    });
+  }
+  return out;
+}
+
+/**
+ * The allowances to solve at, as fractions of the fitted build.
+ *
+ * 0 is the strictest end: a plan may spend nothing of any ranked key below the first, so it buys damage only
+ * where damage is free. The top of the range is loose enough to reach the build the order alone would have
+ * chosen. Coarse on purpose: each step is a whole search, and two steps a percent apart almost always solve to
+ * the same assignment anyway. The player's OWN allowance is added to these by the caller, so the sweep always
+ * contains the row they are actually flying under.
+ */
+export const FRONTIER_STEPS = [0, 0.02, 0.05, 0.1, 0.25] as const;
 
 const NO_ASSIGNMENT: ReadonlyMap<string, Item> = new Map();
+
+/** Shared by every judgement made without a stated order, so an unranked ascent allocates nothing per candidate. */
+const NO_SIGNS: GoalSign[] = [];
+
+/** One assignment as the ascent orders it: the objective's own figure, and the player's key signs beside it. */
+interface Judged { rank: Rank; signs: GoalSign[]; ok: boolean }
 
 /** What an ascent needs to know about the thing it is choosing. */
 export interface GearSearch {
@@ -2097,6 +2636,36 @@ export interface GearSearch {
    * invent a tie rule of its own, or there are two answers to "is this better" again.
    */
   tie?: (cand: Item, best: Item, at: string, chosen: ReadonlyMap<string, Item>) => boolean;
+  /**
+   * The player's stated order, and how to read an assignment on its keys. Absent, or carrying an empty order, the
+   * ascent orders by `score` alone and behaves exactly as it did before there was a goal.
+   *
+   * `fitted` is the FIXED reference every sign is measured against and is computed ONCE by the caller, never per
+ * comparison: a band applied pairwise is intransitive, and a coordinate ascent on an intransitive
+   * comparator can cycle.
+   *
+   * `reading` is handed the ascent's live assignment and the rank already computed for it, so a caller whose
+   * reading contains the objective's own figure (`dps`) does not score the set twice.
+   */
+  goal?: {
+    order: readonly GoalKey[];
+    fitted: GoalReading;
+    reading: (chosen: ReadonlyMap<string, Item>, rank: Rank) => GoalReading;
+    /** See `GoalInput.allow`. A breach is INFEASIBLE, which is why it lands beside `feasible` below. */
+    allow?: number;
+  };
+  /**
+   * A hard condition an assignment must satisfy. Absent, every assignment is feasible and the ascent is unchanged.
+   *
+   * ABOVE EVERYTHING, including the tier: a build that breaks what the player REQUIRED is not a candidate at all,
+   * however it scores. It is a key rather than a filter because the ascent must still be able to climb THROUGH
+   * infeasible ground — rejecting infeasible assignments outright strands the search wherever it starts, while an
+   * ordering that puts feasible above infeasible lets it walk out.
+   *
+   * The current build seeds the search, so a floor at or below what the ship already has always has an answer.
+ * A floor ABOVE it may have none, and that is the caller's news to break rather than something to fake.
+   */
+  feasible?: (chosen: ReadonlyMap<string, Item>, rank: Rank) => boolean;
 }
 
 /**
@@ -2112,7 +2681,46 @@ export interface GearSearch {
  * ascent can settle in a local maximum. It is monotone, converges in two or three passes on real inventories, and
  * `maxPasses` bounds the pathological case. An item can only be used once — gear is not shared between slots.
  */
-export function optimizeGearSet({ slots, maxPasses = 4, score, alone, tie }: GearSearch): Map<string, Item> {
+export function optimizeGearSet({ slots, maxPasses = 4, score, alone, tie, goal, feasible }: GearSearch): Map<string, Item> {
+  // An order with no keys is no order: the ascent then asks `score` and nothing else, which is the behaviour every
+  // caller had before a goal existed and the one an unconfigured ship must keep.
+  const ranked = goal && goal.order.length ? goal : null;
+
+  // A candidate assignment as the ascent compares it: the objective's own figure, and the player's key signs
+  // measured against the fitted build. Both are taken at the same moment, since `chosen` is live state.
+  const judge = (chosen: ReadonlyMap<string, Item>): Judged => {
+    const rank = score(chosen);
+    // ONE reading per candidate, shared by the signs and the allowance: the two ask different questions of the
+    // same figures, and reading twice is how they would come to disagree about what this build measures.
+    const reading = ranked ? ranked.reading(chosen, rank) : null;
+    // AN ALLOWANCE IS A FEASIBILITY QUESTION, ⊥ a ranking one. A plan that spends more of a ranked stat than the
+    // player allowed is not a worse candidate to be outvoted by a bigger gain elsewhere; it is not a candidate.
+    const within = !ranked || ranked.allow == null
+      || allowanceBreach(ranked.order, ranked.fitted, reading!, ranked.allow) == null;
+    return {
+      rank,
+      signs: reading ? goalVector(ranked!.order, reading, ranked!.fitted) : NO_SIGNS,
+      ok: (feasible ? feasible(chosen, rank) : true) && within,
+    };
+  };
+
+  /**
+   * Strictly better, so a candidate that merely ties never displaces what the slot already holds — incumbency,
+   * which is the whole anti-churn mechanism and comes free from the comparison being strict.
+   *
+   * TIER stays above the player's order and is not negotiable: Mining Power and a DPS index share no unit, so a
+   * mining laser must not take a combat hardpoint because it came out ahead on armor. Below the tier the order
+   * speaks, and `goalCompare` is asked rather than re-implemented — a second copy of the scan is how the ascent
+   * and the plan gate come to disagree about what "better" means.
+   */
+  const better = (a: Judged, b: Judged): boolean => {
+    // FEASIBILITY FIRST, above the tier: a build breaking what the player required is not a candidate, whatever
+    // it scores. Ordering rather than filtering, so the ascent can climb out of infeasible ground.
+    if (a.ok !== b.ok) return a.ok;
+    if (a.rank[0] !== b.rank[0]) return a.rank[0] > b.rank[0];
+    if (!ranked) return a.rank[1] > b.rank[1];
+    return goalCompare({ signs: a.signs, scalar: a.rank[1] }, { signs: b.signs, scalar: b.rank[1] }) < 0;
+  };
   // Coordinate ascent from a seed. Each pass is monotone — a slot only changes when the whole set scores
   // higher — but ascent converges to a LOCAL optimum, so the seed decides which one. Seeding only with
   // "best item alone per slot" can therefore land BELOW the build already fitted, making every per-slot
@@ -2136,16 +2744,16 @@ export function optimizeGearSet({ slots, maxPasses = 4, score, alone, tie }: Gea
       for (const slot of slots) {
         const current = chosen.get(slot.key);
         let bestItem = current;
-        let bestScore = score(chosen);
+        let bestScore = judge(chosen);
         // The slot is scored by TRYING each candidate in it and putting the state back, rather than by building a
         // fresh assignment per candidate: an armory runs to thousands of modules, and the copy is the whole cost.
         for (const cand of slot.candidates) {
           if (cand !== current && used.has(cand)) continue;   // spoken for by another slot
           chosen.set(slot.key, cand);
-          const s = score(chosen);
-          if (rankGt(s, bestScore)) { bestScore = s; bestItem = cand; }
+          const s = judge(chosen);
+          if (better(s, bestScore)) { bestScore = s; bestItem = cand; }
           // Equal on the objective: the caller's own tie-break decides, or nothing does.
-          else if (tie && bestItem && !rankGt(bestScore, s) && tie(cand, bestItem, slot.key, chosen)) { bestScore = s; bestItem = cand; }
+          else if (tie && bestItem && !better(bestScore, s) && tie(cand, bestItem, slot.key, chosen)) { bestScore = s; bestItem = cand; }
         }
         if (current) chosen.set(slot.key, current); else chosen.delete(slot.key);
         if (bestItem !== current) { take(slot.key, bestItem); changed = true; }
@@ -2155,7 +2763,7 @@ export function optimizeGearSet({ slots, maxPasses = 4, score, alone, tie }: Gea
     return chosen;
   };
 
-  const total = (chosen: Map<string, Item>) => score(chosen);
+  const total = (chosen: Map<string, Item>) => judge(chosen);
 
   // Seed A: keep what is fitted. Seed B: the best item alone per slot, which is the old per-slot answer and
   // reaches optima the status quo cannot climb to. A caller with no "alone" reading — a module scores the same
@@ -2176,5 +2784,51 @@ export function optimizeGearSet({ slots, maxPasses = 4, score, alone, tie }: Gea
     return free[0];
   });
 
-  return rankGt(total(fromBest), total(fromCurrent)) ? fromBest : fromCurrent;
+  /**
+   * EVERY SWAP IN THE ANSWER EARNS ITS OWN PLACE.
+   *
+   * Incumbency inside a pass is not incumbency in the ANSWER: a slot seeded from `alone` starts on a candidate,
+   * and a coordinate the objective is indifferent to is never moved back off it — the tie that would have
+   * protected the fitted item protects the seeded one instead. The winning seed then carries swaps it was never
+   * asked to justify, which is how a strictly weaker gun reached a plan whose gain came entirely from another
+   * slot: on a `min(surface, core)` objective the over-provisioned layer has slack, so any gun above the
+   * bottleneck is free to lose power for nothing.
+   *
+   * So the answer is settled coordinate by coordinate: put the fitted item back, and keep the candidate only
+   * where the whole plan is STRICTLY better for it. Monotone — reverting never raises the score, so a slot can
+   * be settled once and no pass over the others can un-settle it.
+   *
+   * A slot whose `current` is absent is exempt: there is nothing to revert TO, which is the shape a filter
+   * violation takes (`turretPlan` withholds an equipped item the filter rejects, and the switch is the point).
+   */
+  const settle = (chosen: Map<string, Item>): Map<string, Item> => {
+    for (const slot of slots) {
+      const cur = slot.current ?? undefined;
+      const pick = chosen.get(slot.key);
+      if (!cur || !pick || pick === cur) continue;
+      // The fitted item may itself be the plan's answer for ANOTHER slot — a gun moved across hardpoints. Putting
+      // it back here would fit one item twice, so the swap stands.
+      let elsewhere = false;
+      for (const [k, v] of chosen) if (k !== slot.key && v === cur) { elsewhere = true; break; }
+      if (elsewhere) continue;
+
+      const withPick = judge(chosen);
+      chosen.set(slot.key, cur);
+      const withCur = judge(chosen);
+      // THE SAME TWO REASONS THE ASCENT MOVES A SLOT, or this pass would overrule the caller's own tie-break: a
+      // swap stands where the whole plan is strictly better for it, AND where the objective is silent but the
+      // tie-break prefers it (two hull kits with no pooled line between them, one with aspect slots). A turret tie
+      // is left to the objective — `optimizeShipSet` answers false for a hardpoint — so an unearned gun swap goes
+      // back and a countable module gain does not.
+      chosen.set(slot.key, pick);
+      const earns = better(withPick, withCur)
+        || (!!tie && !better(withCur, withPick) && tie(pick, cur, slot.key, chosen));
+      if (!earns) chosen.set(slot.key, cur);
+    }
+    return chosen;
+  };
+
+  // The two seeds are separated by the SAME comparison the slots were, or the ascent hands back a build its own
+  // per-slot answers would have rejected.
+  return settle(better(total(fromBest), total(fromCurrent)) ? fromBest : fromCurrent);
 }

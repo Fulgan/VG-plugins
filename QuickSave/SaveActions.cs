@@ -9,7 +9,7 @@ namespace QuickSave
     // WHICH load call to make was decided by reading the game's IL, and the obvious names are the wrong ones:
     //
     //   LoadGameUI.DoExecuteAction()  =  if (selectedFile != null) GameManager.Instance.LoadGame(selectedFile)
-    //   SaveGameFile.LoadSaveGame()   =  SaveGame.LoadState(this.Recall())      <- raw state apply, no orchestration
+    //   SaveGameFile.LoadSaveGame()   =  a coroutine applying state in stages   <- raw state apply, no orchestration
     //   SaveGame.LoadLatestSave()     =  GetLatestSave().LoadSaveGame()          <- so THIS one is the unsafe path
     //
     // ∴ `GameManager.Instance.LoadGame(file)` is what the menu button does and the only call that gets the loading

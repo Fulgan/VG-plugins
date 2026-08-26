@@ -189,6 +189,20 @@ namespace Hypercom
                 // `parent.GetComponentsInChildren<DoorMechanism>()` ∴ the same bay fitted to two hulls can
                 // sustain different rates, and this cannot be served from `/catalog/prefabs`.
                 ["torpedoLatches"] = TorpedoLatchCount(p),
+                // The FITTED bay's own launch cycle, so a client can price the hull it actually has rather than
+                // only the candidates it is offered. Both are PERIODS IN SECONDS despite their names
+                // (`nextFireTime = Time.time + fireRate`), which is why they are not called rates here, and both
+                // are private with beta-only properties over them ∴ read by name (see `TorpedoPrefabDto`).
+                // Null together with `torpedoLatches` when no bay is fitted: a hull with no bay has no cadence,
+                // and 0 would read as one that can never launch.
+                ["torpedoFireDelay"] = TorpedoBayNum(p, "fireRate"),
+                ["torpedoReloadTime"] = TorpedoBayNum(p, "reloadSpeed"),
+                // ⚠ NOTHING DIVIDES THIS POOL, unlike `poolCombatPower`: a hull carries at most one bay
+                // (`TorpedoBayModule.CreateDamageData` reads `GetStat(TorpedoPower)` whole) so there is no
+                // equivalent-turret count to share it out by. The bay ALSO draws one turret-share of
+                // `poolCombatPower` on top, through `GetNormalizedPower`, which is the coupling that makes
+                // fitting another gun reduce every torpedo's damage.
+                ["poolTorpedoPower"] = ShipStat(p, EquipStat.TorpedoPower, null),
                 ["critChance"] = ShipStat(p, EquipStat.CriticalChance, "BaseCritChance"),
                 // `GetStat(CriticalChance)` is `(0.03 + GetPrecisionCrit() + additive lines) * multiplier`, so
                 // the reported figure alone cannot be split back into "what Precision explains" and "what it
@@ -302,6 +316,17 @@ namespace Hypercom
         /// "no bay" and "a bay with nowhere to launch from" are different builds, and 0 would read as the
         /// second.
         /// </summary>
+        /// <summary>
+        /// One private number off the FITTED torpedo bay, or null when no bay is fitted. Same by-name read as
+        /// <see cref="TorpedoLatchCount"/> and for the same two reasons: the field is private, and the property
+        /// over it does not exist on the release branch.
+        /// </summary>
+        private static float? TorpedoBayNum(GamePlayer p, string field)
+        {
+            var bay = Compat.Get(LiveShip(p), "torpedoBayModule");
+            return bay == null ? null : Compat.PrivateNum(bay, field);
+        }
+
         private static int? TorpedoLatchCount(GamePlayer p)
         {
             var bay = Compat.Get(LiveShip(p), "torpedoBayModule");
@@ -1157,11 +1182,12 @@ namespace Hypercom
             return Result.Ok(d);
         });
 
+        // NO DOCK GATE: what is fitted is a property of the SHIP, and `Stores.LoadoutDto` reads only
+        // `hardpoints`/`equipment`/`boosters` off it. `/ships` serves that same DTO for every owned ship in
+        // flight, so gating this one would hide in the direct route what the list route already answers. Docking
+        // is what gear can be CHANGED or TRADED at, not what it can be read at.
         internal static Result Loadout() => MainThread.Run(() =>
-        {
-            if (!Docked) return Result.Err(403, "not docked");
-            return Result.Ok(Stores.LoadoutDto(GamePlayer.current?.currentSpaceShip));
-        });
+            Result.Ok(Stores.LoadoutDto(GamePlayer.current?.currentSpaceShip)));
 
         // All owned ships + their loadouts (read-only; available anywhere, not just docked).
         internal static Result Ships() => MainThread.Run(() =>

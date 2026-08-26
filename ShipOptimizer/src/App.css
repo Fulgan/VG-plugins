@@ -608,10 +608,43 @@ tr.grid-group:hover td { background: #202029; }
 .res-cell.done .res-bonus { font-weight: 600; }
 /* Resonance on the item card: the bonus reads as a stat line, the progress under it as a note. */
 .git-res { margin-top: 4px; }
-.git-res-bonus { color: var(--map-salvage, #c07bff); font-size: 11.5px; }
+.git-res-bonus { color: var(--map-salvage, #c07bff); font-size: 12.5px; font-weight: 600; }
+/* The word in front of the figure, so a resonance value is never read as one of the item's own stat lines. */
+.git-res-tag { display: block; font-size: 9px; font-weight: 500; text-transform: uppercase; letter-spacing: .06em;
+               color: #7c6a92; }
 
 /* Selling off the inventory grid: the action bar above the table, and the tick column ahead of the name. */
 .grid-sell { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 4px; font-size: 11px; }
 th.c-sel, td.c-sel { width: 1%; padding: 2px 4px; text-align: center; vertical-align: middle; }
 td.c-sel input { margin: 0; cursor: pointer; }
 td.c-sel input:disabled { cursor: not-allowed; opacity: .35; }
+
+/* ---- PHONE (portrait) -----------------------------------------------------------------------------
+   The bridge serves this shell to a phone as readily as to the PC, and a tab open on a handset is a
+   REAL way this app is used rather than a courtesy. One rule decides everything here: THE PAGE MUST
+   NOT SCROLL SIDEWAYS. A horizontal scrollbar on a touch device does not merely look wrong, it
+   competes with every vertical swipe and makes the page feel broken.
+
+   So a fixed width becomes a width CAPPED BY THE VIEWPORT, a multi-column grid becomes one column,
+   and anything genuinely wider than a handset (a dense table) is given its OWN scroll container so
+   the overflow is the table's and not the document's. */
+@media (max-width: 560px) {
+  /* 40px of side padding is a tenth of a phone's width. */
+  .app { padding: 8px 10px 28px; }
+  header h1 { font-size: 16px; }
+
+  /* A popover pinned to a corner has to fit between the corners. */
+  .sheet-popin { width: min(320px, calc(100vw - 16px)); right: 8px; top: 56px; max-height: 68vh; }
+  .grid-wrap.sheet { max-width: none; }
+  .tip { width: min(300px, calc(100vw - 20px)); }
+
+  /* `min-width` on a flex child is a floor the container cannot honour: below it the row overflows
+     instead of shrinking, which is the horizontal scrollbar arriving from a rule about a cycle strip. */
+  .cyc { min-width: 0; flex-basis: 100%; }
+  .filters .search { width: 100%; }
+  .filters { flex-wrap: wrap; }
+
+  /* A dense table keeps its columns and scrolls INSIDE its frame. Reflowing a numeric table into
+     stacked rows would break the one thing it is for, which is reading a column down. */
+  .grid-wrap { max-height: 70vh; }
+}

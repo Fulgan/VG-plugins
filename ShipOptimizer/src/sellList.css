@@ -319,6 +319,14 @@ dialog.modal-box.sell-pop { width: min(1500px, 97vw); height: 92vh; max-height: 
    naming four substats wrapped over four lines there. Fixed for the same reason `.sl-pop` is — the rail, the
    layout grid and the page all clip or scroll. Kept BELOW the modal layer (300/301) so the sell list still
    covers it, and below `.sl-pop` (320) so the field picker opened from inside it lands on top. */
+/* THE SHOPPING-LIST DIALOG, sized like the sell list's: same clause vocabulary, same editing, and the same need
+   for a sentence to sit on one line. The anchored flyout below it was 440px and wrapped every clause it held. */
+dialog.modal-box.want-pop { width: min(1180px, 95vw); height: 88vh; max-height: 88vh; }
+.want-pop .want-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+/* The prose stops before the dialog does: a sentence past ~110 characters is harder to read for being wider,
+   while the chips under it use the full width. */
+.want-pop .want-say { max-width: 110ch; }
+
 .want-flyout { position: fixed; z-index: 250; width: min(440px, 92vw);
   max-height: min(70vh, 560px); overflow: auto; overscroll-behavior: contain;
   background: #14161b; border: 1px solid #3a3d46; border-radius: 8px; padding: 10px 12px;
@@ -330,7 +338,15 @@ dialog.modal-box.sell-pop { width: min(1500px, 97vw); height: 92vh; max-height: 
 .want-rule { padding: 6px 0; }
 .want-rule + .want-rule { border-top: 1px dashed #23252c; }
 /* The sentence is the rule; the chips under it are how it is edited. Same order on screen as in the sell list. */
-.want-say { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; color: #cfe4ff; }
+/* The NAME row sits above the sentence: an input beside prose fights it for the baseline, and the name is a
+   label for the whole rule rather than part of its wording. */
+.want-say { display: flex; align-items: center; justify-content: space-between; gap: 6px; color: #cfe4ff; }
+.want-name { flex: 1; min-width: 0; background: #101216; border: 1px solid #2a2d36; border-radius: 4px;
+  color: #e8edf2; font-size: 12px; padding: 3px 6px; }
+.want-name::placeholder { color: #6b6f79; }
+.want-name:focus { outline: none; border-color: #4a5568; }
+.want-sentence { color: #cfe4ff; margin: 3px 0 0; }
+.want-sentence.dim { color: #8a8a96; }
 .want-say button { background: none; border: 0; color: #8a8a96; cursor: pointer; padding: 0 2px; }
 .want-say button:hover { color: #f0b8bd; }
 .want-rule .sl-chips { margin: 4px 0; }

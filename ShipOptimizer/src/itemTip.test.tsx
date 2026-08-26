@@ -78,6 +78,31 @@ describe("the item tooltip renders", () => {
     expect(h.textContent).toContain("97.4%");
   });
 
+  it("names the panel the hovered item displaces, and marks the other slots as context", () => {
+    const displaced = spitter(0.0141, 2991);
+    const elsewhere = spitter(0.0068, 3031);
+    const h = mount(
+      <ItemTip it={spitter(0.0294, 2689)} x={10} y={10} conn={conn} imgUrl={null}
+               vs={displaced}
+               others={[{ it: displaced, label: "slot 2" }, { it: elsewhere, label: "slot 5" }]} />,
+    );
+    // Every compared panel is equipped, so the word cannot be what separates them: the displaced one names the
+    // slot it is being taken out of, and a slot the hovered item merely also fits is only labelled.
+    expect(h.textContent).toContain("being replaced · slot 2");
+    const tones = [...h.querySelectorAll(".git-role")].map((n) => n.className);
+    expect(tones).toEqual(["git-role git-role-hovered", "git-role git-role-target", "git-role git-role-alt"]);
+    // One panel each: the displaced item must not also appear as one of the slots it competes with.
+    expect(h.querySelectorAll(".git").length).toBe(3);
+  });
+
+  it("says only that a panel is displaced when the caller names no slot for it", () => {
+    const h = mount(
+      <ItemTip it={spitter(0.0294, 2689)} x={10} y={10} conn={conn} imgUrl={null} vs={spitter(0.0141, 2991)} />,
+    );
+    expect(h.textContent).toContain("being replaced");
+    expect(h.textContent).not.toContain("being replaced ·");
+  });
+
   it("an item whose stat lines carry no percentage flag at all (older bridge)", () => {
     const bare = spitter(0.0141, 2991, {
       stats: [{ stat: "Attack Speed", amount: 0.0141, multiplier: 1 }],
@@ -106,15 +131,27 @@ describe("which Δ lines the objective prices", () => {
   } as unknown as Item);
 
   it("marks the unscored ones and says so once", () => {
-    const a = module_("a", [{ stat: "Precision", amount: 1_220 }, { stat: "Torpedo Power", amount: 3_892 }]);
-    const b = module_("b", [{ stat: "Precision", amount: 0 }, { stat: "Torpedo Power", amount: 0 }]);
+    // A RESIST stands in for the unpriced role here. Torpedo Power used to, and does not any more: the bay's
+    // output is scored, so a line the objective genuinely has no opinion on had to be a different stat.
+    const a = module_("a", [{ stat: "Precision", amount: 1_220 }, { stat: "Kinetic Resistance", amount: 0.07 }]);
+    const b = module_("b", [{ stat: "Precision", amount: 0 }, { stat: "Kinetic Resistance", amount: 0 }]);
+    mount(<ItemCard it={a} cmp={b} conn={conn as never} />);
+    const rows = [...host!.querySelectorAll(".git-cmp-row")].map((r) => [r.textContent, r.className]);
+    const resist = rows.find(([t]) => t?.includes("Kinetic Resistance"))!;
+    const precision = rows.find(([t]) => t?.includes("Precision"))!;
+    expect(resist[1]).toContain("unpriced");
+    expect(precision[1]).not.toContain("unpriced");
+    expect(host!.textContent).toContain("not scored — your call");
+  });
+
+  it("no longer calls a bay's Torpedo Power unscored, because it is scored", () => {
+    const a = module_("a", [{ stat: "Torpedo Power", amount: 3_892 }]);
+    const b = module_("b", [{ stat: "Torpedo Power", amount: 0 }]);
     mount(<ItemCard it={a} cmp={b} conn={conn as never} />);
     const rows = [...host!.querySelectorAll(".git-cmp-row")].map((r) => [r.textContent, r.className]);
     const torpedo = rows.find(([t]) => t?.includes("Torpedo Power"))!;
-    const precision = rows.find(([t]) => t?.includes("Precision"))!;
-    expect(torpedo[1]).toContain("unpriced");     // MODULE_POOLS has no Torpedo Power
-    expect(precision[1]).not.toContain("unpriced");
-    expect(host!.textContent).toContain("not scored — your call");
+    expect(torpedo[1]).not.toContain("unpriced");
+    expect(host!.textContent).not.toContain("not scored — your call");
   });
 
   it("says nothing of the sort when every line is scored", () => {
@@ -135,17 +172,59 @@ describe("resonance on the card", () => {
   it("states the bonus, and how much of it is being paid", () => {
     const el = withRes({ unlocked: false, progress: 25, threshold: 100, unit: "kills",
                          bonus: "+2.22% Reload Speed", bonusStat: "Reload Speed" });
-    // No `bonusNow` from this (older) bridge ∴ the full bonus with the fraction said in words.
+    // No `bonusNow` from this (older) bridge ∴ the full bonus with the fraction said beside it.
     expect(el.textContent).toContain("+2.22% Reload Speed");
-    expect(el.textContent).toContain("paying 25% of it");
+    expect(el.textContent).toContain("paying 25%");
     expect(el.textContent).toContain("25 / 100 kills");
+    expect(el.textContent).toContain("25% earned");
   });
 
   it("says a finished one is finished rather than showing 100% of something", () => {
     const el = withRes({ unlocked: true, progress: 100, threshold: 100, unit: "ore",
                          bonus: "+180 Cargo Capacity", bonusStat: "Cargo Capacity" });
     expect(el.textContent).toContain("+180 Cargo Capacity");
-    expect(el.textContent).toContain("resonance finished");
+    expect(el.textContent).toContain("finished");
+    expect(el.textContent).not.toContain("paying");
+  });
+
+  // THE FIGURE THE CARD USED TO LOSE. `EquipStatLine.ToReadableString` takes an argument, so the bridge's
+  // name-only call answered null and `bonus` arrived as a bare stat name — the card then printed a sentence with
+  // no value in it. A whole-pool multiplier is a percentage by construction ∴ it can be stated exactly here
+  // without the game's formatter, and that is the one figure this fallback is allowed to compute.
+  it("computes the percentage itself when the bridge sends a bare stat name and a multiplier", () => {
+    const el = withRes({ unlocked: true, progress: 866, threshold: 866, unit: "kills",
+                         bonus: "Combat Power", bonusNow: null,
+                         bonusAmount: 0, bonusMultiplier: 1.04989684, bonusStat: "Combat Power" });
+    expect(el.textContent).toContain("+4.99% Combat Power");
+    expect(el.textContent).toContain("scales the ship's whole Combat Power pool");
+  });
+
+  // AN AMOUNT IS A PERCENTAGE WHERE THE ITEM'S OWN LINE SAYS THE STAT IS ONE. The bridge marks `percent` per stat
+  // line, so a booster resonating into the stat it already boosts answers this from its own payload — no table of
+  // stat names invented here, and no raw float read aloud.
+  it("reads percent-ness off the item's own stat line", () => {
+    const el = mount(<ItemCard conn={conn} imgUrl={null}
+      it={spitter(0.014, 1000, {
+        category: "Booster", type: "Booster",
+        mainStat: { name: "Officer Bonus", amount: "5.67%" },
+        stats: [{ stat: "Officer Bonus", amount: 0.05672024, multiplier: 1, percent: true }],
+        resonance: { unlocked: true, progress: 794, threshold: 794, unit: "kills",
+                     bonus: "Officer Bonus", bonusNow: null,
+                     bonusAmount: 0.0537379645, bonusMultiplier: 1, bonusStat: "Officer Bonus" },
+      })} />);
+    expect(el.textContent).toContain("+5.37% Officer Bonus");
+    expect(el.textContent).not.toContain("0.0537379645");
+  });
+
+  // WITHOUT that flag nothing is claimed: 0.0245 of a stat nobody marks could be 2.45% or an absolute 0.0245. The
+  // number is printed, rounded, and no unit is put on it.
+  it("does not guess a percentage from an unmarked amount, and still rounds it", () => {
+    const el = withRes({ unlocked: false, progress: 0, threshold: 457, unit: "kills",
+                         bonus: "Cargo Capacity", bonusNow: null,
+                         bonusAmount: 0.0244778153, bonusMultiplier: 1, bonusStat: "Cargo Capacity" });
+    expect(el.textContent).toContain("+0.0245 Cargo Capacity");
+    expect(el.textContent).not.toContain("0.0244778153");
+    expect(el.textContent).not.toContain("% Cargo");
   });
 
   // The game's own tooltip shows both figures, and so does this: what it pays today comes from the game
@@ -155,10 +234,18 @@ describe("resonance on the card", () => {
                          bonus: "+4.72% Mining Power", bonusNow: "+0.18% Mining Power",
                          bonusAmount: 0, bonusMultiplier: 1.0472, bonusStat: "Mining Power" });
     expect(el.textContent).toContain("+0.18% Mining Power");
-    expect(el.textContent).toContain("max +4.72% Mining Power");
+    expect(el.textContent).toContain("+4.72% Mining Power at full");
     expect(el.textContent).toContain(`221 / ${(5864).toLocaleString()} ore`);
     // and it says WHICH pool a multiplier lifts, which is the whole ship's, not this booster's own
     expect(el.textContent).toContain("scales the ship's whole Mining Power pool");
+  });
+
+  // A BOOSTER NEVER DRAWS ∴ the power row is not printed for one. On a turret a zero IS a fact (a Solar Powered
+  // gun costs the reactor nothing), so the row is hidden by item KIND rather than by the value being zero.
+  it("prints no power row on a booster", () => {
+    const el = withRes({ unlocked: true, progress: 1, threshold: 1, unit: "kills",
+                         bonus: "+1% Combat Power", bonusStat: "Combat Power" });
+    expect(el.querySelector(".git-icons")?.textContent ?? "").not.toContain("⚡");
   });
 
   it("says nothing at all about resonance on an item that has none", () => {

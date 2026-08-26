@@ -11,6 +11,19 @@ namespace VG.Game
     // already dropped the guid fallback, so the same ship answered differently depending on which surface asked.
     public static class ShipNames
     {
+        /// <summary>
+        /// The HULL CLASS only, never a custom name: `Voron`, `Pathfinder`. Falls back to the guid for the same reason
+        /// <see cref="Label"/> does — a hull with no class must stay identifiable rather than read as blank.
+        ///
+        /// Separate from <see cref="Label"/> because the two answer different questions: a readout about SOMEONE ELSE'S
+        /// ship wants what the hull is, and a name its owner chose says nothing about that.
+        /// </summary>
+        public static string ClassName(SpaceShipData ship)
+        {
+            if (ship == null) return null;
+            return ship.shipClass?.displayName ?? ship.guid;
+        }
+
         /// <summary>Display name for a ship: custom name, else class name, else guid. Null only for a null ship.</summary>
         public static string Label(SpaceShipData ship)
         {

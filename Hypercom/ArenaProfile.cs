@@ -14,6 +14,15 @@ namespace Hypercom
         internal float HullHP = 1_000_000f;
         internal float ArmorHP;                 // 0 ⇒ no armor module at all, not an empty one
         internal float ShieldHP;                // 0 ⇒ no shield module at all
+
+        // A LAYER'S HP AND THE MODULE THAT SPENDS IT ARE SEPARATE FACTS, and the game ships hulls where only the
+        // first is true: `maxArmorHP` is `GetStat(EquipStat.ArmorHP)` so any stat source raises it, while the pool is
+        // drawn down only inside `ArmorModule.AbsorbArmorDamage`, and the game fabricates a missing module for
+        // PLAYER-owned ships alone (`EnsurePlayerBaseModules`). An NPC can therefore carry armor HP that absorbs
+        // nothing and die with the pool full — so a profile taken from a live enemy's stats must be able to say so,
+        // or the simulation hands it durability the real ship does not have.
+        internal bool ArmorAbsorbs = true;
+        internal bool ShieldAbsorbs = true;
         internal float DamageReduction;
         internal readonly Dictionary<EquipStat, float> Resists = new Dictionary<EquipStat, float>();
         internal float ArmorResist;
@@ -37,7 +46,9 @@ namespace Hypercom
                 ["name"] = Name,
                 ["hullHP"] = HullHP,
                 ["armorHP"] = ArmorHP,
+                ["armorAbsorbs"] = ArmorAbsorbs,
                 ["shieldHP"] = ShieldHP,
+                ["shieldAbsorbs"] = ShieldAbsorbs,
                 ["damageReduction"] = DamageReduction,
                 ["resists"] = resists,
                 ["armorResist"] = ArmorResist,
@@ -87,6 +98,13 @@ namespace Hypercom
                 },
                 // Both layers, so the order between them is exercised and not merely assumed.
                 new ArenaProfile { Name = "bothLayers", ArmorHP = 100_000f, ShieldHP = 100_000f },
+
+                // THE SHAPE REAL NPC HULLS ARE IN: armor HP from a stat source with no module to spend it. Paired with
+                // `armorHeavy` it measures what that pool is actually worth, which by the chain should be nothing.
+                new ArenaProfile
+                {
+                    Name = "armorNoModule", ArmorHP = 500_000f, ArmorResist = 0.30f, ArmorAbsorbs = false,
+                },
             };
 
             // One per typed resist. The unit-level resist is a different quantity from the armor's, and

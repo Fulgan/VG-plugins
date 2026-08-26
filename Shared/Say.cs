@@ -44,6 +44,19 @@ namespace VG.Text
         // "1 item" / "3 items" / "1,204 rounds" / "12 Ion Cells". Counts are grouped, because a bare 1204 reads
         // as a different magnitude at a glance. Pass `plural` only to override an inflection the rules below get
         // wrong for a game-specific term.
+        // A REPORT THAT IS SPOKEN counts small numbers in words: `one bogey`, not `1 bogey`. Past nine it is a figure
+        // again, which is how a number too large to say at a glance is actually read out.
+        private static readonly string[] Spelled =
+            { "no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine" };
+
+        /// <summary>Like <see cref="Count"/>, with the number spelled out while it is small enough to say.</summary>
+        internal static string Spoken(long n, string singular, string plural = null)
+        {
+            return n >= 0 && n < Spelled.Length
+                ? Spelled[n] + " " + (n == 1 ? singular : (plural ?? Plural(singular)))
+                : Count(n, singular, plural);
+        }
+
         internal static string Count(long n, string singular, string plural = null)
             => n == 1
                  ? "1 " + singular

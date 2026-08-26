@@ -26,6 +26,15 @@ export const PLAN_KEY = "shipoptimizer.lastPlan";
 // pushed with the playthrough and deliberately global — the answer to "don't gut my shields" does not change
 // per hull.
 export const LAYER_CAP_KEY = "shipoptimizer.layerCap";
+// WHAT A PLAN MAY SPEND of a ranked stat, as a fraction of the fitted build — a REFUSAL, where `layerCap` above
+// is only a warning. Global like the cap and unlike the goal order: how much loss is acceptable is a habit, while
+// what a hull is FOR changes from ship to ship.
+export const ALLOWANCE_KEY = "shipoptimizer.goalAllowance";
+// The stats this player wants ranked, in their order, per ship. Playthrough-wide and pushed, with the
+// ship dimension inside the VALUE exactly as `gearFilters` carries it — so no `SHIP_SCOPED` entry and no
+// re-hydration on a ship switch. Per ship rather than global, unlike `layerCap`: what a hull is FOR changes from
+// one to the next, while how much survivability this player will trade does not.
+export const GOAL_ORDER_KEY = "shipoptimizer.goalOrder";
 export const LOG_KEY = "shipoptimizer.summaryLog";
 // Dragged widths of the grid's text columns, keyed by column id. Per browser, not per playthrough: it answers
 // "how wide is my screen", which no save can know.

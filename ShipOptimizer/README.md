@@ -4,7 +4,7 @@ A web app for **Vanguard Galaxy** that looks at your ship, your inventory, the s
 galaxy around you, suggests a better loadout, and applies it for you. It runs through the
 **[Hypercom](../Hypercom/)** mod, and ships inside it: there is nothing separate to install.
 
-**Ships with Hypercom 0.2.0**: [what changed](../RELEASE-NOTES.md).
+**Ships with Hypercom**: [what changed in the latest release](../RELEASE-NOTES.md).
 
 ## What it does
 

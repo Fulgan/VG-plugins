@@ -43,14 +43,15 @@ mode.onUndock=On undock
 qm.enabled= Automation enabled
 qm.flags=<b>Flags</b>
 qm.autobuy= Auto-buy the shortfall from station shops
-qm.echoSkip= skip while ECHO drives
-qm.autoActivate= activate one on undock
+qm.echoSkip= Don't buy or sell while ECHO drives
+qm.echoSkipDecoy= unless ECHO is driving
+qm.autoActivate= activate on undock
 qm.noShip=<size=11>(no active ship)</size>
 qm.ship=Ship: <b>{0}</b>
-qm.header=<b>Stock targets</b> <size=10>— cargo (on ship) + armory (reserve); 0 = leave that container alone. On dock: extra cargo → armory, shortfall bought into armory (all-or-nothing), then cargo filled from armory</size>
+qm.header=<b>Stock targets</b>
 qm.row=<b>{0}</b>  <size=10>(cargo {1} · armory {2})</size>
-qm.inv=inv
-qm.res=res
+qm.inv=cargo
+qm.res=armory
 decoy.on=Auto-decoy on.
 decoy.off=Auto-decoy off.
 decoy.on.deployed=Auto-decoy on — decoy away.
@@ -63,6 +64,11 @@ qm.item.locator=Locator Beacon
 qm.item.trackingbot=Tracking Tag Bot
 qm.runNow=Restock now
 qm.copyAll=Copy targets to all ships
+qm.copyFrom=Copy targets from a ship
+qm.copyFrom.pick=Take this ship's targets from:
+qm.copyFrom.unknownSize=Other
+qm.copyFrom.none=<color=#e0a030>No other ships to copy from.</color>
+qm.copyFrom.done=<color=#60c060>Copied from {0}.</color>
 qm.copyAll.confirm=Overwrite every other ship?
 qm.copyAll.cancel=Cancel
 qm.copyAll.done=<color=#60c060>Copied to {0}.</color>
@@ -130,7 +136,7 @@ ammo.row={0}  <size=10>(have {1})</size>
 ammo.useCurrent=Set targets from current cargo
 ammo.runNow=Run gunner  [{0}]
 ammo.autoload=Autoload
-ammo.autoloadHint=<size=10>Autoload: clear unused ammo, then fill ~10% of cargo evenly across your guns' ammo</size>
+ammo.autoloadHint=<size=10>Autoload: clear unused ammo, then fill about a tenth of the hold, shared out so every gun lasts the same time</size>
 ammo.result.ok=Your gunner {0}.
 ammo.result.nothing=Your gunner had nothing to do ({0}).
 

@@ -400,7 +400,7 @@ namespace Hypercom
             "/status", "/inventories", "/shops", "/loadout", "/ships", "/officers", "/recruits", "/log", "/events",
             "/loadout/presets", "/loadout/presets/orphans", "/loadout/presets/export",
             "/catalog/equipment", "/catalog/types", "/catalog/prefabs", "/catalog/ships", "/catalog/aspects", "/ship/layout", "/ship/vitals", "/stat/sources", "/skills", "/reputation", "/reputation/log", "/client/state", "/galaxy", "/cycles", "/materials", "/ledger",
-            "/missions/log", "/arena/probe", "/arena/vectors", "/ship/turrets/attack", "/combat/log",
+            "/missions/log", "/arena/probe", "/arena/vectors", "/ship/turrets/attack", "/combat/log", "/debug/quit",
             "/diag/inventory",
         };
         /// <summary>
@@ -416,7 +416,7 @@ namespace Hypercom
         // Set from the hidden Debug/EnableDebugEndpoints config flag. When false, debug endpoints 404
         // exactly like unknown paths — invisible in the public plugin.
         internal static bool DebugEnabled;
-        private static readonly HashSet<string> DebugPaths = new HashSet<string> { "/catalog/equipment", "/catalog/prefabs", "/catalog/ships", "/catalog/aspects", "/arena/probe", "/arena/vectors", "/ship/turrets/attack", "/combat/log" };
+        private static readonly HashSet<string> DebugPaths = new HashSet<string> { "/catalog/equipment", "/catalog/prefabs", "/catalog/ships", "/catalog/aspects", "/arena/probe", "/arena/vectors", "/ship/turrets/attack", "/combat/log", "/debug/quit", "/debug/continue" };
 
         private static Api.Result Route(string method, string path, string query, string body)
         {
@@ -470,6 +470,56 @@ namespace Hypercom
                         var scope = pt == "all" ? null : (string.IsNullOrEmpty(pt) ? Api.CurrentPlaythrough() : pt);
                         return Api.Result.Ok(Ledger.Dto(
                             int.TryParse(QueryParam(query, "limit"), out var lim) ? lim : 200, scope));
+                    }
+                    // SAVE AND QUIT, arming the next launch to CONTINUE. Debug-only, and it REFUSES WITHOUT
+                    // `confirm=1`: every other route here answers a question or moves an item, while a mistyped URL
+                    // on this one closes the game. `save` defaults ON — the point is to come back where you were,
+                    // and the pre-quit write is what makes "continue" mean that (`GameRestart.SlotName` becomes the
+                    // latest save).
+                    //
+                    // IT DOES NOT RELAUNCH, and that is the design rather than a gap: a helper spawned from in here
+                    // is a CHILD of the game, doorstop sets `DOORSTOP_DISABLE` in the game's environment so its
+                    // children are not injected, and the game such a helper started came up with NO PLUGINS AT ALL.
+                    // The caller relaunches, from outside (`tools/restart-game.ps1`), and the marker this leaves
+                    // behind means whatever starts the game next gets the Continue for free.
+                    //
+                    // The GET answers the other question — why did the auto-continue fire, or not — because the
+                    // first live failure left no trace at all with BepInEx's disk log off.
+                    case "GET /debug/quit": return Api.Result.Ok(MainThread.Run(GameRestart.Diag, "debug/quit"));
+                    // CONTINUE, ONLY WHEN ASKED. Separate from the quit on purpose: a launch resumes nothing on its
+                    // own, so the decision to load someone's save is always a call somebody made.
+                    case "POST /debug/continue":
+                    {
+                        if (QueryParam(query, "confirm") != "1")
+                            return Api.Result.Err(400, "continue refuses without confirm=1");
+                        var what = MainThread.Run(GameRestart.Continue, "debug/continue");
+                        return Api.Result.Ok(new Dictionary<string, object>
+                        {
+                            ["continuing"] = what == "loading",
+                            ["result"] = what,
+                        });
+                    }
+                    case "POST /debug/quit":
+                    {
+                        if (QueryParam(query, "confirm") != "1")
+                            return Api.Result.Err(400, "quit refuses without confirm=1");
+                        var keep = QueryParam(query, "save") != "0";
+                        // ON THE MAIN THREAD, since it saves and then ends the process. The reply is written from the
+                        // socket thread before Unity gets around to quitting.
+                        var saved = MainThread.Run(() => GameRestart.Go(keep), "debug/quit");
+                        return Api.Result.Ok(new Dictionary<string, object>
+                        {
+                            ["quitting"] = true,
+                            ["saved"] = saved,
+                            ["slot"] = saved ? GameRestart.SlotName : null,
+                            // NOTHING IS ARMED, and the reply says so: a launch resumes only when something posts
+                            // `/debug/continue`. The field stayed behind after the marker it described was removed,
+                            // and a reply promising a resume that cannot happen is worse than no field at all.
+                            ["resumeArmed"] = false,
+                            ["note"] = saved
+                                ? "saved and quitting; POST /debug/continue once it is up again"
+                                : "quitting WITHOUT a save; a later continue would load an OLDER save",
+                        });
                     }
                     case "POST /ledger/clear":
                     {

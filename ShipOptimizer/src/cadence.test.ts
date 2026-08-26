@@ -66,3 +66,40 @@ describe("the real fire cycle, against the game's own 71 prefabs", () => {
     expect(speedRatio({ name: "Reactor" } as unknown as Item)).toBe(1);
   });
 });
+
+// THE FIRING-CYCLE STATS ARE CONDITIONAL ON GUN GEOMETRY, and pricing them linearly would over-value them on
+// exactly the guns where they do nothing. Both effects fall out of the cycle rather than being special-cased, so
+// what is pinned here is that the cycle keeps producing them.
+describe("attack speed and magazine size are worth what the gun's geometry lets them be worth", () => {
+  const gun = (mag: number, burst: number): Item => ({
+    key: "g", fireDelayRaw: 0.2, magSizeRaw: mag, reloadDelayRaw: 2, burstAmount: burst, burstDelay: 0.05,
+  } as unknown as Item);
+  const gain = (g: Item, a: number, r: number, m: number) => speedRatio(g, a, r, m) / speedRatio(g, 0, 0, 0) - 1;
+
+  it("prices attack speed at exactly nothing when the magazine empties as ONE burst", () => {
+    // `fireDelay` never governs there: the burst is over in one go and the idle is the reload. Measured in game
+    // on such a battery as +0.00% at every value, and the same falls out of the cycle here.
+    const oneBurst = gun(3, 3);
+    for (const v of [0.05, 0.15, 0.3, 0.6]) expect(gain(oneBurst, v, 0, 0)).toBe(0);
+  });
+
+  it("prices it as real on a magazine that holds several bursts", () => {
+    // Same stat, same battery-wide pool, different gun: this is why it cannot be a constant per point.
+    const several = gun(12, 3);
+    expect(gain(several, 0.15, 0, 0)).toBeGreaterThan(0.02);
+    expect(gain(several, 0.6, 0, 0)).toBeGreaterThan(gain(several, 0.3, 0, 0));
+  });
+
+  it("prices magazine size as a STEP, not a slope", () => {
+    // `round(base * (1 + boost))` — on a 3-round magazine nothing happens until the boost buys a whole round.
+    const g = gun(3, 3);
+    expect(gain(g, 0, 0, 0.15)).toBe(0);      // round(3 * 1.15) = 3, still three rounds
+    expect(gain(g, 0, 0, 0.3)).toBeGreaterThan(0.1);   // round(3 * 1.30) = 4
+  });
+
+  it("prices reload speed continuously, which is the one of the three that is a slope", () => {
+    const g = gun(3, 3);
+    expect(gain(g, 0, 0.15, 0)).toBeGreaterThan(0.1);
+    expect(gain(g, 0, 0.3, 0)).toBeGreaterThan(gain(g, 0, 0.15, 0));
+  });
+});

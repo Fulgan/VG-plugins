@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { moduleStatChannel, moduleWhy, pricesModuleStat, setDps, setPower, setRank, rankGt, rankSub, slotPotential, worthSwitching, MIN_GAIN, background, capacityWith, contributionOf, moduleBetter, moduleGain, mulOf, poolsWithModule, precisionCrit, expectedCrit, speedRatio, optimizeTurretSet, optimizeTurretSetLayered, coversLayer, coversLayers, sameScale, setPowerByLayer, poolShare, poolsForShip, poolsReconcile, type ShipPools, type Rank, rating, isCombat } from "./fleetDps";
+import { allowanceBreach, goalAccepts, goalReadingOf, goalRefuses, OBJECTIVE_TIE, type GoalKey, moduleStatChannel, moduleWhy, pricesModuleStat, setDps, setPower, setRank, rankGt, rankSub, slotPotential, worthSwitching, MIN_GAIN, background, capacityWith, contributionOf, moduleBetter, moduleGain, mulOf, poolsWithModule, precisionCrit, expectedCrit, speedRatio, optimizeTurretSet, optimizeTurretSetLayered, coversLayer, coversLayers, sameScale, setPowerByLayer, poolShare, poolsForShip, poolsReconcile, type ShipPools, type Rank, rating, isCombat, vsLayerCredit, vsRollsOf, VS_SHIELD_PER_POINT, VS_ARMOR_PER_POINT } from "./fleetDps";
 import type { Item } from "./types";
 
 // A ship whose hull/crew/modules alone give some power and precision.
@@ -101,6 +101,102 @@ describe("contributionOf", () => {
     // closer to the game's answer than a multiple of an unseen zero.
     const c = contributionOf(withMul([{ stat: "Kinetic Damage", multiplier: 1.05 }]));
     expect(c.typedDamage.get("Kinetic")).toBeCloseTo(0.05, 10);
+  });
+});
+
+// A VS-LAYER ROLL IS PRICED, AND THE TWO LAYERS ARE NOT ONE TERM.
+//
+// `ApplyVsLayerBonus` multiplies a shot by `1 + turret.GetStat(stat)` only while the named layer still holds
+// capacity. Two of every three armour pools carry HP with no armour module and absorb nothing, while a shield is
+// usually live, so the same 0.25 is worth an order of magnitude more on one layer than the other. Pricing the
+// pair at zero, which is what reading no such line did, is wrong by that much on every fight.
+describe("the vs-layer rolls", () => {
+  const AS_SERVED = "DamageVsShield";   // no translation key exists, so the bridge sends the EquipStat spelling
+
+  it("credits a shield roll at the measured rate, per point", () => {
+    const equipped = [gun(), gun()];
+    const b = background(bg, equipped);
+    const plain = setDps(equipped, b);
+    const rolled = setDps([withStats([{ stat: AS_SERVED, amount: 0.25 }]), gun()], b);
+    // The roll is POOLED, so both guns collect it: the whole battery moves by the credit, not half of it.
+    expect(rolled / plain).toBeCloseTo(1 + 0.25 * VS_SHIELD_PER_POINT, 6);
+  });
+
+  it("prices the armour roll far below the shield one, which is the finding", () => {
+    const equipped = [gun(), gun()];
+    const b = background(bg, equipped);
+    const shield = setDps([withStats([{ stat: "DamageVsShield", amount: 0.25 }]), gun()], b);
+    const armour = setDps([withStats([{ stat: "DamageVsArmor", amount: 0.25 }]), gun()], b);
+    expect(shield).toBeGreaterThan(armour);
+    // Sharing one coefficient would make these equal, which is the defect this row exists to prevent. Compared
+    // as GAINS, since the two totals share the whole battery and differ only by the credit.
+    const base = setDps(equipped, b);
+    expect(armour).toBeGreaterThan(base);
+    expect((shield - base) / (armour - base)).toBeGreaterThan(5);
+  });
+
+  it("reads the display spelling and the enum spelling as one stat", () => {
+    const b = background(bg, [gun(), gun()]);
+    const enumName = setDps([withStats([{ stat: "DamageVsShield", amount: 0.2 }]), gun()], b);
+    const display = setDps([withStats([{ stat: "Damage vs Shield", amount: 0.2 }]), gun()], b);
+    expect(display).toBeCloseTo(enumName, 10);
+  });
+
+  it("collects both rolls on one gun, since they are two chances and not one", () => {
+    const b = background(bg, [gun(), gun()]);
+    const both = setDps([withStats([{ stat: "DamageVsShield", amount: 0.2 },
+                                    { stat: "DamageVsArmor", amount: 0.2 }]), gun()], b);
+    const one = setDps([withStats([{ stat: "DamageVsShield", amount: 0.2 }]), gun()], b);
+    expect(both).toBeGreaterThan(one);
+    expect(vsLayerCredit(0.2, 0.2)).toBeCloseTo(0.2 * VS_SHIELD_PER_POINT + 0.2 * VS_ARMOR_PER_POINT, 10);
+  });
+
+  it("does NOT credit the roll on aspect damage, which the game routes around the bonus", () => {
+    // `DamageOverTime.Tick` nulls `sourceTurret` and `ApplyVsLayerBonus` is guarded on it, so no aspect payload
+    // ever collects the roll. Multiplying the two terms together would pay the bonus on damage that never sees it.
+    const FIRESTARTER = "Deals an additional 15% Heat damage over 6 seconds.";
+    const asp = { aspects: [{ name: "Firestarter", description: FIRESTARTER }] } as Partial<Item>;
+    const b = background(bg, [gun(), gun()]);
+    const plainAsp = setDps([gun(asp), gun()], b);
+    const rolledAsp = setDps([withStats([{ stat: AS_SERVED, amount: 0.25 }], asp), gun()], b);
+    const gained = rolledAsp - plainAsp;
+    // What the same roll buys on the gun with no aspect at all: the aspect's 15% must not be multiplied by it.
+    const plain = setDps([gun(), gun()], b);
+    const rolled = setDps([withStats([{ stat: AS_SERVED, amount: 0.25 }]), gun()], b);
+    expect(gained).toBeCloseTo(rolled - plain, 6);
+  });
+
+  it("changes nothing for a battery that rolls neither, so no existing score moves", () => {
+    const equipped = [withStats([{ stat: "Precision", amount: 400 }]), gun()];
+    const b = background(bg, equipped);
+    expect(vsLayerCredit(0, 0)).toBe(0);
+    expect(setDps(equipped, b)).toBeCloseTo(setDps(equipped, b), 10);
+    expect(contributionOf(equipped[0]).vsShield).toBe(0);
+    expect(contributionOf(equipped[0]).vsArmor).toBe(0);
+  });
+
+  it("reads the bonus off the ASPECT, which is the only place the game puts it", () => {
+    // No equipment recipe carries `DamageVsShield` or `DamageVsArmor` as a main or optional stat: the whole term
+    // enters through two aspects, `Shield Slapper` and `Armorbreaker`, each a fixed +0.10 `TurretBoostStat`. So it
+    // is an aspect-slot decision with a discrete step, and a reading that only looked at `stats[]` would price
+    // every instance of it in the game at zero.
+    const asp = {
+      aspects: [{ name: "Shield Slapper", description: "Damage to shields increased by +10%.",
+                  stats: [{ stat: "DamageVsShield", amount: 0.1, multiplier: 1, scope: "weapon" }] }],
+    } as Partial<Item>;
+    const b = background(bg, [gun(), gun()]);
+    const withAsp = setDps([gun(asp), gun()], b);
+    const plain = setDps([gun(), gun()], b);
+    expect(withAsp).toBeGreaterThan(plain);
+    expect(vsRollsOf(gun(asp)).shield).toBeCloseTo(0.1, 10);
+    // WEAPON-LOCAL: it lifts the gun that carries it and no other, so the battery gains its share and not the
+    // whole credit. Two guns, so about half of what a pooled line of the same size would be worth.
+    expect(withAsp / plain).toBeLessThan(1 + 0.1 * VS_SHIELD_PER_POINT);
+  });
+
+  it("honours a negative roll rather than clamping it to nothing", () => {
+    expect(vsLayerCredit(-0.1, 0)).toBeLessThan(0);
+    expect(vsLayerCredit(Number.NaN, Number.NaN)).toBe(0);
   });
 });
 
@@ -1190,7 +1286,9 @@ describe("judging a MODULE", () => {
     expect(pricesModuleStat("Power")).toBe(true);
     // a real pool still reports as one, and a stat the objective cannot weigh still reports nothing
     expect(moduleStatChannel("Mining Power")).toBe("pool");
-    expect(moduleStatChannel("Torpedo Power")).toBe(null);
+    // Torpedo Power is a POOL now that the bay's output is scored — it used to be the example of an unpriced
+    // stat here, which is why a resist stands in for that role.
+    expect(moduleStatChannel("Torpedo Power")).toBe("pool");
     expect(pricesModuleStat("Kinetic Resistance")).toBe(false);
   });
 
@@ -1404,3 +1502,154 @@ describe("judging a MODULE", () => {
     expect(moduleBetter(plain, tougher, ctx)).toBe(false);
   });
 });
+describe("bracketed — a ranked reading sees the reactor collapse", () => {
+  // The absurdity that found this: a reactor swap halving capacity took the load 41% -> 82% and the
+  // bonus +20% -> 0%. The panel said the plan was WORSE in as many words, because the SCALAR re-brackets — while
+  // the ranked reading was taken straight off the projected pools, which are not re-bracketed, so the goal key
+  // barely moved and the gate accepted it.
+  const pools = (capacity: number, used: number): ShipPools => ({
+    poolCombatPower: 12_000, poolSalvagePower: 99_386, poolPrecision: 15_559, equivalentTurrets: 3,
+    precisionDivisor: 5_000, critDamage: 0, megaCrit: 0, critChance: 0.2, critChanceMult: 1,
+    energy: { used, capacity, mod: 0.2 },
+  });
+
+  it("re-brackets the power pools and leaves precision alone", () => {
+    const fitted = pools(22_190, 9_129);                 // 41% -> the +20% band the figures were measured in
+    const halved = pools(11_075, 9_129);                 // 82% -> no bonus at all
+    const before = goalReadingOf(fitted);
+    const after = goalReadingOf(halved);
+    // 99,386 measured at +20% reads 82,821 at +0%: the pool is divided by 1.2, not multiplied by anything.
+    expect(after.salvage!).toBeCloseTo(99_386 / 1.2, 0);
+    expect(after.salvage!).toBeLessThan(before.salvage!);
+    expect(after.combat!).toBeLessThan(before.combat!);
+    // No bracket applies to Precision, so a reading that moved it would be inventing a loss.
+    expect(after.precision).toBe(before.precision);
+  });
+
+  it("makes the goal refuse the swap it used to accept", () => {
+    const fitted = goalReadingOf(pools(22_190, 9_129));
+    const planned = goalReadingOf(pools(11_075, 9_129));
+    expect(goalRefuses(["salvage"], fitted, planned)).toBe("salvage");
+    // And unbracketed — the old reading — it looked like no change at all, which is how it shipped.
+    const raw = pools(11_075, 9_129);
+    expect(raw.poolSalvagePower).toBe(99_386);
+  });
+
+  it("is inert where the load does not move the bracket", () => {
+    const a = goalReadingOf(pools(22_190, 9_129));       // 41%
+    const b = goalReadingOf(pools(22_190, 10_000));      // 45%, same band
+    expect(b.salvage).toBe(a.salvage);
+  });
+});
+
+describe("allowanceBreach — the price an order cannot state", () => {
+  const order: GoalKey[] = ["dps", "armor", "combat"];
+  const fitted = { dps: 283_176, armor: 6_033_609, combat: 397_269 };
+
+  it("refuses the plan that started this: a DPS gain paid for in armor and combat", () => {
+    // The measured case: +2.66% DPS, -6.03% armor, -21% combat. An ORDER accepts it because DPS is
+    // ranked first; a 2% allowance does not.
+    const planned = { dps: 290_705, armor: 5_669_583, combat: 313_698 };
+    const b = allowanceBreach(order, fitted, planned, 0.02);
+    expect(b).not.toBeNull();
+    expect(b!.key).toBe("combat");                 // the WORST breach, not the first
+    expect(b!.drop).toBeCloseTo(0.2104, 3);
+    // And the gate refuses it, where without an allowance it accepts.
+    expect(goalAccepts(order, fitted, planned, [2, 290_705], [2, 283_176], OBJECTIVE_TIE, 0.02)).toBe(false);
+    expect(goalAccepts(order, fitted, planned, [2, 290_705], [2, 283_176])).toBe(true);
+  });
+
+  it("exempts the maximand — the thing being bought cannot bind the purchase", () => {
+    // DPS itself falls 10%, which is not this mechanism's business: the order's own scan refuses that.
+    const planned = { dps: 254_858, armor: 6_033_609, combat: 397_269 };
+    expect(allowanceBreach(order, fitted, planned, 0.02)).toBeNull();
+  });
+
+  it("says nothing about a key the player did not rank", () => {
+    // A salvage refit legitimately sheds mining power; nobody asked for it to be held.
+    const planned = { dps: 290_705, armor: 6_033_609, combat: 397_269, mining: 1 };
+    expect(allowanceBreach(order, { ...fitted, mining: 5_585 }, planned, 0.02)).toBeNull();
+  });
+
+  it("skips a key absent on either side rather than reading it as destroyed", () => {
+    expect(allowanceBreach(order, fitted, { dps: 290_705, combat: 397_269 }, 0)).toBeNull();
+    expect(allowanceBreach(order, { dps: 1 }, { dps: 1, armor: 1 }, 0)).toBeNull();
+  });
+
+  it("passes a plan that stays inside the allowance", () => {
+    const planned = { dps: 290_705, armor: 5_973_273, combat: 393_296 };   // -1% each
+    expect(allowanceBreach(order, fitted, planned, 0.02)).toBeNull();
+  });
+
+  it("is inert with one ranked key, since there is nothing below the maximand", () => {
+    expect(allowanceBreach(["dps"], fitted, { dps: 1 }, 0)).toBeNull();
+  });
+});
+
+describe("moduleStatChannel — what the card may call unpriced", () => {
+  // The three layer stats are read by the ranked goal (`projectLayer`), by the layer floor and by the drop
+  // warning, so calling them "not scored — your call" beside a swap that halves an Armor Plating's multiplier is
+  // the panel contradicting the objective.
+  it("prices the layer stats through the projection", () => {
+    for (const stat of ["Hull HP", "Armor HP", "Shield HP"]) expect(moduleStatChannel(stat)).toBe("layer");
+    // Both halves of the line, since `projectLayer` moves the multiplier and the amount together.
+    expect(moduleStatChannel("× Armor HP")).toBe("layer");
+  });
+
+  it("still says nothing where the objective really has no opinion", () => {
+    expect(moduleStatChannel("Kinetic Resistance")).toBeNull();
+    expect(moduleStatChannel("Weapon Range")).toBeNull();
+  });
+
+  it("prices Torpedo Power, because the bay's output is now scored", () => {
+    // It was the standing example of a stat the objective had no opinion on, which is exactly what made a bay
+    // rank on its Precision roll while its whole reason for existing counted for nothing.
+    expect(moduleStatChannel("Torpedo Power")).toBe("pool");
+    expect(moduleStatChannel("× Torpedo Power")).toBe("pool");
+  });
+
+  it("keeps the pool and bracket answers", () => {
+    expect(moduleStatChannel("Combat Power")).toBe("pool");
+    expect(moduleStatChannel("Power")).toBe("pool");
+    expect(moduleStatChannel("Energy")).toBe("bracket");
+    expect(moduleStatChannel("Power use")).toBe("bracket");
+  });
+});
+
+describe("powerFactor — the prefab's own multiplier on attack power", () => {
+  // Measured against the game's own `/ship/turrets/attack` on a live six-hardpoint battery: without this factor
+  // the model read 9.09% LOW on both Railguns (1.1) and 5.26% HIGH on the Laser (0.95) while three unaffected
+  // hardpoints matched exactly. With it, all six matched to 0.00%.
+  const gun = (name: string, cp: number, mul: number | null): Item => ({
+    key: 1, slot: 1, name, rarity: "Exotic", level: 74, size: "Large", type: name,
+    category: "Turret", gameplayType: "Combat", damageType: "Kinetic", sellValue: 0,
+    mainStat: { name: "Combat Power", amount: String(cp) },
+    powerUsage: 0, powerUsageBase: 0, powerMultiplier: mul,
+    fireDelayRaw: 1, reloadDelayRaw: 3, magSizeRaw: 2, burstAmount: 1, burstDelay: 0.2,
+    aspects: [], stats: [], substats: [], bonus: null, bonusStat: null,
+  } as unknown as Item);
+
+  const pools: ShipPools = {
+    poolCombatPower: 100_000, poolPrecision: 10_000, equivalentTurrets: 3,
+    precisionDivisor: 5_000, critDamage: 0, megaCrit: 0, critChance: 0.2, critChanceMult: 1,
+    energy: { used: 1_000, capacity: 20_000, mod: 0.2 },
+  };
+
+  it("scales a gun's whole term, own power and pooled share alike", () => {
+    const plain = setDps([gun("plain", 10_000, 1)], background(pools, []));
+    const strong = setDps([gun("strong", 10_000, 1.1)], background(pools, []));
+    expect(strong / plain).toBeCloseTo(1.1, 6);
+  });
+
+  it("reorders two guns the headline power cannot separate", () => {
+    // Same Combat Power, different prefab: the 1.1 gun IS the better fit and the model must say so.
+    const bg = background(pools, []);
+    expect(setDps([gun("railgun", 10_000, 1.1)], bg)).toBeGreaterThan(setDps([gun("laser", 10_000, 0.95)], bg));
+  });
+
+  it("reads as 1 where an older bridge sends nothing", () => {
+    const bg = background(pools, []);
+    expect(setDps([gun("absent", 10_000, null)], bg)).toBeCloseTo(setDps([gun("one", 10_000, 1)], bg), 6);
+  });
+});
+

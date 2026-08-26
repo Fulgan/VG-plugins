@@ -1,22 +1,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, type Conn } from "./api";
+import { api, itemIcon, type Conn } from "./api";
 import type { CatalogTypes, Inventories, Item, ShipHardpoint, ShipLayout, Vitals } from "./types";
 import { num, mainVal, effectiveMainVal } from "./format";
 import { aspectDamageFraction, damageAspects } from "./aspect";
 import { turretScore, scoreReasons, BASE_CRIT, type CritContext } from "./turretScore";
-import { activityOf, capacityWith, optimizeTurretSet, optimizeModuleSet, optimizeShipSet, poolsWithModules, optimizeTurretSetLayered, coversLayer, sameScale, background, setRank, rankGt, rankSub, worthSwitching, isCombat, moduleBetter, moduleGain, shortlist, MIN_GAIN, OBJECTIVE_TIE, type LayerRole, type LayerTarget, type ModuleCtx, type PowerActivity, defaultGoalOrder, goalReadingOf, goalRefuses, goalDrops, GOAL_LABEL, liveVeto, projectLayer, DEFAULT_LAYER_CAP, type LayerReading,
-  type GoalKey, type Rank, type ReactorBudget, type ShipPools, type SlotChoice } from "./fleetDps";
+import { activityOf, capacityWith, optimizeTurretSet, optimizeModuleSet, optimizeShipSet, poolsWithModules, optimizeTurretSetLayered, coversLayer, sameScale, background, setRank, rankGt, rankSub, worthSwitching, isCombat, moduleBetter, moduleGain, shortlist, MIN_GAIN, OBJECTIVE_TIE, type LayerRole, type LayerTarget, type ModuleCtx, type PowerActivity, defaultGoalOrder, goalReadingOf, goalRefuses, goalDrops, goalAccepts, goalUnread, allowanceBreach, DEFAULT_ALLOWANCE, type Breach, GOAL_KEYS, GOAL_LABEL, liveVeto, projectLayer, DEFAULT_LAYER_CAP, frontier, FRONTIER_STEPS, type FrontierPoint, type LayerReading,
+  type GoalKey, type GoalReading, type Rank, type ReactorBudget, type ShipPools, type SlotChoice } from "./fleetDps";
 import { AspectMarks } from "./AspectMark";
-import { load, save, LAYER_CAP_KEY } from "./storage";
+import { load, save, LAYER_CAP_KEY, ALLOWANCE_KEY, GOAL_ORDER_KEY } from "./storage";
+import { atMaxQuality, atScope } from "./quality";
+import { getScope, setSharedScope, subscribeScope, type Scope } from "./scope";
 import { modelBlock, MODEL_BLOCK_TEXT } from "./arenaModel";
 import { ACTIVITIES, catOf, activityLabel, compareModules, equippedIn, isTurret, shipFit, type Activity } from "./itemKind";
 import SlotPickList from "./SlotPickList";
-import SlotCard, { Vig as BaseVig, NewVig as BaseNewVig, FilterSelect, type FGroup } from "./SlotCard";
+import SlotCard, { Vig as BaseVig, NewVig as BaseNewVig, FilterSelect, type FGroup, SlotLock } from "./SlotCard";
 import { ItemTip } from "./ItemCard";
 import { useEscape } from "./Modal";
 import { turretFits, moduleFits, mayKeepEquipped, parseActivity, reachableLayers, type GearFilter } from "./gearFit";
 import { energyDraw, reactorModifier } from "./reactor";
 import GearTotals from "./GearTotals";
+import GoalOrder from "./GoalOrder";
+import AllowanceSweep from "./AllowanceSweep";
+import { defenseLayerOf } from "./activityPresets";
 import ApplyBar, { ApplyMsg } from "./ApplyBar";
 import PlanNotice, { type PlanVerdict } from "./PlanNotice";
 import type { ApplyApi } from "./useApply";
@@ -84,32 +89,41 @@ export { ACTIVITIES, catOf, activityLabel, isTurret };
 export { ItemTip };
 export type { Activity };
 
-// A slot's "no proposal" verdict as text. `why` is the second line: the action it implies, since each of these
-// wants a DIFFERENT one from the player and an undifferentiated "keep current" implied none.
-function verdictText(v: { kind: string; n?: number; pct?: number } | undefined): { text: string; why: string } | null {
+// A slot's "no proposal" verdict as text.
+//
+// A SECOND LINE ONLY WHERE IT SAYS SOMETHING THE FIRST CANNOT, which is the player's own rule: `remove all these
+// filler texts that carry no information`. A sentence restating the label in longer words ("locked to current" →
+// "you chose to keep what is fitted here") is noise on a card read at a glance, and the control it points at is
+// already on the card. What survives is a FACT the card has nowhere else to put: the floor's percentage, why a
+// balanced score can be zero, why a per-slot gain does not survive the whole battery.
+function verdictText(v: { kind: string; n?: number; pct?: number } | undefined): { text: string; why?: string } | null {
   if (!v) return null;
   switch (v.kind) {
     case "locked":
-      return { text: "locked to current", why: "You chose to keep what is fitted here, so nothing is proposed for it. Click the lock to release it." };
+      return { text: "locked to current" };
     case "pinned":
-      return { text: "you set this", why: "Suggestions skip a slot you chose yourself — release the pin to have it re-answered." };
+      return { text: "you set this" };
     case "empty-nofit":
-      return { text: "nothing fits", why: "Empty, and nothing you own matches this slot's filter and size. Widen the filter." };
+      return { text: "nothing fits", why: "nothing owned matches this filter and size" };
     case "forced":
-      return { text: "breaks this filter", why: "The fitted gun does not match the filter you set here, so a switch is owed — press ⚡ or pick one." };
+      return { text: "breaks this filter" };
     case "zero":
       return {
         text: `best of ${v.n} would score where this scores nothing`,
-        why: "This battery cannot reach one of the ore layers, so its balanced score is zero — anything that reaches "
-          + "the other layer is an improvement without a percentage to put on it. Press ⚡ or pick one.",
+        why: "this battery reaches only one layer, so its balanced score is zero",
       };
     case "floor":
       return {
         text: `kept — best of ${v.n} beats it by only ${((v.pct ?? 0) * 100).toFixed(2)}%`,
-        why: `Under the ${MIN_GAIN * 100}% worth-it floor, so it is not worth a hangar trip. The opportunity rails apply the same floor and will not offer it either.`,
+        why: `under the ${MIN_GAIN * 100}% worth-it floor`,
+      };
+    case "unchosen":
+      return {
+        text: `kept — best of ${v.n} scores ${((v.pct ?? 0) * 100).toFixed(2)}% higher in this slot alone`,
+        why: "the gain does not survive the whole battery — the pools are shared",
       };
     default:
-      return { text: `kept — best of ${v.n}`, why: "Nothing that fits this slot's filter and size scores higher for the whole battery." };
+      return { text: `kept — best of ${v.n}` };
   }
 }
 
@@ -130,6 +144,23 @@ const GF_KEY = "shipoptimizer.gearFilters";
 type FiltersByShip = Record<string, Record<number, Filter>>;
 const loadGF = () => load<FiltersByShip>(GF_KEY, {});
 const saveGF = (m: FiltersByShip) => save(GF_KEY, m);
+// The player's ranked stat goal, per ship, in the same shape and for the same reason as the filters above.
+type OrderByShip = Record<string, GoalKey[]>;
+// The officers tab owns "what is this ship for" and writes it here; the gear frontier READS it so the two
+// objectives cannot disagree about which layer a hull tanks on.
+const loadProfiles = (): Record<string, { combatLayer?: "armor" | "shield" }> =>
+  load<{ profile?: Record<string, { combatLayer?: "armor" | "shield" }> }>("shipoptimizer.officerBuilder", {}).profile ?? {};
+const loadGO = () => load<OrderByShip>(GOAL_ORDER_KEY, {});
+const saveGO = (m: OrderByShip) => save(GOAL_ORDER_KEY, m);
+// A stored order is only as good as the build that wrote it: a key this build does not have is dropped rather than
+// carried into the comparator, where it would read as a stat nothing can measure. Duplicates go too — a key twice
+// in a lexicographic scan makes the second copy unreachable, which is a silent way for an order to lie.
+const cleanOrder = (v: unknown): GoalKey[] => {
+  if (!Array.isArray(v)) return [];
+  const seen = new Set<string>();
+  return v.filter((k): k is GoalKey =>
+    typeof k === "string" && (GOAL_KEYS as readonly string[]).includes(k) && !seen.has(k) && !!seen.add(k));
+};
 // Slots LOCKED to whatever is fitted, per ship. Distinct from `manual`, which pins a slot to an item the player
 // PICKED: this says "leave this slot alone" and survives reloads and re-optimisation. It exists because not every
 // hull is worth good gear — a size-1 ship that rides in a carrier gets a deliberately cheap module, and the
@@ -346,32 +377,90 @@ export interface GearBuilder {
   // Set when the ship cannot reach one layer at all, so the score is single-layer BY NECESSITY rather than
   // by choice — the UI states it, since a silent substitution is indistinguishable from a bug.
   layerNote: string | null;
-  /** The stats this ship is ranked on, in order — today the hull's role and nothing more. */
+  /** The stats this ship is ranked on, in the player's own order. Empty = the objective has no opinion. */
   goalOrder: GoalKey[];
+  /** Writes the order for THIS ship. Persisted per ship and pushed with the playthrough. */
+  setGoalOrder: (next: GoalKey[]) => void;
+  /** Ranked keys the plan on screen cannot be judged on, so the control can say so instead of implying a tie. */
+  goalUnreadKeys: GoalKey[];
+  // THE ALLOWANCE SWEPT, as real builds. Null until asked for: each point is a whole-ship search.
+  tankLayer: "armor" | "shield" | null;
+  frontierPts: FrontierPoint[] | null;
+  frontierBusy: boolean;
+  /** Steps solved, and the reading the rows are printed against — one snapshot for both. */
+  frontierSolved: number | null;
+  frontierNow: GoalReading | null;
+  buildFrontier: () => void;
+  applyFrontier: (p: FrontierPoint) => void;
+  clearFrontier: () => void;
   /** Why a plan was withheld, when the player's order refused it rather than the floor. */
   goalNote: string | null;
   // What a plan may spend of any ONE defensive layer, as a fraction of the ship's own reading, and the setter
   // the tab's control writes through. Persisted and pushed with the playthrough: how much survivability a
   // player will trade is a way of flying, not a fact about a window.
   layerCap: number;
+  /** Read every item as it IS, or at its workshop-quality ceiling. Shared with the officers tab (one control). */
+  scope: Scope;
+  setScope: (v: Scope) => void;
+  /** What a plan may spend of a RANKED stat, as a fraction of the fitted build. A refusal, not a warning. */
+  allowance: number;
+  setAllowance: (v: number) => void;
   setLayerCap: (v: number) => void;
 }
 
 // Shared gear state (assignments + per-ship filters + categories), lifted into App so the Gear tab and
 // the Summary tab work off one result.
-export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | null, currentShipGuid?: string | null, crit: CritContext = BASE_CRIT, pools?: ShipPools | null, role?: string | null, vitals?: Vitals | null): GearBuilder {
+export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | null, currentShipGuid?: string | null, crit: CritContext = BASE_CRIT, poolsReported?: ShipPools | null, role?: string | null, vitals?: Vitals | null): GearBuilder {
   // The layout and the live ship can disagree for a moment after a ship change (separate fetches). Every
   // proposal is derived from the layout's slots, so while they disagree we suggest nothing and apply
   // nothing — a plan for the previous hull's hardpoints is worse than no plan.
   const layoutFresh = !!layout && (!currentShipGuid || layout.shipGuid === currentShipGuid);
+  /**
+   * CURRENT OR FULL POTENTIAL — the officers tab's own control, reused rather than copied (V?): the question is
+   * identical, only the mechanism differs (there, an officer's unlocked skills; here, an item's workshop quality).
+   *
+   * EVERY item is read at the chosen scope, the fitted ones included, and that symmetry is the whole correctness
+   * of it: scoring candidates at their ceiling against incumbents as they stand would favour whatever has the most
+ * headroom left, which is a bias dressed as an upgrade.
+   */
+  const [scope, setScopeLocal] = useState<Scope>(getScope);
+  // ⚠ RE-READ ON MOUNT, ⊥ only on notify. `primeScope` seeds the store from the officers' saved blob WITHOUT
+  // notifying (it runs inside a `useState` initialiser, so notifying would set state during another component's
+  // render), and this tab is constructed FIRST — it therefore took `DEFAULT_SCOPE` and never heard about the saved
+  // one. A player whose saved scope was `current` got the officers tab on `current` and this one stuck on `full
+  // potential`, both segmented controls disagreeing until one was clicked. Syncing here is order-independent.
+  useEffect(() => {
+    setScopeLocal(getScope());
+    return subscribeScope(() => setScopeLocal(getScope()));
+  }, []);
   const gear = useMemo<Item[]>(() => {
     const out: Item[] = [];
     for (const st of inv?.stores ?? [])
       for (const it of st.items)
         if (it.category === "Turret" || isModule({ ...it, location: st.id }))
-          out.push({ ...it, location: st.id });
+          out.push(atScope({ ...it, location: st.id }, scope));
     return out;
-  }, [inv]);
+  }, [inv, scope]);
+  /**
+   * THE BASELINE, RE-READ AT THE CHOSEN SCOPE. The bridge's pools describe the ship as it is ∴ at `potential` they
+   * describe the wrong ship, and leaving them alone would score upgraded candidates against un-upgraded pools —
+   * the asymmetry that makes a plan look like a gain because only one side of it was projected.
+   *
+   * IT CARRIES THE TURRETS, and here that is correct rather than the V76 double count. That rule exists because
+   * `setDps` adds each gun's own MAIN power itself, so folding a proposed gun into the pool counts it twice.
+   * Quality cannot cause that: it scales every line EXCEPT the main stat, so what moves here is only the pooled
+   * substat half, and the main power `setDps` adds is the one number quality leaves alone.
+   */
+  const pools = useMemo<ShipPools | null>(() => {
+    if (!poolsReported || scope !== "potential") return poolsReported ?? null;
+    const fittedTurretsAndModules: (Item | null)[] = [
+      ...(layout?.hardpoints ?? []).map((h) => h.equipped ?? null),
+      ...(layout?.modules ?? []).map((m) => m.equipped ?? null),
+    ];
+    // scope-projection: the baseline itself, not a plan — both halves, main stat unscaled.
+    return poolsWithModules(poolsReported, fittedTurretsAndModules,
+                            fittedTurretsAndModules.map((x) => (x ? atMaxQuality(x) : null)));
+  }, [poolsReported, scope, layout]);
   const shipGuid = layout?.shipGuid ?? "";
   const [cats, setCatsS] = useState<Record<string, string[]>>(loadCats);
   // Ranking mode is a per-user preference, not per ship: it is a question about how to judge gear.
@@ -476,9 +565,11 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
   // key is the only way to fetch their icon (see itemIcon in api.ts).
   const hps = useMemo(() => [...(layout?.hardpoints ?? [])]
     .sort((a, b) => a.index - b.index)
-    .map((h) => (h.equipped ? { ...h, equipped: { ...h.equipped, slotKey: `t:${h.index}` } } : h)), [layout]);
+    .map((h) => (h.equipped ? { ...h, equipped: atScope({ ...h.equipped, slotKey: `t:${h.index}` }, scope) } : h)),
+    [layout, scope]);
   const mslots = useMemo(() => (layout?.modules ?? [])
-    .map((m) => (m.equipped ? { ...m, equipped: { ...m.equipped, slotKey: `m:${m.slot}` } } : m)), [layout]);
+    .map((m) => (m.equipped ? { ...m, equipped: atScope({ ...m.equipped, slotKey: `m:${m.slot}` }, scope) } : m)),
+    [layout, scope]);
   // No clear-on-switch: every per-slot decision is bucketed by ship above, so switching simply reads a different
   // bucket and switching BACK finds the plan intact. What still has to be guarded is a slot key that exists on one
   // hull and not another — `slotExists` and `fitsSlot` do that where the plan is read.
@@ -619,12 +710,27 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
   // the hull's own role and nothing more (`defaultGoalOrder`) — a longer default would be an ordering nobody
   // asked for. `vetoed` is written by the suggest paths and read for the note: a plan withheld in silence is
   // indistinguishable from one that was never found.
-  const goalOrder = useMemo(() => defaultGoalOrder(role ?? null), [role]);
+  const [orderByShip, setOrderByShip] = useState<OrderByShip>(loadGO);
+  // STATED beats DEFAULTED, and an empty stated order is a statement: a player who cleared every key is asking the
+  // objective to have no opinion, which is not the same as never having answered. Only the absence of an entry
+  // falls back to the hull's role.
+  const goalOrder = useMemo(() => {
+    const stated = shipGuid ? orderByShip[shipGuid] : undefined;
+    return stated ? cleanOrder(stated) : defaultGoalOrder(role ?? null);
+  }, [orderByShip, shipGuid, role]);
+  const setGoalOrder = useCallback((next: GoalKey[]) => {
+    if (!shipGuid) return;
+    setOrderByShip((m) => { const n = { ...m, [shipGuid]: cleanOrder(next) }; saveGO(n); return n; });
+  }, [shipGuid]);
   // TIED TO THE RUN THAT WROTE IT, which a bare key was not: this component stays mounted across a ship change,
   // so a refusal earned on the previous hull stayed on screen beside a ship whose order does not even contain
   // that key (a salvage hull told its first goal was Combat Power). An explanation of an absence is only true
   // of the run it came from, so it is stored with that run's signature and ignored once the signature moves.
   const vetoed = useRef<{ sig: string; key: GoalKey } | null>(null);
+  // WHAT AN ALLOWANCE REFUSED, kept the same way and for the same reason: a plan withheld because a ranked stat
+  // would fall too far produces NO ROW, and an absence with no reason is indistinguishable from an empty armory
+  //. Held with its run's signature so it cannot outlive the question it answers.
+  const bound = useRef<{ sig: string; breach: Breach } | null>(null);
 
   // THE DEFENSIVE CAP, in front of the order rather than inside it. An order with Combat first never reads a
   // hull key on a plan whose combat power ROSE, which is exactly the plan the player objected to — "it wants me
@@ -640,17 +746,88 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
     setLayerCapState(c);
     save(LAYER_CAP_KEY, c);
   }, []);
+
+  // WHAT A PLAN MAY SPEND of a ranked stat — a REFUSAL, and the mechanism an ORDER cannot provide: an order
+  // sequences keys, so any gain on the first outranks any loss below it. Stated as a fraction of the
+  // fitted build, which is the one thing a player can state without an exchange rate between two stats.
+  const [allowance, setAllowanceState] = useState<number>(() => {
+    const v = load<number>(ALLOWANCE_KEY, DEFAULT_ALLOWANCE);
+    return Number.isFinite(v) && v >= 0 && v <= 1 ? v : DEFAULT_ALLOWANCE;
+  });
+  const setAllowance = useCallback((v: number) => {
+    const c = Math.min(1, Math.max(0, v));
+    setAllowanceState(c);
+    save(ALLOWANCE_KEY, c);
+  }, []);
   // The layers as the GAME reports them, projected across a candidate build by the objective's own owner. Null
   // where `/ship/vitals` has not been read — and a layer with no reading orders nothing, rather than reading as
   // a layer destroyed.
+  /**
+   * A LAYER THIS HULL HAS NO SLOT FOR IS NOT A LAYER THIS APP MAY RANK, WARN ABOUT OR TRADE.
+   *
+   * A ship can carry armor HP with no `Armor` slot to apply it — measured across the ship catalog, 76 hulls have
+   * armor HP and only 53 have the slot, and player-buyable hulls are among the difference. Nothing the optimiser
+   * chooses can move such a pool, so a warning that it fell is a warning about a number no plan can act on, and a
+   * floor on it would refuse builds for failing an unreachable requirement.
+   *
+   * Read from the hull's SLOTS, the same fact `defenseLayerOf` reads, rather than inferred from the HP being
+   * non-zero — that inference agrees with the truth right up until it does not.
+   */
+  const hasLayerSlot = useCallback((slotType: string) => mslots.some((m) => m.slot === slotType), [mslots]);
+  const layerMax = useCallback((layer: "hull" | "armor" | "shield"): number | null => {
+    if (layer === "armor" && !hasLayerSlot("Armor")) return null;
+    if (layer === "shield" && !hasLayerSlot("ShieldGenerator")) return null;
+    return vitals?.[layer]?.max ?? null;
+  }, [vitals, hasLayerSlot]);
+
   const layersOf = useCallback((cur: Item[], next: Item[]): LayerReading => ({
-    hull: projectLayer(vitals?.hull?.max ?? null, "Hull HP", cur, next),
-    armor: projectLayer(vitals?.armor?.max ?? null, "Armor HP", cur, next),
-    shield: projectLayer(vitals?.shield?.max ?? null, "Shield HP", cur, next),
-  }), [vitals]);
+    hull: projectLayer(layerMax("hull"), "Hull HP", cur, next),
+    armor: projectLayer(layerMax("armor"), "Armor HP", cur, next),
+    shield: projectLayer(layerMax("shield"), "Shield HP", cur, next),
+  }), [layerMax]);
   const layersNow = useCallback((): LayerReading => ({
-    hull: vitals?.hull?.max ?? null, armor: vitals?.armor?.max ?? null, shield: vitals?.shield?.max ?? null,
-  }), [vitals]);
+    hull: layerMax("hull"), armor: layerMax("armor"), shield: layerMax("shield"),
+  }), [layerMax]);
+
+  /**
+   * A PLAN'S RANKED READING — the pools with EVERY slot the plan touches folded in, hardpoints included.
+   *
+   * ONE owner, because the two projections this app keeps are a step apart and the wrong one reads as a gain:
+   *
+   *   the battery's BACKGROUND is the module assignment alone, since `setDps` adds each candidate gun's own
+   *   contribution and folding the guns in there counts them twice;
+   *   a RANKED READING is a figure of the whole SHIP, so a hardpoint losing 6,188 of Salvage Power belongs in it.
+   *
+   * Read from the module projection, every ranked key of a turret plan ties — the doc on `goalUnread` says so in
+   * as many words — and a plan trading gun power for a module's `Power` line reads as pure gain on the very key
+   * the player ranked first.
+   *
+   * POSITIONAL: `cur[i]` is what leaves the slot `next[i]` enters, so both sides carry a null for an empty slot
+   * rather than being compacted (`filter(Boolean)` on one side pairs each item with the wrong slot).
+   */
+  const planReading = useCallback((rank: Rank, cur: (Item | null)[], next: (Item | null)[],
+                                   layers?: LayerReading): GoalReading => {
+    if (!pools) return {};
+    return goalReadingOf(poolsWithModules(pools, cur, next), rank, layers);
+  }, [pools]);
+
+  /** Every slot's item, in slot order and keeping the empties, for `planReading`'s positional pairing. */
+  const slotItems = useCallback((plan: Record<string, Item> | null) => ({
+    turrets: hps.map((h) => (plan ? plan[`t:${h.index}`] ?? h.equipped : h.equipped) ?? null),
+    modules: mslots.map((m) => (plan ? plan[`m:${m.slot}`] ?? m.equipped : m.equipped) ?? null),
+  }), [hps, mslots]);
+
+  /**
+ * WHICH LAYER THIS HULL TANKS ON — the frontier's whole axis, and what the drop warning watches.
+   *
+   * The player's own statement first (`profile.combatLayer`, the shield|armor buttons on the officers tab), and
+   * the hull's slots as its default. ONE owner shared with the officer objective: the two answer the same
+   * question, "what is this ship for", and a second reader is how they come to disagree.
+   */
+  const tankLayer = useMemo<"armor" | "shield" | null>(() => {
+    const stated = shipGuid ? loadProfiles()[shipGuid]?.combatLayer : undefined;
+    return stated ?? defenseLayerOf(mslots.map((m) => m.slot));
+  }, [shipGuid, mslots]);
 
   /**
    * What the plan ON SCREEN costs, across every tracked measurement — computed from the plan, never latched.
@@ -669,13 +846,134 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
     const projected = poolsWithModules(pools, curM, nextM);
     const rankNow = setRank(curT, background(pools, curT));
     const rankNext = setRank(nextT, background(projected, curT));
+    const was = slotItems(null), plan = slotItems(assign);
     return goalDrops(
       goalReadingOf(pools, rankNow, layersNow()),
-      goalReadingOf(projected, rankNext, layersOf([...curT, ...curM], [...nextT, ...nextM])),
+      planReading(rankNext, [...was.turrets, ...was.modules], [...plan.turrets, ...plan.modules],
+                  layersOf([...curT, ...curM], [...nextT, ...nextM])),
       layerCap,
+      // The other layer is whatever the guns happen to roll, and warning on a percentage of almost nothing is how
+      // a warning gets trained out of a player. Null (no defensive slot at all) watches both.
+      tankLayer,
     );
-  }, [pools, layoutFresh, changes, hps, mslots, assign, layersNow, layersOf, layerCap]);
+  }, [pools, layoutFresh, changes, hps, mslots, assign, layersNow, layersOf, layerCap, planReading, slotItems,
+      tankLayer]);
 
+  /**
+ * The ranked keys the plan on screen cannot answer — said out loud rather than left to look like a tie.
+   *
+   * With no pools the objective can read nothing at all, so every ranked key is unread; that is the same state the
+   * whole expanded ranking degrades to, and it should read the same way here.
+   */
+  const goalUnreadKeys = useMemo(() => {
+    if (!goalOrder.length) return [];
+    if (!pools) return [...goalOrder];
+    const curT = hps.map((h) => h.equipped).filter((x): x is Item => !!x);
+    const nextT = hps.map((h) => assign[`t:${h.index}`] ?? h.equipped).filter((x): x is Item => !!x);
+    const curM = mslots.map((m) => m.equipped).filter((x): x is Item => !!x);
+    const nextM = mslots.map((m) => assign[`m:${m.slot}`] ?? m.equipped).filter((x): x is Item => !!x);
+    const projected = poolsWithModules(pools, curM, nextM);
+    const was = slotItems(null), plan = slotItems(assign);
+    return goalUnread(
+      goalOrder,
+      goalReadingOf(pools, setRank(curT, background(pools, curT)), layersNow()),
+      planReading(setRank(nextT, background(projected, curT)),
+                  [...was.turrets, ...was.modules], [...plan.turrets, ...plan.modules],
+                  layersOf([...curT, ...curM], [...nextT, ...nextM])),
+    );
+  }, [goalOrder, pools, hps, mslots, assign, layersNow, layersOf, planReading, slotItems]);
+
+  const [frontierPts, setFrontierPts] = useState<FrontierPoint[] | null>(null);
+  const [frontierBusy, setFrontierBusy] = useState(false);
+  /** How many allowances were solved, and what the ship read when they were — both from the sweep's own snapshot,
+   *  so the rows and the baseline they are printed against cannot come from two different moments. */
+  const [frontierSolved, setFrontierSolved] = useState<number | null>(null);
+  const [frontierNow, setFrontierNow] = useState<GoalReading | null>(null);
+
+  /**
+   * WHAT OTHER ALLOWANCES BUY — the same search the `allow` box already runs, at the neighbouring settings.
+   *
+   * ONE MECHANISM WITH THAT BOX, not a second control beside it: the sweep's rows differ only in the number the
+   * player types there, so a row needs no name of its own and the panel needs no vocabulary. The player's own
+   * allowance is swept alongside the fixed steps, so the list always contains the build they are flying under.
+   *
+   * Run on DEMAND, never on a render: each point is a whole-ship search, and five of them on every keystroke is
+   * the freeze this app has already been blamed for once. The button is the statement that this costs something.
+   */
+  const buildFrontier = useCallback(() => {
+    if (!pools || !layoutFresh || !goalOrder.length) return;
+    setFrontierBusy(true);
+    // Off the current frame so the button paints its busy state before the searches start.
+    setTimeout(() => {
+      try {
+        const pinned = new Set([...manual, ...keep]);
+        const used = new Set<string>(Object.entries(assign).filter(([k]) => pinned.has(k)).map(([, it]) => handle(it)));
+        const openT = hps.filter((hp) => !pinned.has(`t:${hp.index}`));
+        const openM = mslots.filter((m) => !pinned.has(`m:${m.slot}`));
+        if (!openT.length && !openM.length) { setFrontierPts([]); return; }
+
+        const fittedTurrets = hps.map((h) => h.equipped).filter((x): x is Item => !!x);
+        const fixedTurrets = hps.filter((hp) => pinned.has(`t:${hp.index}`))
+          .map((hp) => assign[`t:${hp.index}`] ?? hp.equipped).filter((x): x is Item => !!x);
+
+        // THE SAME PLAN THE SUGGEST BUTTONS BUILD, so a frontier row is a build this app would otherwise have
+        // proposed. Deriving the slots a second way here is how the two would come to answer differently.
+        const { slots: tSlots, target: tgt, layerAct: act } = turretPlan({
+          open: openT, hps, gear, filters, cats, used, role: role ?? null, degradeTo: layerPlan.degradeTo,
+        });
+        const { slots: mSlots } = modulePlan({ open: openM, gear, used });
+        const nowM = openM.map((m) => m.equipped ?? null);
+
+        // The layers are projected from the MODULE assignment plus the fitted battery, the same pairing the
+        // module search uses: a row that could not see armor would be ranked by an order missing a key the
+        // player put in it.
+        const layers = (mods: (Item | null)[], guns?: (Item | null)[]) =>
+          layersOf([...fittedTurrets, ...nowM.filter((x): x is Item => !!x)],
+                   [...(guns ? [...fixedTurrets, ...guns.filter((x): x is Item => !!x)] : fittedTurrets),
+                    ...mods.filter((x): x is Item => !!x)]);
+        const fittedRank = setRank(fittedTurrets, background(pools, fittedTurrets), tgt, act ?? undefined);
+
+        // The player's own setting joins the fixed steps and the list is solved in order, so the row they fly
+        // under is always present and the neighbours read as looser or stricter than it rather than as options
+        // out of nowhere.
+        const steps = [...new Set([...FRONTIER_STEPS, allowance])].sort((x, y) => x - y);
+        const fitted = goalReadingOf(pools, fittedRank, layersNow());
+        const pts = frontier(
+          {
+            turretSlots: tSlots, moduleSlots: mSlots, pools, fittedTurrets, fixedTurrets,
+            ctx: { role, fit: shipFit(role, mslots, fittedTurrets), target: tgt, act: act ?? undefined },
+            target: tgt, act: act ?? undefined,
+            goal: { order: goalOrder, fitted, layers },
+          },
+          steps,
+        );
+        setFrontierNow(fitted);
+        setFrontierSolved(steps.length);
+        setFrontierPts(pts);
+      } finally {
+        setFrontierBusy(false);
+      }
+    }, 0);
+  }, [pools, layoutFresh, goalOrder, allowance, manual, keep, hps, mslots, assign, gear, filters, cats, role,
+      layerPlan.degradeTo, layersNow, layersOf]);
+
+  /**
+   * Take a frontier point as the plan. The rows are real assignments, so this is a copy, not a re-search.
+   *
+   * ⚠ MERGED ONTO WHAT IS THERE, ⊥ substituted for it, and that is not a style choice: `buildFrontier` solves only
+   * the OPEN slots — it excludes `manual ∪ keep` from `openT`/`openM` — so `p.chosen` never contains a slot the
+   * player answered. Replacing the map therefore DROPPED every pin: hand-pick a turret, take a sweep row, and the
+   * slot still rendered as pinned while holding nothing, missing from the plan and from the apply payload. Every
+   * other `setAssign` caller here merges; this was the one that did not.
+   */
+  const applyFrontier = useCallback((p: FrontierPoint) => {
+    setAssign((a) => {
+      const n = { ...a };
+      for (const [k, v] of p.chosen) n[k] = v;
+      return n;
+    });
+    setFrontierPts(null);
+  }, [setAssign]);
 
   const suggestTurrets = useCallback(() => {
     const pinned = new Set([...manual, ...keep]);   // PICKED for, or locked to what is fitted
@@ -721,29 +1019,60 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
         const { slots, withRoles, target, layerAct, keepOk } = turretPlan({
           open, hps, gear, filters, cats, used, role: role ?? null, degradeTo: layerPlan.degradeTo,
         });
+        // The fitted battery and its rank are the goal's REFERENCE, so both are needed before the search runs
+        // rather than after it (they were computed below, beside the gate, when only the gate read them).
+        const fittedAll = [...fixed, ...open.map((hp) => hp.equipped).filter((x): x is Item => !!x)];
+        const now = setRank(fittedAll, bg, target, layerAct ?? undefined);
+        // THE PLAYER'S ORDER GOES INTO THE SEARCH, ⊥ only onto the gate below. Read from the objective's index
+        // alone, this button kept re-proposing a gun the index likes and every other ranked key dislikes, because
+        // nothing inside the ascent could see those keys. `pools` is the REPORTED reading, which is what
+        // a ranked key is a figure of; the background `bg` cannot serve — it has the battery stripped out of it.
+        const turretGoal = goalOrder.length && pools
+          ? {
+              order: goalOrder, pools, fitted: goalReadingOf(pools, now, layersNow()), allow: allowance,
+              // The PINNED hardpoints stay on both sides: `projectLayer` divides the whole multiplier product out
+              // of the reported figure to recover the additive base, so a set missing the guns that are not moving
+              // divides out a different product and the projection lands somewhere the game never would.
+              layers: (guns: (Item | null)[]) =>
+                layersOf(fittedAll, [...fixed, ...guns.filter((x): x is Item => !!x)]),
+            }
+          : undefined;
         const chosen = layerAct
-          ? optimizeTurretSetLayered(withRoles, bg, layerAct, { target, maxPasses: 4, fixed })
-          : optimizeTurretSet(slots, bg, 4, fixed);
+          ? optimizeTurretSetLayered(withRoles, bg, layerAct, { target, maxPasses: 4, fixed, goal: turretGoal })
+          : optimizeTurretSet(slots, bg, 4, fixed, target, layerAct ?? undefined, turretGoal);
         // Judge the PLAN, not each slot in isolation. A per-slot floor lets a set through whose slots each look
         // worthwhile only because the OTHER slots were assumed to change too; apply it and the new baseline makes
         // yet another set look worthwhile, which is the apply → new suggestions → apply ping-pong. Requiring the
         // whole set to beat what is fitted by more than the floor makes the applied build a fixed point: after
         // applying, the same computation proposes nothing.
-        const fittedAll = [...fixed, ...open.map((hp) => hp.equipped).filter((x): x is Item => !!x)];
         const plannedAll = [...fixed, ...open.map((hp) => chosen.get(`t:${hp.index}`) ?? hp.equipped).filter((x): x is Item => !!x)];
         // The activity is the SHIP'S, fixed for the whole comparison: scoring `now` as Salvage and `plan` as
         // Mining compares two units and the fatter pool always wins.
-        const now = setRank(fittedAll, bg, target, layerAct ?? undefined);
         const plan = setRank(plannedAll, bg, target, layerAct ?? undefined);
         // A forced switch (the fitted gun breaks its slot's filter) is exempt: compliance is the point there. But
         // the exemption is that SLOT'S, not the whole plan's — one non-compliant hardpoint used to waive the floor
         // for every other slot, which is how a strictly worse build shipped: two good guns were swapped out
         // alongside the one that had to move, with nothing checking they were an improvement.
-        // AND THE PLAYER'S ORDER, which may only ever REFUSE (`goalRefuses`): a battery whose ranked key falls is
-        // not an upgrade, whatever the objective's single scalar makes of it.
-        const vetoT = goalRefuses(goalOrder, goalReadingOf(pools, now), goalReadingOf(pools, plan));
+        // AND THE PLAYER'S ORDER. `goalRefuses` names the key for the note; `goalAccepts` is the gate, and it owns
+        // when the worth-it floor still applies — the band decides where the order speaks, the floor only where
+        // every ranked key tied.
+        // BOTH READINGS OFF THE SAME POOLS WAS THE WHOLE GUN HALF GOING UNREAD: every pooled key then ties by
+        // construction and only `dps` moves, so a salvage or mining hull's own ranked key could not refuse a
+        // battery that loses power. The hardpoint deltas are folded in; the modules are on both sides of this
+        // gate untouched, so they cancel.
+        const wasGuns = hps.map((hp) => hp.equipped ?? null);
+        const planGuns = hps.map((hp) => (chosen.get(`t:${hp.index}`) ?? a[`t:${hp.index}`] ?? hp.equipped) ?? null);
+        // The layers are read on BOTH sides or neither: a fitted reading with no armor against a planned reading
+        // that has one is not a comparison, it is one key that can only ever look unchanged.
+        const nowRead = goalReadingOf(pools, now, layersNow());
+        const planRead = planReading(plan, wasGuns, planGuns,
+                                     layersOf(wasGuns.filter((x): x is Item => !!x),
+                                              planGuns.filter((x): x is Item => !!x)));
+        const vetoT = goalRefuses(goalOrder, nowRead, planRead);
         if (vetoT) vetoed.current = { sig: sigRef.current, key: vetoT };
-        if (vetoT || !worthSwitching(plan, now)) {
+        const breachT = allowanceBreach(goalOrder, nowRead, planRead, allowance);
+        if (breachT) bound.current = { sig: sigRef.current, breach: breachT };
+        if (!goalAccepts(goalOrder, nowRead, planRead, plan, now, OBJECTIVE_TIE, allowance)) {
           for (const hp of open) {
             const key = `t:${hp.index}`;
             const pick = chosen.get(key);
@@ -783,7 +1112,8 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
       }
       return n;
     });
-  }, [gear, hps, filters, cats, manual, keep, ranking, crit, pools, goalOrder]);
+  }, [gear, hps, filters, cats, manual, keep, ranking, crit, pools, goalOrder, planReading,
+      allowance, layersNow, layersOf]);
   const suggestModules = useCallback(() => {
     const pinned = new Set([...manual, ...keep]);
     setAssign((a) => {
@@ -800,7 +1130,15 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
       // prices that — and prices the crossings that pay for themselves, which the old bracket-preserving
       // constraint had to refuse along with the ones that do not.
       if (ranking === "expanded" && pools) {
-        const chosen = optimizeModuleSet(mSlots, pools, turrets, mctx);
+        // The order ORDERS the search, it does not merely veto its answer: a module set that ties on the first
+        // ranked key is separated by the second, which is the whole point of stating one.
+        const chosen = optimizeModuleSet(mSlots, pools, turrets, mctx, undefined, goalOrder.length ? {
+          order: goalOrder,
+          fitted: goalReadingOf(pools, setRank(turrets, background(pools, turrets)), layersNow()),
+          layers: (mods) => layersOf(
+            [...turrets, ...open.map((m) => m.equipped).filter((x): x is Item => !!x)],
+            [...turrets, ...mods.filter((x): x is Item => !!x)]),
+        } : undefined);
         // Judge the PLAN, not each slot alone: a per-slot floor passes a set whose slots each look worthwhile only
         // because the others were assumed to change too, and applying that makes yet another set look worthwhile —
         // the apply → suggest → apply ping-pong. Whole-plan means the applied build is a fixed point.
@@ -820,10 +1158,17 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
         const bounces = worthSwitching(rankOf(plan), rankOf(outs))
           && worthSwitching(mirror(outs), mirror(plan));
 
-        const vetoM = goalRefuses(goalOrder, goalReadingOf(pools, rankOf(outs)),
-                                  goalReadingOf(planPools, rankOf(plan)));
+        // The LAYERS ride with the pools here, unlike the turret path: a module assignment is what moves hull,
+        // armor and shield at all, so an order naming one of them can only be answered on this path.
+        const keptM = (inn: (Item | null)[]) => [...turrets, ...inn.filter((x): x is Item => !!x)];
+        const nowReadM = goalReadingOf(pools, rankOf(outs), layersNow());
+        const planReadM = goalReadingOf(planPools, rankOf(plan), layersOf(keptM(outs), keptM(plan)));
+        const vetoM = goalRefuses(goalOrder, nowReadM, planReadM);
         if (vetoM) vetoed.current = { sig: sigRef.current, key: vetoM };
-        if (vetoM || bounces || !worthSwitching(rankOf(plan), rankOf(outs))) {
+        const breachM = allowanceBreach(goalOrder, nowReadM, planReadM, allowance);
+        if (breachM) bound.current = { sig: sigRef.current, breach: breachM };
+        if (bounces || !goalAccepts(goalOrder, nowReadM, planReadM, rankOf(plan), rankOf(outs),
+                                    OBJECTIVE_TIE, allowance)) {
           // No plan worth the trip. A slot may STILL be decided on what the objective cannot see — but only where
           // it genuinely cannot see: an EMPTY slot (anything beats nothing) or a difference inside the tie band
           // (`OBJECTIVE_TIE`), where the tie-break chain is the whole answer.
@@ -864,7 +1209,7 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
       }
       return n;
     });
-  }, [gear, hps, mslots, filters, cats, manual, keep, ranking, crit, pools, role, goalOrder]);
+  }, [gear, hps, mslots, filters, cats, manual, keep, ranking, crit, pools, role, goalOrder, layersNow, layersOf]);
 
   /**
    * BOTH HALVES IN ONE SEARCH — the coupling that runs between them, which neither single-block pass can see.
@@ -911,6 +1256,17 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
       const chosen = optimizeShipSet({
         turretSlots: tSlots, moduleSlots: mSlots, pools, fittedTurrets, fixedTurrets,
         ctx: mctx, target, act: layerAct ?? undefined,
+        goal: goalOrder.length ? {
+          order: goalOrder,
+          fitted: goalReadingOf(pools, setRank(fittedTurrets, background(pools, fittedTurrets), target,
+                                               layerAct ?? undefined), layersNow()),
+          // The candidate BATTERY, not the fitted one: this search moves both halves, and the pinned hardpoints
+          // ride along on the planned side because `guns` covers only the slots being chosen.
+          layers: (mods, guns) => layersOf(
+            [...fittedTurrets, ...openM.map((m) => m.equipped).filter((x): x is Item => !!x)],
+            [...(guns ? [...fixedTurrets, ...guns.filter((x): x is Item => !!x)] : fittedTurrets),
+             ...mods.filter((x): x is Item => !!x)]),
+        } : undefined,
       });
 
       // ONE floor over the WHOLE plan: a per-half floor lets each half through on the strength of the
@@ -929,10 +1285,24 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
         setRank(turrets, background(poolsWithModules(planPools, planMods, mods), fittedTurrets), target, layerAct ?? undefined);
       const bounces = worthSwitching(rankOf(planMods, planGuns), rankOf(outs, nowGuns))
         && worthSwitching(mirror(outs, nowGuns), mirror(planMods, planGuns));
-      const vetoJ = goalRefuses(goalOrder, goalReadingOf(pools, rankOf(outs, nowGuns)),
-                                goalReadingOf(planPools, rankOf(planMods, planGuns)));
+      // Both halves move here, so both halves feed the layer projection.
+      const keptJ = (mods: (Item | null)[], guns: Item[]) => [...guns, ...mods.filter((x): x is Item => !!x)];
+      // `planPools` is the MODULE half alone — the background the battery is scored against. A ranked reading is a
+      // figure of the whole ship ∴ the hardpoints are folded in too, or a plan paying for a module's `Power` line
+      // with a hardpoint's own power reads as a gain on the key the player ranked (`planReading`).
+      const wasGunsJ = hps.map((hp) => hp.equipped ?? null);
+      const planGunsJ = hps.map((hp) => (chosen.get(`t:${hp.index}`) ?? hp.equipped) ?? null);
+      const nowReadJ = goalReadingOf(pools, rankOf(outs, nowGuns), layersNow());
+      const planReadJ = planReading(rankOf(planMods, planGuns),
+                                    [...wasGunsJ, ...outs], [...planGunsJ, ...planMods],
+                                    layersOf(keptJ(outs, nowGuns), keptJ(planMods, planGuns)));
+      const vetoJ = goalRefuses(goalOrder, nowReadJ, planReadJ);
       if (vetoJ) vetoed.current = { sig: sigRef.current, key: vetoJ };
-      if (vetoJ || bounces || !worthSwitching(rankOf(planMods, planGuns), rankOf(outs, nowGuns))) {
+      const breachJ = allowanceBreach(goalOrder, nowReadJ, planReadJ, allowance);
+      if (breachJ) bound.current = { sig: sigRef.current, breach: breachJ };
+      if (bounces || !goalAccepts(goalOrder, nowReadJ, planReadJ,
+                                  rankOf(planMods, planGuns), rankOf(outs, nowGuns),
+                                  OBJECTIVE_TIE, allowance)) {
         // Not worth the trip as a whole. Fall back to the two single-block answers, which have their own floors
         // and their own fall-throughs — a slot can still be decided on what the objective cannot see.
         suggestModules(); suggestTurrets();
@@ -955,7 +1325,7 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
       return n;
     });
   }, [gear, hps, mslots, filters, cats, manual, keep, ranking, pools, role, layerPlan.degradeTo,
-      suggestModules, suggestTurrets]);
+      suggestModules, suggestTurrets, goalOrder, layersNow, layersOf, planReading]);
 
   // A pending choice that breaks its slot's CURRENT filter is dropped when the filter changes — including one
   // the player made by hand. Narrowing a slot to railguns while a Plasma Cannon is proposed there leaves a plan
@@ -995,6 +1365,7 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
   // The refusal survives only while the run it describes is still the current question. `autoSig` opens with the
   // ship guid, so a hull change alone invalidates it, and so does any edit to gear, filters or categories.
   const vetoKey = liveVeto(vetoed.current, autoSig);
+  const boundBy = bound.current && bound.current.sig === autoSig ? bound.current.breach : null;
   // Per ship too: one watermark shared across hulls made a switch either re-run needlessly or skip a ship whose
   // signature happened to match the previous one's.
   const lastRunAll = useRef<Record<string, string | null>>({});
@@ -1047,6 +1418,18 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
   return {
     suggestSlot,
     goalOrder,
+    setGoalOrder,
+    goalUnreadKeys,
+    scope,
+    setScope: setSharedScope,
+    tankLayer,
+    frontierPts,
+    frontierBusy,
+    frontierSolved,
+    frontierNow,
+    buildFrontier,
+    applyFrontier,
+    clearFrontier: () => setFrontierPts(null),
     // The CAP speaks first when both refused, because it is the stronger statement: the order says nothing was
     // better on a stat you ranked, the cap says something was better and was refused anyway. A player told only
     // the first would go looking for the gain the app had decided not to take.
@@ -1064,14 +1447,22 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
           + ` — more than the ${Math.round(layerCap * 100)}% you asked to be warned about. It is still proposed;`
           + ` apply it or change the slots yourself.`
         : null)
-      // WITHOUT one, the only remaining refusal is the player's own goal order, which says which key may not fall.
-      : vetoKey
-        ? `Nothing to change: no candidate raised ${GOAL_LABEL[vetoKey]}, the highest-ranked goal in this ship's `
-          + `order that any candidate moved, and a plan that lowers it is refused whatever else it gains. `
-          + `Reorder the goals to let another stat decide.`
-        : null,
+      // WITHOUT one, two things can have refused it, and they are DIFFERENT edits to make: the ALLOWANCE, which
+      // bounds what a plan may spend of a ranked stat, and the ORDER, which decides who gets to speak at all. The
+      // allowance is named first because it is the newer and stricter of the two and the one a plan is most often
+      // bound by at 2%.
+      : boundBy
+        ? `Nothing to change: the best plan would have cost ${Math.round(boundBy.drop * 100)}% `
+          + `${GOAL_LABEL[boundBy.key]}, and you allow ${Math.round(boundBy.allow * 100)}%. `
+          + `Raise the allowance to let it spend more, or reorder the goals so ${GOAL_LABEL[boundBy.key]} `
+          + `is what gets bought.`
+        : vetoKey
+          ? `Nothing to change: no candidate raised ${GOAL_LABEL[vetoKey]}, the highest-ranked goal in this ship's `
+            + `order that any candidate moved, and a plan that lowers it is refused whatever else it gains. `
+            + `Reorder the goals to let another stat decide.`
+          : null,
     planDrops,
-    ranking, setRanking, crit, pools, layerCap, setLayerCap,
+    ranking, setRanking, crit, pools, layerCap, setLayerCap, allowance, setAllowance,
     gear, hps, mslots, cats, setCats, filters, setFilters, assign, setAssign, setSlotItem, clearAll,
     suggestTurrets, suggestModules, suggestShip, autoSuggest, setAutoSuggest, payload, changes, planRegresses, planVerdict,
     layerNote: layerPlan.note,
@@ -1260,6 +1651,10 @@ export default function GearTab({
     // Nothing can be expressed as a percentage because the CURRENT battery scores zero — see the verdict text.
     | { kind: "zero"; n: number }
     | { kind: "floor"; n: number; pct: number }
+    // Better than the floor on its own numbers, and still not chosen: the whole-battery search answers a different
+    // question than one slot does. Distinct from `floor` because the two call for opposite reactions — one says
+    // "there is nothing here worth the trip", the other says "there is, and the set disagrees".
+    | { kind: "unchosen"; n: number; pct: number }
     | { kind: "forced" };
   // WHAT THIS MODE CANNOT ANSWER. `simple` ranks each slot by the game's printed headline and nothing else — no set
   // objective, so no `min(surface, core)` and no layer reasoning of any kind. On a mining or salvage ship that is a
@@ -1294,7 +1689,17 @@ export default function GearTab({
       const fits = gear.filter((g) => turretFits(g, hp.size, f, cats));
       if (!hp.equipped) { if (!fits.length) out.set(key, { kind: "empty-nofit" }); continue; }
       if (!mayKeepEquipped(hp.equipped, hp.size, f, cats)) { out.set(key, { kind: "forced" }); continue; }
-      const n = fits.length;
+      // WHAT THIS SLOT COULD ACTUALLY HAVE. An item proposed for another slot is spoken for, and counting it here
+      // scored it TWICE — once inside `others` and once as the candidate — which quoted a margin no build could
+      // deliver. Gear is not shared between slots, and the verdict has to obey the same rule the search does.
+      const takenElsewhere = new Set<string>();
+      for (const h of hps) {
+        if (h.index === hp.index) continue;
+        const other = assign[`t:${h.index}`] ?? h.equipped;
+        if (other) takenElsewhere.add(handle(other));
+      }
+      const free = fits.filter((g) => g === hp.equipped || !takenElsewhere.has(handle(g)));
+      const n = free.length;
       // Only expanded mode has a set-level objective to state a margin in. Simple mode's headline difference
       // shares no unit with it, so it reports the search size and stops there.
       if (builder.ranking !== "expanded" || !builder.pools) { out.set(key, { kind: "best", n }); continue; }
@@ -1304,7 +1709,7 @@ export default function GearTab({
       const asIs = setRank([...others, hp.equipped], bg);
       let bestPct = 0;
       let beatsZero = false;
-      for (const c of fits) {
+      for (const c of free) {
         if (c === hp.equipped) continue;
         const r = setRank([...others, c], bg);
         if (r[0] !== asIs[0]) continue;                   // no ratio across tiers
@@ -1315,7 +1720,11 @@ export default function GearTab({
         const pct = rankSub(r, asIs) / asIs[1];
         if (pct > bestPct) bestPct = pct;
       }
-      out.set(key, bestPct > 0 ? { kind: "floor", n, pct: bestPct }
+      // THE VERDICT STATES THE REASON IT ACTUALLY HAS. A margin under the floor is the floor's verdict; a margin
+      // OVER it is not, and printing "under the 1% floor" beside a figure of 8.74% is a note that argues with
+      // itself. Where the set search kept a slot whose best candidate looks better alone, that IS the finding.
+      out.set(key, bestPct >= MIN_GAIN ? { kind: "unchosen", n, pct: bestPct }
+                 : bestPct > 0 ? { kind: "floor", n, pct: bestPct }
                  : beatsZero ? { kind: "zero", n }
                  : { kind: "best", n });
     }
@@ -1427,12 +1836,15 @@ export default function GearTab({
     <SlotPickList
       title="Fits this slot"
       items={listItems}
-      conn={conn}
       query={listQ}
       setQuery={setListQ}
       onPick={(it) => { if (selSlot) { setSlotItem(selSlot, it); setSelSlot(null); } }}
       onClose={() => setSelSlot(null)}
       keyOf={(it) => handle(it) + it.name}
+      iconOf={(it) => itemIcon(conn, it)}
+      nameOf={(it) => it.name}
+      rarityOf={(it) => it.rarity}
+      trailOf={(it) => `Lv ${it.level}`}
       emptyText="Nothing owned fits."
       /* enter/leave only — ItemTip follows the cursor itself (no re-render per move) */
       hoverProps={(it) => ({
@@ -1499,33 +1911,31 @@ export default function GearTab({
         title={`Slot ${hp.index + 1}`}
         sub={hp.size}
         head={<>
-          {pinned.has(key) && (
-            <button className="slot-pin" title="You chose this slot yourself, so suggestions skip it. Click to release it."
-              onClick={(e) => { e.stopPropagation(); unpin(key); }}>📌 pinned</button>
-          )}
-          {/* Lock the slot to what is FITTED. Not every hull deserves good gear — a size-1 ship that
-              rides in a carrier gets a cheap module on purpose, and an optimizer that offers to upgrade it
-              forever is noise. Distinct from the pin, which fixes a slot to an item you PICKED. */}
-          <button className={`slot-lock${keep.has(key) ? " on" : ""}`}
-            title={keep.has(key)
-              ? "Locked to the fitted item — suggestions skip this slot. Click to release."
-              : "Keep what is fitted here and stop suggesting for this slot (remembered for this ship)"}
-            onClick={(e) => { e.stopPropagation(); toggleKeep(key); }}>{keep.has(key) ? "🔒" : "🔓"}</button>
-          <button className="slot-sug" disabled={pinned.has(key) || keep.has(key)}
-            title={pinned.has(key) || keep.has(key)
-              ? "This slot is yours — release the pin or the lock to have it answered"
-              : "suggest best for this slot"}
-            onClick={(e) => { e.stopPropagation(); suggestSlot(key); }}>⚡</button>
+          {/* ONE SWITCH, from `SlotCard`. The pin badge and the lock were two names for one state: this slot is
+             the player's, not the optimizer's. The objective always agreed (it reads `manual ∪ keep` as one
+             `pinned` set); only the head drew them as separate controls. What the slot is locked TO still
+             differs, an item you picked or the one already fitted, which is what the tooltip names. */}
+          <SlotLock locked={pinned.has(key) || keep.has(key)}
+            what={cur ? cur.name : "nothing"}
+            onToggle={() => {
+              const wasLocked = pinned.has(key) || keep.has(key);
+              if (pinned.has(key)) unpin(key);
+              if (keep.has(key)) toggleKeep(key);
+              // "Let the optimizer choose this slot" has to make it choose. Releasing alone only stops the
+              // slot being SKIPPED, and with auto-suggest off nothing then answers it, so the slot sits on
+              // whatever is fitted and the control looks inert. That gap is what the bolt was for.
+              if (wasLocked) suggestSlot(key); else toggleKeep(key);
+            }} />
         </>}
-        current={<Vig it={cur ?? null} label="current" conn={conn} onHover={setHover} />}
+        current={<Vig it={cur ?? null} conn={conn} onHover={setHover} />}
         arrow={slotGain.has(key) ? (
           <span className={`gear-gain${(slotGain.get(key) as number) >= 0 ? " up" : " down"}`}
-            title="Change in the whole battery's estimated DPS if this swap is applied — pooled stats and the reactor bracket included, so it is not the difference between the two cards' numbers.">
+            title="Change in the whole battery's DPS, not the difference between the two cards">
             {(slotGain.get(key) as number) >= 0 ? "+" : ""}{((slotGain.get(key) as number) * 100).toFixed(1)}%
           </span>
         ) : null}
         next={<NewVig it={nu} mine={pinned.has(key)} onClear={() => setSlotItem(key, null)} onHover={(h) => setHover(h && { ...h, vs: cur ?? null })} conn={conn}
-          verdict={verdictText(verdicts.get(key))} same={!!nu && sameFit(cur ?? null, nu)} />}
+          verdict={verdictText(verdicts.get(key))} unchanged={!!nu && sameFit(cur ?? null, nu)} />}
         foot={<FilterSelect
           value={f.mode === "all" ? "" : `${f.mode}:${f.value}`}
           groups={filterGroups()}
@@ -1575,7 +1985,7 @@ export default function GearTab({
       <div className="gear-main">
         <div className="gear-slots">
           <div className="gear-mod-head">
-            <div className="panel-title">Hardpoints <span className="dim">— current → new · click a slot, then pick an item</span></div>
+            <div className="panel-title">Hardpoints</div>
             <span className="spacer" />
             <FilterSelect value="" placeholder="Set all to…" className="setall" groups={filterGroups()} onChange={setAllFilter} />
             {/* On (the default) the optimizer re-runs itself whenever the inventory or a filter changes,
@@ -1598,7 +2008,7 @@ export default function GearTab({
                 title="Simple: the game's headline main stat only — no set objective, and no ore-layer balancing."
                 onClick={() => setRanking("simple")}>simple</button>
               <button className={`seg ${ranking === "expanded" ? "on" : ""}`}
-                title="Expanded: the whole battery as one objective — headline power adjusted for this item's own fire-rate, crit, damage and aspect rolls, valued against your ship's crit setup, and the two ore layers balanced."
+                title="Expanded: the whole battery as one objective, priced on your ship's crit setup"
                 onClick={() => setRanking("expanded")}>expanded</button>
               {/* THE MODEL, and it is disabled until it can actually answer. A mode that ranks on nothing is
                   exactly the defect the `simple`-mode report described — it proposed swaps, offered Apply, and
@@ -1611,11 +2021,25 @@ export default function GearTab({
                   : "Model: the arena's trained net scores the whole battery against a combat target and answers in SECONDS to deplete it — lower is better. It is the only ranking here that knows about resists, armor weakness and mitigation."}
                 onClick={() => setRanking("model")}>model</button>
             </span>
+            {/* WHAT AN ITEM IS, OR WHAT IT COULD BE — the officers tab's control, shared rather than copied: one
+                choice, one pair of labels, and changing it on either tab changes both. What it means here is
+                workshop QUALITY, which multiplies every stat line except the main one by 1.01 per level up to a
+                ceiling set by rarity (Legendary 25, Exotic 20, HighGrade 15). A gun's headline Combat Power is the
+                main stat ∴ quality is invisible in the one figure the item's card leads with, and the substats it
+                does move are what feed the ship's pools. */}
+            <span className="gear-mode" role="group" aria-label="item scope">
+              <button className={`seg ${builder.scope === "current" ? "on" : ""}`}
+                title="Rank every item by the stats it has TODAY."
+                onClick={() => builder.setScope("current")}>current</button>
+              <button className={`seg ${builder.scope === "potential" ? "on" : ""}`}
+                title="Rank everything as if workshop quality were maxed, fitted items included"
+                onClick={() => builder.setScope("potential")}>full potential</button>
+            </span>
             {/* WHAT A PLAN MAY SPEND OF A LAYER. Beside the ranking because it is part of the same question —
                 what "better" means for this ship — and stated as a percentage of what the ship already has, so
                 it needs no knowledge of the hull's actual figure. 0 means no defensive loss at all is accepted;
                 100 restores the old behaviour, where the objective had no opinion on survivability. */}
-            <label className="gear-cap" title={`Warn when a plan lowers any tracked measurement — DPS, Combat Power, Precision, Mining, Salvage, Hull, Armor, Shield — by more than this share. It is a WARNING, not a refusal: the plan is still proposed and every measurement that fell is named. Currently ${Math.round(builder.layerCap * 100)}%.`}>
+            <label className="gear-cap" title={`Warn when a plan lowers any tracked measurement by more than this share`}>
               {/* The label says what the number DOES. It began as "keep 10% of each layer", which read as its own
                   inverse, then as a spend ceiling that refused plans; it is now the level at which a plan's costs
                   are reported. The note quotes this label back verbatim so the sentence and the box that produced
@@ -1629,16 +2053,49 @@ export default function GearTab({
                 }} />
               % drop
             </label>
+            {/* WHAT A PLAN MAY SPEND OF A RANKED STAT, and the difference from the box beside it is the whole
+                point: `warn over` REPORTS a cost, this one REFUSES it. An order can only sequence goals — any
+                gain on the first outranks any loss below it — so this is the only control that can price a trade
+                without anyone stating an exchange rate between two stats: a fraction of the build you already
+                fly. Applies to every ranked stat EXCEPT the first, which is the one being bought. */}
+            <label className="gear-cap" title={`Refuse a plan that costs a lower-ranked goal more than this share of what you have`}>
+              allow
+              <input type="number" min={0} max={100} step={1}
+                value={Math.round(builder.allowance * 100)}
+                onChange={(e) => {
+                  const pc = Number(e.target.value);
+                  if (Number.isFinite(pc)) builder.setAllowance(Math.min(1, Math.max(0, pc / 100)));
+                }} />
+              % loss
+            </label>
             {/* BOTH halves at once. Beside the two single-block buttons, ⊥ replacing them: most refits are one
                 half and the smaller search is the faster answer, while this one is what the whole build being
                 decided asks for — a gun that only becomes affordable after a reactor is invisible to either
  half alone. */}
             <button className="undo-suggest" onClick={suggestShip}
-                    title="Choose guns AND modules together — finds the pair where a reactor pays for a thirstier gun, which neither button can see alone">
+                    title="Guns and modules together: finds pairs neither button sees alone">
               Suggest whole ship
             </button>
             <button className="undo-suggest" onClick={suggestTurrets}>Suggest guns</button>
           </div>
+          {/* ITS OWN ROW, beneath the buttons rather than inside them: the cap is one number and belongs on a
+              button bar, the order is a LIST and never did. Collapsed it is the sentence a plan should be read
+              beside; open it needs the full width the bar could not give it. */}
+          <GoalOrder order={builder.goalOrder} setOrder={builder.setGoalOrder} unread={builder.goalUnreadKeys} />
+          {/* Directly under the order it sweeps: the ORDER says which stat wins, the `allow` box says how much of
+              the others a plan may spend, and this shows what the other settings of that box actually return. One
+              mechanism, read top to bottom, with no third idea between them. */}
+          <AllowanceSweep
+            order={builder.goalOrder}
+            now={builder.frontierNow}
+            allowance={builder.allowance}
+            points={builder.frontierPts}
+            solved={builder.frontierSolved}
+            busy={builder.frontierBusy}
+            onBuild={builder.buildFrontier}
+            onPick={builder.applyFrontier}
+            onClear={builder.clearFrontier}
+          />
           <div className="gear-cols">
             {sizesPresent.map((size) => (
               <div key={size} className="gear-col">
@@ -1650,7 +2107,7 @@ export default function GearTab({
 
           <div className="gear-modules">
             <div className="gear-mod-head">
-              <div className="panel-title">Modules <span className="dim">— internal · current → new</span></div>
+              <div className="panel-title">Modules</div>
               <button className="undo-suggest" onClick={suggestModules}>Suggest</button>
             </div>
             <div className="gear-cols">
@@ -1661,28 +2118,22 @@ export default function GearTab({
                   <div key={i} className={`gear-panel${selSlot === key ? " sel" : ""}`}
                     onClick={() => setSelSlot(selSlot === key ? null : key)}>
                     <div className="gear-panel-head">{m.slot} <span className="dim">· {m.size}</span>
-                      {pinned.has(key) && (
-                        <button className="slot-pin" title="You chose this slot yourself, so suggestions skip it. Click to release it."
-                          onClick={(e) => { e.stopPropagation(); unpin(key); }}>📌 pinned</button>
-                      )}
-                      {/* Lock the slot to what is FITTED. Not every hull deserves good gear — a size-1 ship that
-                          rides in a carrier gets a cheap module on purpose, and an optimizer that offers to upgrade it
-                          forever is noise. Distinct from the pin, which fixes a slot to an item you PICKED. */}
-                      <button className={`slot-lock${keep.has(key) ? " on" : ""}`}
-                        title={keep.has(key)
-                          ? "Locked to the fitted item — suggestions skip this slot. Click to release."
-                          : "Keep what is fitted here and stop suggesting for this slot (remembered for this ship)"}
-                        onClick={(e) => { e.stopPropagation(); toggleKeep(key); }}>{keep.has(key) ? "🔒" : "🔓"}</button>
-                      <button className="slot-sug" disabled={pinned.has(key) || keep.has(key)}
-            title={pinned.has(key) || keep.has(key)
-              ? "This slot is yours — release the pin or the lock to have it answered"
-              : "suggest best for this slot"}
-            onClick={(e) => { e.stopPropagation(); suggestSlot(key); }}>⚡</button></div>
+                      <SlotLock locked={pinned.has(key) || keep.has(key)}
+                        what={m.equipped ? m.equipped.name : "nothing"}
+                        onToggle={() => {
+                          const wasLocked = pinned.has(key) || keep.has(key);
+                          if (pinned.has(key)) unpin(key);
+                          if (keep.has(key)) toggleKeep(key);
+                          // "Let the optimizer choose this slot" has to make it choose. Releasing alone only stops the
+                          // slot being SKIPPED, and with auto-suggest off nothing then answers it, so the slot sits on
+                          // whatever is fitted and the control looks inert. That gap is what the bolt was for.
+                          if (wasLocked) suggestSlot(key); else toggleKeep(key);
+                        }} /></div>
                     <div className="gear-swap">
-                      <Vig it={m.equipped} label="current" conn={conn} onHover={setHover} />
+                      <Vig it={m.equipped} conn={conn} onHover={setHover} />
                       <span className="gear-arrow">→</span>
                       <NewVig it={nu} mine={pinned.has(key)} onClear={() => setSlotItem(key, null)} onHover={(h) => setHover(h && { ...h, vs: m.equipped })} conn={conn}
-                        same={!!nu && sameFit(m.equipped, nu)} />
+                        unchanged={!!nu && sameFit(m.equipped, nu)} />
                     </div>
                     {selSlot === key && candidateList()}
                   </div>
@@ -1726,15 +2177,15 @@ const gearMarks = (it: Item, conn: Conn) => (
   <AspectMarks conn={conn} aspects={it.aspects} slots={it.aspectSlots} size={18} />
 );
 
-function Vig({ it, label, conn, onHover }: { it: Item | null; label: string; conn: Conn; onHover?: (h: { it: Item; x: number; y: number } | null) => void }) {
-  return <BaseVig it={it} label={label} conn={conn} onHover={onHover}
+function Vig({ it, conn, onHover }: { it: Item | null; conn: Conn; onHover?: (h: { it: Item; x: number; y: number } | null) => void }) {
+  return <BaseVig it={it} conn={conn} onHover={onHover}
                   sub={it ? gearSub(it) : null} extra={it ? gearMarks(it, conn) : null} />;
 }
 
-function NewVig({ it, onClear, onHover, dimmed, conn, verdict, same, mine }: { it: Item | null; onClear?: () => void; onHover: (h: { it: Item; x: number; y: number } | null) => void; dimmed?: boolean; conn: Conn; verdict?: { text: string; why: string } | null; same?: boolean; mine?: boolean }) {
+function NewVig({ it, onClear, onHover, dimmed, conn, verdict, unchanged, mine }: { it: Item | null; onClear?: () => void; onHover: (h: { it: Item; x: number; y: number } | null) => void; dimmed?: boolean; conn: Conn; verdict?: { text: string; why?: string } | null; unchanged?: boolean; mine?: boolean }) {
   return (
     <BaseNewVig it={it} onClear={onClear} onHover={onHover} dimmed={dimmed} conn={conn}
-                verdict={verdict} same={same} mine={mine}
+                verdict={verdict} unchanged={unchanged} mine={mine}
                 sub={it ? gearSub(it) : null} extra={it ? gearMarks(it, conn) : null} />
   );
 }

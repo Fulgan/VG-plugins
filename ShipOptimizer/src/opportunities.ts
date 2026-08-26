@@ -4,7 +4,7 @@ import { shipFit } from "./itemKind";
 import { moduleWhy, type ModuleCtx, type ShipPools } from "./fleetDps";
 import { saturatedMainVal } from "./format";
 import { turretFits, moduleFits, mayKeepEquipped, type GearFilter } from "./gearFit";
-import { wantSentence, wantedBy, type WantRule } from "./wantRules";
+import { wantSentence, wantedByAll, wantTag, type WantRule } from "./wantRules";
 import type { FieldCtx } from "./sellRules";
 
 // What the opportunity RAILS offer, and how each kind is scored.
@@ -60,6 +60,13 @@ export interface Opp {
   // The shopping rule that claimed this offer, in its own words. Present ⇒ the row is on the rail because the
   // player asked for it, not because it beats anything: `delta` says nothing and must not be shown as a gain.
   wanted?: string;
+  /**
+   * The NAMES of the lists that claimed this offer, in the player's own words, for rules they chose to name.
+   * Empty or absent means every claiming rule was left unnamed, and the row falls back to saying it is on the
+   * list at all. More than one is a real state: two lists wanting the same offer is a stronger reason, not a
+   * conflict to resolve.
+   */
+  wantNames?: string[];
   // WHY this row is an upgrade, in the words of whatever decided it — a percentage of the battery where the
   // objective spoke, the tie-break that separated them where it did not. A `+0` with no reason reads as a
   // mistake, and three bugs in one day hid behind exactly that.
@@ -111,11 +118,19 @@ export function wantedOpps(offers: Item[], rules: WantRule[], ctx: FieldCtx, tak
   const best = new Map<string, Opp>();
   for (const it of offers) {
     if (taken?.has(it.name)) continue;
-    const r = wantedBy(it, rules, ctx);
-    if (!r) continue;
+    const claims = wantedByAll(it, rules, ctx);
+    if (!claims.length) continue;
     const prev = best.get(it.name);
-    if (!prev || creditPrice(it) < creditPrice(prev.item))
-      best.set(it.name, { item: it, delta: 0, wanted: wantSentence(r) });
+    if (!prev || creditPrice(it) < creditPrice(prev.item)) {
+      // The tooltip carries EVERY claiming rule's sentence: the tag says which list, the sentence says what the
+      // list actually asks for, and with two claims the second is the one a player would not have guessed.
+      const names = claims.map(wantTag).filter((n): n is string => !!n);
+      best.set(it.name, {
+        item: it, delta: 0,
+        wanted: claims.map(wantSentence).join("\n"),
+        ...(names.length ? { wantNames: names } : {}),
+      });
+    }
   }
   // Cheapest first: the rail is read to decide what to spend on next. A barter offer has no credit price to
   // compare, so it sorts last rather than as though it were free.

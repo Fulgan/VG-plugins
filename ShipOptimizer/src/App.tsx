@@ -6,15 +6,17 @@ import Ledger from "./Ledger";
 import CycleTimers from "./CycleTimers";
 import type { CritContext } from "./turretScore";
 import type { ShipPools } from "./fleetDps";
-import { background, pairBudget, poolsForShip, poolsFromStatus, poolsReconcile, rankSub, reactorBudgetOf, setRank, MIN_GAIN } from "./fleetDps";
+import { background, pairBudget, poolsForShip, poolsFromStatus, poolsReconcile, rankSub, reactorBudgetOf, setRank, MIN_GAIN, GOAL_KEYS } from "./fleetDps";
+import { statMarginals } from "./statMarginals";
 import { isRoleStat } from "./roleStats";
+import { defenseLayerOf } from "./activityPresets";
 import { ACTIVITIES, kindOf } from "./itemKind";
 import OfficersTab, { useOfficerBuilder, type BuilderShip } from "./OfficersTab";
 import { evaluateRecruits, type RecruitOfficer } from "./officer";
 import SummaryTab from "./SummaryTab";
 import MapTab from "./MapTab";
 import BoostersTab, { useBoosterBuilder } from "./BoostersTab";
-import { isBooster, resonanceLive, unlockBonusText } from "./booster";
+import { isBooster, resonanceFigure, resonanceLive } from "./booster";
 import GearTab, { useGearBuilder, isTurret, type Ranking } from "./GearTab";
 import { ItemTip } from "./ItemCard";
 import { Notice } from "./Notice";
@@ -26,7 +28,7 @@ import { RARITY_ORDER, cantSell, type FieldCtx, type Kind as SellKind, type Rule
 import { sellRows, sellableRows } from "./sellRun";
 import { sanitizeView, type ViewState } from "./sellView";
 import { ownedCounts, type WantRule } from "./wantRules";
-import { usePopAnchor, type Vocabulary } from "./whereEditor";
+import { type Vocabulary } from "./whereEditor";
 import type { CatalogTypes, Inventories, Item, Loadout, LoadoutPresetInfo, LogEntry, Officers, Recruits, ShipLayout, StatLine, Status, Vitals } from "./types";
 import { num, fmt, subFmt, statVal, mainVal, brokeMsg, barterMsg, undockedMsg, buyExpect, priceLabel, affordTip, affordLine, CREDIT_MARK, pluralName } from "./format";
 import { useHoverIntent } from "./useCursorTip";
@@ -132,7 +134,7 @@ function configJson(): string {
 // JSON-backed keys must parse and have the right shape. Returns the error list (empty = valid).
 const JSON_KEYS = ["shipoptimizer.turretCategories", "shipoptimizer.gearFilters", "shipoptimizer.conn", "shipoptimizer.officerBuilder", "shipoptimizer.activityProfile",
                    "shipoptimizer.sellRules", "shipoptimizer.sellLists", "shipoptimizer.wantRules",
-                   "shipoptimizer.sellView"];
+                   "shipoptimizer.sellView", "shipoptimizer.goalOrder"];
 function validateConfig(raw: string): { errors: string[]; cfg?: Record<string, string> } {
   let obj: unknown;
   try { obj = JSON.parse(raw); } catch (e) { return { errors: ["Not valid JSON: " + (e as Error).message] }; }
@@ -161,6 +163,17 @@ function validateConfig(raw: string): { errors: string[]; cfg?: Record<string, s
         else for (const f of ["host", "port", "token"]) { const cv = (p as Record<string, unknown>)[f]; if (cv !== undefined && typeof cv !== "string") errors.push(`conn.${f} must be a string`); }
       } else if ((k === "shipoptimizer.gearFilters" || k === "shipoptimizer.officerBuilder") && !isObj) {
         errors.push(`${k.split(".")[1]} must be an object`);
+      } else if (k === "shipoptimizer.goalOrder") {
+        // Ship guid → ordered stat keys. Checked at import because an unknown key here does not fail loudly:
+        // the comparator would read a stat nothing measures and quietly rank on one fewer term than the
+        // player is looking at.
+        if (!isObj) errors.push("goalOrder must be an object");
+        else for (const [g, list] of Object.entries(p as Record<string, unknown>)) {
+          if (!Array.isArray(list) || list.some((x) => typeof x !== "string")) { errors.push(`goalOrder["${g}"] must be a string array`); continue; }
+          const bad = (list as string[]).filter((x) => !(GOAL_KEYS as readonly string[]).includes(x));
+          if (bad.length) errors.push(`goalOrder["${g}"] names unknown stat(s): ${bad.join(", ")}`);
+          if (new Set(list as string[]).size !== list.length) errors.push(`goalOrder["${g}"] ranks a stat twice`);
+        }
       } else if (k === "shipoptimizer.sellRules") {
         // Checked harder than the rest because this one DECIDES WHAT GETS SOLD: a malformed rule that
         // survives import is a rule whose clauses silently do not apply, and an exception that fails to
@@ -180,6 +193,7 @@ function validateConfig(raw: string): { errors: string[]; cfg?: Record<string, s
           const rule = r as Record<string, unknown>;
           if (typeof rule?.id !== "string") errors.push(`wantRules[${i}] needs a string id`);
           if (typeof rule?.where !== "object" || rule.where === null) errors.push(`wantRules[${i}] needs a where object`);
+          if (rule?.name != null && typeof rule.name !== "string") errors.push(`wantRules[${i}].name must be text`);
         });
       } else if (k === "shipoptimizer.sellLists" && !isObj) {
         errors.push("sellLists must be an object of name → list");
@@ -674,7 +688,6 @@ export default function App() {
   // the sell rules and for the same reason — a want is about this playthrough's ship, level and holdings.
   const [wantRules, setWantRules] = useState<WantRule[]>(() => load<WantRule[]>("shipoptimizer.wantRules", []));
   const [wantOpen, setWantOpen] = useState(false);
-  const { trigger: wantTrigger, at: wantAt } = usePopAnchor(wantOpen, 440);
 
   // Inventory filters/search.
   const [cat, setCat] = useState("");
@@ -804,6 +817,31 @@ export default function App() {
   // reported figure already includes scaling passes no re-sum of item lines can reproduce). Without it the
   // defensive cap has nothing to measure and silently permits everything.
   const gearBuilder = useGearBuilder(layout, inv, status?.shipGuid ?? null, critCtx, shipPools, status?.role ?? null, vitals);
+
+  // WHAT A POINT OF EACH COMBAT STAT IS WORTH ON THE BATTERY BEING PLANNED.
+  //
+  // THE CONFIGURED SLOTS, not the fitted ones. `assign` is what the player has put in each turret slot — by hand or
+  // from a suggestion over the gear they actually own — and that is the battery whose value question they are asking:
+  // a crit ranking taken off the guns currently bolted on is the wrong ranking the moment the plan is applied. A slot
+  // with no choice in it falls back to what is fitted, which is what will still be there.
+  //
+  // Computed from the LIVE reading rather than the cached one: the method re-derives the whole background from a moved
+  // status, which a `ShipPools` object cannot be un-derived back into, and a marginal off a stale reading would
+  // describe a battery that is no longer there. Gated on the two questions the SCORING is gated on — does the reading
+  // contain the gear (`poolsReconcile`), and does it describe this hull (`poolsForShip`) — because a ranking built on
+  // the wrong ship's pools is worse than the hand-sorted list it replaces.
+  const marginals = useMemo(() => {
+    if (!status) return [];
+    const planned = (layout?.hardpoints ?? [])
+      .map((h) => gearBuilder.assign[`t:${h.index}`] ?? h.equipped)
+      .filter((x): x is Item => !!x && x.category === "Turret" && x.gameplayType === "Combat");
+    if (!planned.length) return [];
+    const live = poolsFromStatus(status);
+    if (!live || !poolsReconcile(live, planned)) return [];
+    if (!poolsForShip(live, status.shipGuid ?? null, layout?.shipGuid ?? null)) return [];
+    return statMarginals(status, planned);
+  }, [status, layout, gearBuilder.assign]);
+
   const boosterBuilder = useBoosterBuilder(loadout, inv);
   // What swapping one turret for another is WORTH, under the Gear tab's selected ranking — the rail's
   // objective has to be the optimizer's, or the two disagree and the rail recommends buying something the
@@ -843,7 +881,8 @@ export default function App() {
     // decisions that live outside it. A rail offering what the tab was told to stop offering is one slot with
     // two verdicts.
     const boosters = gearBoosterOpps(cands.filter(isBooster), boosterBuilder.slotTypes, boosterBuilder.equippedBySlot,
-                                     boosterBuilder.ctx, boosterBuilder.refused, boosterBuilder.locked);
+                                     // No booster ban list any more, so nothing is refused here.
+                                     boosterBuilder.ctx, undefined, new Set(boosterBuilder.locked.keys()));
     // The rails judge a module the way the tab does: on the battery it changes, wherever the pools allow it.
     const other = gearModuleOpps(cands.filter((i) => !isTurret(i) && !isBooster(i)), gearBuilder.mslots,
       shipPools?.energy, status?.role ?? null,
@@ -904,10 +943,14 @@ export default function App() {
       .filter((s) => s.slots > 0)
       .map((s) => {
         const ld = byGuid.get(s.shipGuid);
-        // Defensive layer from the ship's equipped defensive module slot (armor wins if both exist).
-        const hasSlot = (nm: string) => (ld?.modules ?? []).some((m) => (m.slot ?? m.item?.slotType) === nm);
-        const defenseLayer: "shield" | "armor" | null = hasSlot("Armor") ? "armor" : hasSlot("ShieldGenerator") ? "shield" : null;
-        return { guid: s.shipGuid, name: ld?.name ?? ld?.shipType ?? s.shipGuid, role: ld?.role ?? null, slots: s.slots, hasDroneBay: s.hasDroneBay, defenseLayer, assigned: s.assigned ?? [] };
+        // Defensive layer from the ship's own defensive module slot. `activityPresets` owns the rule, since the
+        // gear frontier reads the same fact to decide what its tank axis even is.
+        const defenseLayer = defenseLayerOf((ld?.modules ?? []).map((m) => m.slot ?? m.item?.slotType ?? ""));
+        // A HANGAR BAY IS A SLOT ON THIS HULL, so it is read off the hull. `status.hasPersonalHangar` is a
+        // different fact (a hangar at the STATION, where a refit happens); wiring the skill to that would
+        // credit the node on every ship whenever the player docked somewhere with one.
+        const hasHangarBay = (ld?.modules ?? []).some((m) => (m.slot ?? m.item?.slotType ?? "") === "HangarBay");
+        return { guid: s.shipGuid, name: ld?.name ?? ld?.shipType ?? s.shipGuid, role: ld?.role ?? null, slots: s.slots, hasDroneBay: s.hasDroneBay, hasHangarBay, defenseLayer, assigned: s.assigned ?? [] };
       })
       .sort((a, b) => Number(b.guid === status?.shipGuid) - Number(a.guid === status?.shipGuid));
   }, [officers, shipsAll, status?.shipGuid]);
@@ -1084,8 +1127,8 @@ export default function App() {
         <button className={tab === "map" ? "on" : ""} onClick={() => setTab("map")}>Map <TabNote text="wip" title="Work in progress" /></button>
       </nav>
 
-      {tab === "officers" && <OfficersTab apply={applyApi} builder={builder} portraitUrl={portraitUrl} recruits={recruits} portraitByIcon={(icon) => api.portraitByIcon(conn, icon)} goSummary={() => setTab("summary")} conn={conn} docked={!!status?.docked} credits={credits} onHired={refresh} />}
-      {tab === "boosters" && <BoostersTab apply={applyApi} builder={boosterBuilder} docked={!!status?.docked} conn={conn} goSummary={() => setTab("summary")} />}
+      {tab === "officers" && <OfficersTab apply={applyApi} builder={builder} portraitUrl={portraitUrl} recruits={recruits} portraitByIcon={(icon) => api.portraitByIcon(conn, icon)} goSummary={() => setTab("summary")} conn={conn} docked={!!status?.docked} credits={credits} onHired={refresh} marginals={marginals} />}
+      {tab === "boosters" && <BoostersTab apply={applyApi} builder={boosterBuilder} docked={!!status?.docked} conn={conn} goSummary={() => setTab("summary")} marginals={marginals} />}
       {tab === "gear" && <GearTab layout={layout} builder={gearBuilder} catalog={catTypes} conn={conn} currentShipGuid={status?.shipGuid ?? null} goSummary={() => setTab("summary")} reactor={reactorInfo} budgetNote={budgetNote} role={role} vitals={vitals} apply={applyApi} />}
       {tab === "map" && <MapTab conn={conn} docked={!!status?.docked} standingBump={standingBump} />}
       {tab === "summary" && (
@@ -1156,7 +1199,7 @@ export default function App() {
                 </small>
               ) : (
                 <button className="mini"
-                        title={`${buybackCount.toLocaleString()} items you sold here — too many to carry in every refresh (they arrive as megabytes on a list read for what the station sells), so they are fetched when asked for.`}
+                        title={`${buybackCount.toLocaleString()} items you sold here. Loaded on request: they are megabytes.`}
                         onClick={() => { showBuyback.current = true; setBuybackShown(true); refresh(); }}>
                   show {buybackCount.toLocaleString()} you sold
                 </button>
@@ -1207,22 +1250,20 @@ export default function App() {
           <div className="opp-panel">
             <div className="opp-head">
               <h2>From shop</h2>
-              {/* Anchored to this button rather than laid out under it: the rail is ~230px and a rule is a
-                  sentence plus its chips, so editing in the column meant a clause wrapping over four lines. The
-                  flyout is `position: fixed` for the same reason the field picker inside it is — every ancestor
-                  here scrolls or clips. */}
-              <button ref={wantTrigger} className={"mini" + (wantOpen ? " on" : "")} onClick={() => setWantOpen((v) => !v)}
-                      title="Shopping list — what to watch this station's shop for, in the sell list's own filters. Matches join the rail; nothing is bought without your click.">
+              {/* A DIALOG, like the sell list it shares its clause vocabulary with. Anchored to this button the
+                  editor got 440px beside a 230px rail, and a rule is a sentence plus a row of chips: every clause
+                  wrapped, a substat list ran to four lines, and the panel covered the rows it was written about.
+                  Editing a list is not a glance at a value, so it gets the room the sell list gets. */}
+              <button className={"mini" + (wantOpen ? " on" : "")} onClick={() => setWantOpen((v) => !v)}
+                      title="What to watch this station's shop for. Matches join the rail; nothing is bought.">
                 shopping list{wantRules.length ? ` (${wantRules.length})` : ""}
               </button>
             </div>
-            {wantOpen && (
-              <div className="want-flyout" style={wantAt}>
-                <WantedRules rules={wantRules} offers={shopInPlay} vocabulary={wantVocab} catalog={wantCatalog} ctx={wantCtx}
-                             onClose={() => setWantOpen(false)}
-                             onChange={(next) => { setWantRules(next); save("shipoptimizer.wantRules", next); }} />
-              </div>
-            )}
+            <Modal open={wantOpen} onClose={() => setWantOpen(false)} label="Shopping list" className="want-pop">
+              <WantedRules rules={wantRules} offers={shopInPlay} vocabulary={wantVocab} catalog={wantCatalog} ctx={wantCtx}
+                           onClose={() => setWantOpen(false)}
+                           onChange={(next) => { setWantRules(next); save("shipoptimizer.wantRules", next); }} />
+            </Modal>
             {shopRail.length ? (
               <OpportunityList opps={shopRail} equipped={currentItems} showCost role={role} credits={credits} conn={conn} docked={!!status?.docked} onBought={refresh} ranking={gearBuilder.ranking} />
             ) : (
@@ -1503,20 +1544,21 @@ export function ItemGrid({
             // Sorted and grouped by PROGRESS, which is the only figure comparable between two boosters: the
             // thresholds differ by orders of magnitude between units (one per kill against a credit count).
             num: (it: Item) => (it.resonance ? Math.round(resonanceLive(it.resonance) * 100) : -1),
-            text: (it: Item) => (it.resonance ? `${Math.round(resonanceLive(it.resonance) * 100)}% ${unlockBonusText(it.resonance)}`.trim() : ""),
+            text: (it: Item) => (it.resonance ? `${Math.round(resonanceLive(it.resonance) * 100)}% earned · ${resonanceFigure(it.resonance, it)}`.trim() : ""),
             cell: (it: Item) => {
               const r = it.resonance;
               if (!r) return "";
               const pct = Math.round(resonanceLive(r) * 100);
               // The BONUS is the point of the column — the progress figure alone says how far along something the
-              // player cannot see. `unlockBonusText` is the game's own formatted line (percent stats are stored
-              // fractionally ∴ rebuilding it by hand is wrong), and it is the FULL bonus, so the percentage beside
-              // it says how much of that is being paid today.
+              // player cannot see. `resonanceFigure` is the ONE owner of that value (the game's own formatted line
+              // where it arrived, the multiplier stated exactly where it did not), and it is the FULL bonus, so the
+              // percentage beside it says how much of that is being paid today.
+              const figure = resonanceFigure(r, it);
               return (
                 <span className={`res-cell${r.unlocked ? " done" : ""}`}
-                      title={`${unlockBonusText(r)} — ${r.unlocked ? "paying in full" : `paying ${pct}% of it`} · ${Math.round(r.progress).toLocaleString()} / ${Math.round(r.threshold).toLocaleString()} ${r.unit}`}>
+                      title={`${figure} at full — ${r.unlocked ? "paying in full" : `paying ${pct}% of it`} · ${Math.round(r.progress).toLocaleString()} / ${Math.round(r.threshold).toLocaleString()} ${r.unit}`}>
                   <span className="res-pct">{pct}%</span>
-                  {unlockBonusText(r) ? <span className="res-bonus"> {unlockBonusText(r)}</span> : null}
+                  {figure ? <span className="res-bonus"> {figure}</span> : null}
                 </span>
               );
             },
@@ -1973,7 +2015,9 @@ function OpportunityList({ opps, equipped, showCost, role, credits, conn, docked
           {/* A wanted row is here because a shopping rule claimed it, so it has no gain to report — and showing
               its 0 delta as one would read "changes nothing", the opposite of why it is on the rail. */}
           {o.wanted
-            ? <span className="opp-d b-want" title={o.wanted}>★ on my list</span>
+            ? <span className="opp-d b-want" title={o.wanted}>
+                ★ {o.wantNames?.length ? o.wantNames.join(" · ") : "on my list"}
+              </span>
             : <span className={`opp-d ${o.delta >= 0 ? "up" : "switch"}`}
                     title={o.why ?? (o.delta < 0 ? "lower than equipped — a type switch to match your slot filter" : oppMetric)}>
                 {o.delta >= 0 ? "+" : ""}{num(o.delta)}

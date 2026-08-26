@@ -8,8 +8,8 @@
 // reactor is — so the player can only reach it by pressing the two buttons in the right order, twice.
 import { describe, it, expect } from "vitest";
 import {
-  background, moduleBetter, optimizeModuleSet, optimizeShipSet, optimizeTurretSet, poolsWithModules, setRank,
-  rankGt, type ShipPools,
+  background, goalReadingOf, goalRefuses, moduleBetter, optimizeGearSet, optimizeModuleSet, optimizeShipSet,
+  optimizeTurretSet, poolsWithModules, rankSub, setRank, rankGt, type Rank, type ShipPools,
 } from "./fleetDps";
 import type { Item } from "./types";
 
@@ -134,5 +134,161 @@ describe("optimizeShipSet", () => {
     expect(chosen.get("t:0")).toBeDefined();
     expect(took).toBeLessThan(10_000);
     console.log(`joint search over 2 hardpoints + 2 module slots × ~500 candidates each: ${Math.round(took)}ms`);
+  });
+
+  // A RANKED READING IS A FIGURE OF THE SHIP.
+  //
+  // The objective reads the battery against a background the modules alone decide, because `setDps` adds each
+  // candidate gun's own contribution and folding the guns into that background counts them twice. A GOAL KEY is
+  // a whole-ship figure and needs the opposite: every slot the plan touches, hardpoints included. Read it off the
+  // modules alone and a plan buying a module's `Power` line with a hardpoint's own power reads as pure gain on
+  // the very key the player ranked first.
+  describe("the ranked reading folds in the hardpoints", () => {
+    const cutter = (name: string, power: number, draw: number, key: number,
+                    layer: "Surface" | "Core"): Item => ({
+      key, slot: key, name, rarity: "Exotic", level: 74, size: "Large", type: "Salvage Cutter",
+      category: "Turret", gameplayType: "Salvage", targetLayer: layer, damageType: "Kinetic", sellValue: 0,
+      mainStat: { name: "Salvage Power", amount: String(power) },
+      powerUsage: draw, powerUsageBase: draw,
+      fireDelayRaw: 0.4, reloadDelayRaw: 2, magSizeRaw: 10, burstAmount: 1, burstDelay: 0,
+      aspects: [], stats: [], substats: [], bonus: null, bonusStat: null,
+    } as unknown as Item);
+
+    // The pair that was proposed on the live ship: a strictly weaker cutter for the fitted one. Both loads sit
+    // inside the top reactor bracket (20% and 18% of capacity), so nothing here is a bracket effect.
+    const strongCutter = cutter("Salvage Cutter Mk.XIX", 10_376, 2_615, 30, "Surface");
+    const weakCutter = cutter("Salvage Cutter Mk.XVI", 4_188, 1_040, 31, "Surface");
+    // The CORE bottleneck, and the reason the objective has no opinion about the surface swap: the balanced
+    // target is `min(surface, core)`, so surface power above the core figure is slack the search may spend for
+    // nothing. This is the shape a synthetic tie cannot reproduce by making the two guns equal.
+    const coreCutter = cutter("Core Cutter", 500, 300, 32, "Core");
+    const plainKit = mod("Hull", "plain-kit", 0, 33);
+    const hullKit = mod("Hull", "hull-kit", 0, 34, [{ stat: "Power", amount: 2_265 }]);
+    const fittedBattery = [strongCutter, coreCutter];
+
+    const salvagePools = (): ShipPools => ({
+      poolCombatPower: 0, poolSalvagePower: 231_565, poolPrecision: 12_300, equivalentTurrets: 4,
+      precisionDivisor: 5_000, critDamage: 1, megaCrit: 0, critChance: 0.2, critChanceMult: 1,
+      energy: { used: 20_000, capacity: 100_000, mod: 0.2 },
+    });
+
+    it("the objective is silent on the swap, so only the reading can refuse it", () => {
+      const bg = background(poolsWithModules(salvagePools(), [plainKit], [plainKit]), fittedBattery);
+      const now = setRank(fittedBattery, bg, "balanced", "Salvage");
+      const swapped = setRank([weakCutter, coreCutter], bg, "balanced", "Salvage");
+      expect(swapped[0]).toBe(now[0]);
+      // Not worse: the surface layer had slack, so throwing 6,188 of it away costs the objective nothing.
+      expect(rankSub(swapped, now)).toBeGreaterThanOrEqual(0);
+    });
+
+    it("accepts the plan on a modules-only reading and refuses it once the guns are folded in", () => {
+      const fitted = goalReadingOf(salvagePools());
+      const withKit = poolsWithModules(salvagePools(), [plainKit], [hullKit]);
+      const modulesOnly = goalReadingOf(withKit);
+      const bothHalves = goalReadingOf(
+        poolsWithModules(withKit, [strongCutter, coreCutter], [weakCutter, coreCutter]));
+
+      // The kit's `Power 2,265` is the whole of the modules-only move, and it points UP.
+      expect(modulesOnly.salvage).toBeCloseTo(233_830, 6);
+      expect(goalRefuses(["salvage"], fitted, modulesOnly)).toBeNull();
+
+      // With the hardpoints folded in, the same plan spends 6,188 of the key to buy 2,265 of it.
+      expect(bothHalves.salvage).toBeCloseTo(227_642, 6);
+      expect(goalRefuses(["salvage"], fitted, bothHalves)).toBe("salvage");
+    });
+
+    it("keeps the fitted cutter and takes the kit alone", () => {
+      // `alone` scores a battery of one at `min(surface, 0) = 0`, so both cutters tie there and the seed starts
+      // this hardpoint on the FIRST candidate — the weaker gun. The plan must still come back with the incumbent.
+      const chosen = optimizeShipSet({
+        turretSlots: [
+          { key: "t:0", current: strongCutter, candidates: [weakCutter, strongCutter] },
+          { key: "t:1", current: coreCutter, candidates: [coreCutter] },
+        ],
+        moduleSlots: [{ key: "m:Hull", current: plainKit, candidates: [plainKit, hullKit] }],
+        pools: salvagePools(), fittedTurrets: fittedBattery, ctx: { role: "Salvaging" }, act: "Salvage",
+        goal: { order: ["salvage"], fitted: goalReadingOf(salvagePools()) },
+      });
+      expect(chosen.get("m:Hull")).toBe(hullKit);
+      expect(chosen.get("t:0")).toBe(strongCutter);
+    });
+
+    it("refuses a swap the objective WANTS, where the key it spends is a hardpoint's own power", () => {
+      // The two quantities pulled apart: the objective is a DPS index and a ranked key is a POOL figure. What the
+      // index rewards is `speedRatio`, the cadence a gun achieves over the divisor the game charges it — a single
+      // shot behind a long reload collects the whole of the 0.8 reload discount, where a big magazine spreads it
+      // thin. So a gun worth 1,000 less Combat Power can still raise the index, and settling cannot catch the
+      // swap because it earns its place on the objective. Only a reading that folds the hardpoints in sees what
+      // it spent. Equal draw on both, so no bracket moves.
+      const steadyGun = gun("steady", 12_000, 1_000, 50,
+        { fireDelayRaw: 0.2, reloadDelayRaw: 1, magSizeRaw: 20 });
+      const burstGun = gun("single-shot", 11_000, 1_000, 51,
+        { fireDelayRaw: 0.1, reloadDelayRaw: 5, magSizeRaw: 1 });
+      const bg = background(pools(9_000), [steadyGun]);
+      expect(rankSub(setRank([burstGun], bg), setRank([steadyGun], bg))).toBeGreaterThan(0);
+
+      const fitted = goalReadingOf(pools(9_000));
+      const chosen = optimizeShipSet({
+        turretSlots: [{ key: "t:0", current: steadyGun, candidates: [burstGun, steadyGun] }],
+        moduleSlots: [],
+        pools: pools(9_000), fittedTurrets: [steadyGun], ctx: { role: "Combat" },
+        goal: { order: ["combat"], fitted },
+      });
+      expect(chosen.get("t:0")).toBe(steadyGun);
+    });
+  });
+
+  // EVERY SWAP IN THE ANSWER EARNS ITS OWN PLACE.
+  //
+  // Incumbency inside a pass is not incumbency in the ANSWER: a slot seeded from `alone` starts on a candidate,
+  // and a coordinate the objective is indifferent to is never moved back off it, so the winning seed carries
+  // swaps it was never asked to justify. That needs the SEEDED plan to win, which needs a gain no single
+  // coordinate can reach — pinned here at `optimizeGearSet`'s own boundary, where the objective is a parameter.
+  // A whole-ship fixture cannot hold the shape still: `optimizeShipSet` hands the module slots `moduleBetter` as
+  // their tie-break, which bridges a neutral reactor step, so the fitted seed reaches the pair too and the two
+  // seeds tie — and a tie is decided for the incumbent, which is the thing this pass exists to do by measurement.
+  describe("the answer is settled slot by slot", () => {
+    const pairGun = gun("pair-gun", 14_000, 9_000, 40);
+    const pairMod = mod("Reactor", "pair-reactor", 1_000, 41, [{ stat: "Energy", amount: 16_000 }]);
+    const twinA = gun("twin-a", 8_000, 700, 42);
+    const twinB = gun("twin-b", 8_000, 700, 43);          // indistinguishable to the objective, another object
+    const plainHull = { ...mod("Hull", "plain-hull", 500, 44), aspectSlots: 0 } as Item;
+    const roomyHull = { ...mod("Hull", "roomy-hull", 500, 45), aspectSlots: 2 } as Item;
+
+    // The pair pays and neither half does: one step alone is a LOSS, so the ascent from what is fitted stays
+    // where it is however many passes it takes, and only a seed that starts on both reaches the gain.
+    const scored = (chosen: ReadonlyMap<string, Item>): Rank => {
+      const both = chosen.get("t:0") === pairGun && chosen.get("m:Reactor") === pairMod;
+      const half = (chosen.get("t:0") === pairGun) !== (chosen.get("m:Reactor") === pairMod);
+      return [2, both ? 100 : half ? 80 : 90];
+    };
+    const chosen = optimizeGearSet({
+      slots: [
+        { key: "m:Reactor", current: smallReactor, candidates: [smallReactor, pairMod] },
+        { key: "m:Hull", current: plainHull, candidates: [plainHull, roomyHull] },
+        { key: "t:0", current: modestGun, candidates: [pairGun, modestGun] },
+        { key: "t:1", current: twinA, candidates: [twinB, twinA] },
+      ],
+      score: scored,
+      // The per-slot answer, which is what seeds the second run: it likes the pair's gun, and it cannot separate
+      // the twins — so that slot starts on a candidate for no reason the objective can state.
+      alone: (it, at) => (at.startsWith("t:") ? [2, it === pairGun ? 99 : 90] : null),
+      // Modules only, exactly as `optimizeShipSet` wires it: the roomy hull wins where the objective is silent,
+      // and a hardpoint tie is left to the objective.
+      tie: (cand, _best, at) => !at.startsWith("t:") && cand === roomyHull,
+    });
+
+    it("keeps the coupled pair, so the winning plan is the seeded one", () => {
+      expect(chosen.get("m:Reactor")).toBe(pairMod);
+      expect(chosen.get("t:0")).toBe(pairGun);
+    });
+
+    it("reverts the rank-neutral gun the seed started on", () => {
+      expect(chosen.get("t:1")).toBe(twinA);
+    });
+
+    it("keeps the module swap the tie-break earns, where the objective is silent", () => {
+      expect(chosen.get("m:Hull")).toBe(roomyHull);
+    });
   });
 });

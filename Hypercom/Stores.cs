@@ -6,6 +6,7 @@ using System.Reflection;
 using Behaviour.Crew;
 using Behaviour.Equipment;
 using Behaviour.Equipment.Builder;
+using Behaviour.Equipment.Module;
 using Behaviour.Equipment.Turret;
 using Behaviour.Item;
 using Source.Data;
@@ -137,8 +138,20 @@ namespace Hypercom
             dto["gameplayType"] = turret != null ? turret.gameplayType.ToString() : null;  // Combat | Mining | Salvage
             dto["targetLayer"] = turret != null ? turret.targetLayer.ToString() : null;    // Surface | Core | Both (mining/salvage)
             dto["fireRate"] = turret != null ? (object)turret.defaultAttacksPerSecond : null;
+
+            // TORPEDO BAY, whose numbers cannot ride on the turret fields above: `fireRate` there is a RATE and
+            // a bay's is a PERIOD, so one key holding both would be wrong on whichever it was not named for.
+            // Prefab constants ∴ they travel with a loose candidate too, which is what lets a bay be compared
+            // before it is fitted. Private fields with beta-only properties over them ∴ read by name.
+            var bay = eq as TorpedoBayModule;
+            dto["torpedoFireDelay"] = bay != null ? (object)Compat.PrivateNum(bay, "fireRate") : null;
+            dto["torpedoReloadTime"] = bay != null ? (object)Compat.PrivateNum(bay, "reloadSpeed") : null;
+
             // Through ItemName like every other item name: ammo `displayName` is a KEY.
-            dto["ammo"] = ItemName(turret?.ammoType);
+            //
+            // A BAY FEEDS FROM CARGO TOO, through its own `ammoType` and one round per launch, so leaving this
+            // turret-only said a torpedo hull needed no ammunition at all.
+            dto["ammo"] = ItemName(turret != null ? turret.ammoType : bay?.ammoType);
             // Sustained ammo used per minute: shots/sec (already includes burst + reload) × 60 ×
             // ammoPerShot ÷ shotsPerAmmo. Null when the turret uses no ammo. Match the game: one cargo
             // round removed (ammoPerShot) every shotsPerAmmo shots.
@@ -205,7 +218,12 @@ namespace Hypercom
             try
             {
                 var ub = Compat.Get(rb, "unlockBonus"); // EquipStatLine
-                string bonus = Compat.Call(ub, "ToReadableString") as string;
+                // `ToReadableString(bool noDecimal)` TAKES AN ARGUMENT, and `Compat.Call` matches on arity ∴ calling
+                // it bare bound nothing and answered null, which reached the web UI as a bare stat name with no
+                // figure in it (`Combat Power · paying 100% of it`). `false` keeps the decimals: a resonance bonus is
+                // a few percent, and rounding it to whole percent is rounding away most of what distinguishes two
+                // boosters.
+                string bonus = Compat.Call(ub, "ToReadableString", false) as string;
                 var stat = ub != null ? Compat.Get(ub, "stat") : null;
                 if (bonus == null && stat is EquipStat es) bonus = StatName(es);
                 var req = Compat.Get(rb, "requirementType");
@@ -213,7 +231,7 @@ namespace Hypercom
                 // (`GetScaledUnlockBonus`), and the game's own tooltip shows both this and the max — so both are
                 // sent rather than leaving a client to rescale a formatted string, which cannot be done correctly:
                 // a percent line is stored fractionally and only `ToReadableString` knows that.
-                string bonusNow = Compat.Call(Compat.Call(rb, "GetScaledUnlockBonus"), "ToReadableString") as string;
+                string bonusNow = Compat.Call(Compat.Call(rb, "GetScaledUnlockBonus"), "ToReadableString", false) as string;
                 // The NUMBERS behind the line, because the two kinds are worth entirely different things: an
                 // `amount` adds to the ship's pool for that stat, while a `multiplier` scales the WHOLE pool
                 // (`AbstractUnitData.ApplyStatSourceLines`: `calcedStats[s] += amount; statMultipliers[s] *= mult`,
@@ -654,6 +672,12 @@ namespace Hypercom
             dto["magSizeRaw"] = Compat.PrivateNum(turret, "_maxMagSize");
             dto["burstAmount"] = turret.burstAmount;
             dto["burstDelay"] = turret.burstDelay;
+            // THE PREFAB'S FACTOR ON ATTACK POWER, which `CalculateAttackPower` applies to the gun's own main
+            // power and to its share of the pool alike. Serialized per prefab and per size, 0.9 to 1.15 (Railgun
+            // 1.1, Laser 0.95, Laser Repeater 0.9), so a client ranking two guns without it is ranking them by up
+            // to 22% of the wrong number. `/catalog/prefabs` already carried it, but that route is debug-gated and
+            // per TEMPLATE — a client scoring the items it can actually fit needs it on the item.
+            dto["powerMultiplier"] = turret.powerMultiplier;
             // Mean of the per-hit spread `RandomRange(0.8f, 1.25f)`: identical for every turret, so it does not
             // affect ranking — sent because it makes a displayed estimate honest rather than 2.5% optimistic.
             dto["damageSpreadMean"] = 1.025f;

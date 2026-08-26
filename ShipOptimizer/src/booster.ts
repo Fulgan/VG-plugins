@@ -6,6 +6,7 @@ import type { Item, Resonance } from "./types";
 import type { Scope } from "./scope";
 import { unitReachable, type ActivityProfile } from "./activityPresets";
 import { isRoleStat, statApplies, type ShipFit } from "./roleStats";
+import { statTotals } from "./format";
 
 // The booster's type = its main stat name. Falls back to the readable equipment type, else "Other".
 export function boosterType(it: Item): string {
@@ -33,6 +34,40 @@ export const boosterTypeColor = (it: Item): string => TYPE_COLOR[boosterType(it)
 // Readable resonance unlock-bonus, e.g. "+2.22% Reload Speed" — game-formatted from the bridge.
 export function unlockBonusText(r: import("./types").Resonance): string {
   return r.bonus || r.bonusStat || "";
+}
+
+/**
+ * THE RESONANCE BONUS AS A FIGURE, at full progress — one owner, because two surfaces print it (the tooltip and
+ * the inventory column) and a value shown one way in one place and another way in the other is the drift this
+ * project pays for most.
+ *
+ * The game's own formatted line is preferred and used verbatim: percent stats are stored FRACTIONALLY, so only
+ * that formatter knows which stats read as a percentage. It arrives as a bare stat NAME with no number in it
+ * whenever the bridge could not build it, and then the value is rebuilt here from what IS known:
+ *
+ *   a MULTIPLIER is a percentage by construction (it scales a whole pool) ∴ stated exactly;
+ *   an AMOUNT is a percentage where the ITEM'S OWN stat lines say that stat is one (`percent`, which the bridge
+ *     sends per line) — the same fact, read off the same payload, rather than a table of stat names invented here;
+ *   otherwise the raw amount, ROUNDED, and with no unit claimed: 0.0245 of a stat nothing marks could be 2.45% or
+ *     an absolute 0.0245, and printing the wrong one is worse than printing the number.
+ *
+ * EVERY BRANCH IS ROUNDED. `+0.0537379645 Officer Bonus` is the game's own float read aloud, which is unreadable
+ * at a glance and precise about nothing a player decides with.
+ */
+export function resonanceFigure(r: import("./types").Resonance, it?: import("./types").Item): string {
+  const full = unlockBonusText(r);
+  if (/\d/.test(full)) return full;
+  const stat = r.bonusStat ?? "";
+  const mult = r.bonusMultiplier ?? 1;
+  if (mult !== 1) return `+${((mult - 1) * 100).toFixed(2)}% ${stat}`;
+  const amt = r.bonusAmount ?? 0;
+  if (!amt) return stat;
+  // The item's OWN line for this stat, which is where percent-ness is stated. A booster carrying a resonance on
+  // the stat it already boosts is the common case (an Officer booster resonating into Officer Bonus) and there the
+  // answer is right here in the payload.
+  const own = it ? statTotals(it).get(stat) : undefined;
+  if (own?.percent) return `+${(amt * 100).toFixed(2)}% ${stat}`;
+  return `+${Number(amt.toPrecision(3))} ${stat}`;
 }
 export const resonancePct = (r: import("./types").Resonance): number =>
   r.unlocked ? 100 : r.threshold > 0 ? Math.min(100, Math.round((r.progress / r.threshold) * 100)) : 0;
@@ -221,8 +256,27 @@ export function defaultSlotTypes(equipped: (Item | null)[], slotCount: number, r
 // Stable per-booster id for a session (location + inventory slot / equipped index / name).
 export const boosterId = (b: Item): string => `${b.location ?? "ship"}:${b.key ?? b.slot ?? ""}:${b.name}:${b.level}`;
 
+/**
+ * WHAT A PIN REMEMBERS, and it is deliberately NOT `boosterId`.
+ *
+ * `boosterId` names a PHYSICAL booster, store slot included, which is right for "only one of these exists, and
+ * it is already promised to slot 3". A pin is a different statement: "this slot holds THIS booster". The moment
+ * the player applies it, the same booster moves from `cargo` to `equipped` and its id changes with it, so a pin
+ * keyed by id stopped resolving against the pool, the optimizer fell through to picking freely, and the badge
+ * went on saying `pinned`. A pin has to survive the thing it asked for actually happening.
+ *
+ * Keyed by what the player chose rather than by where it was: two identical boosters in two stores satisfy this
+ * pin equally, which is correct, because the player picked a booster and not a warehouse shelf.
+ */
+export const boosterPinKey = (b: Item): string => `${b.name}:${b.level}:${b.rarity}`;
+
+/** A slot the player answered with "nothing here". Distinct from an unanswered slot, which the optimizer fills. */
+export const EMPTY_PIN = "";
+
 export interface BoosterPick {
   slot: number;
+  /** Pinned to a booster no longer in the pool. The card says so rather than quietly re-optimizing. */
+  pinUnresolved?: boolean;
   type: string | null;
   chosen: Item | null; // best available booster of that type (null = none in pool)
   /** The RAW main-stat amount — what the card shows and what the player compares by eye. */
@@ -283,10 +337,18 @@ export function optimizeBoosters(
   // optimizer weighs — it is an answer already given, so it is placed before anything is scored and the slot's
   // TYPE does not gate it: choosing a booster for a slot is also how the type gets changed.
   const pinned = pins ?? new Map<number, string>();
-  for (const [slot, id] of pinned) {
+  for (const [slot, key] of pinned) {
     const p = picks[slot];
-    const b = pool.find((x) => boosterId(x) === id);
-    if (!p || !b || used.has(b)) continue;
+    if (!p) continue;
+    // The booster ALREADY IN THIS SLOT wins the match, so a pin the player has since applied resolves to the
+    // equipped copy and the slot reads `kept` rather than proposing the same thing over again.
+    const here = pool.find((x) => x.location === "equipped" && x.slot === slot && boosterPinKey(x) === key);
+    const b = here ?? pool.find((x) => !used.has(x) && boosterPinKey(x) === key);
+    // A pin matching nothing owned is REPORTED rather than skipped: quietly optimizing a slot the player has
+    // marked `pinned` contradicts the badge on that very card.
+    // An empty slot the player answered: keeping it empty is an answer, so it leaves the search either way.
+    if (key === EMPTY_PIN) { p.forced = true; continue; }
+    if (!b) { p.pinUnresolved = true; continue; }
     p.chosen = b; p.value = boosterValue(b); p.score = score(b); p.forced = true; p.type = boosterType(b);
     used.add(b);
   }
@@ -295,7 +357,12 @@ export function optimizeBoosters(
   const unplaceableForced: Item[] = [];
   for (const b of [...forcedBoosters].sort(better)) {
     const t = boosterType(b);
-    const slot = picks.find((p) => p.type === t && !p.chosen);
+    // ⚠ THE SAME GUARDS PASS 2 USES, and it was missing two of them. An `EMPTY_PIN` slot carries
+    // `forced = true, chosen = null`, so without `!p.forced` a starred armory booster of that type landed in the
+    // slot the player had explicitly answered with "nothing here", and `!lockedSlots.has` was likewise absent so a
+    // locked slot could be filled from under them. The player's own answer outranks the star.
+    const slot = picks.find((p) => p.type === t && !p.chosen && !p.forced
+                                   && !lockedSlots.has(p.slot) && !p.pinUnresolved);
     if (slot) { slot.chosen = b; slot.value = boosterValue(b); slot.score = score(b); slot.forced = true; used.add(b); }
     else unplaceableForced.push(b);
   }
@@ -304,7 +371,7 @@ export function optimizeBoosters(
   // (armory/cargo) boosters move into slots — displacing the weakest equipped one of that type. This
   // keeps the result stable: re-optimizing after an apply proposes no further churn (the armory pick
   // is now equipped-in-place), so a single Apply sticks instead of cascading over several clicks.
-  const openPicks = picks.filter((p) => !p.chosen && p.type && !lockedSlots.has(p.slot));
+  const openPicks = picks.filter((p) => !p.chosen && p.type && !p.forced && !lockedSlots.has(p.slot) && !p.pinUnresolved);
   for (const t of new Set(openPicks.map((p) => p.type))) {
     const slotsOfType = openPicks.filter((p) => p.type === t);
     const winners = pool

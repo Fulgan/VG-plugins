@@ -18,6 +18,7 @@ const offer = (over: Partial<Item> = {}): Item => ({
 const ctx = (owned: Record<string, number> = {}): FieldCtx => ({ cats: {}, myLevel: 40, owned });
 
 const rule = (where: WantRule["where"]): WantRule => ({ id: "w1", where });
+const named = (id: string, name: string, where: WantRule["where"]): WantRule => ({ id, name, where });
 
 describe("a want rule", () => {
   it("matches nothing until it has a clause", () => {
@@ -88,6 +89,30 @@ describe("ownedCounts", () => {
 
 describe("wantedOpps", () => {
   const r = rule({ c: { values: ["Turret"] } });
+
+  // NAMES ARE TAGS. A row says which list wanted it, and belonging to two lists is the interesting case: the tag
+  // has to carry both, since the second is the one the player would not have guessed from the item alone.
+  it("tags a match with every naming list that claimed it", () => {
+    const opps = wantedOpps([offer()], [
+      named("w1", "Refit stock", { c: { values: ["Turret"] } }),
+      named("w2", "Legendary hunt", { r: { values: ["Legendary"] } }),
+    ], ctx());
+    expect(opps[0].wantNames).toEqual(["Refit stock", "Legendary hunt"]);
+    // Both sentences ride in the tooltip: the tag says which list, the sentence says what it asks for.
+    expect(opps[0].wanted).toContain("Turret");
+    expect(opps[0].wanted).toContain("Legendary");
+  });
+
+  it("leaves wantNames absent when the claiming rules were never named", () => {
+    const opps = wantedOpps([offer()], [r], ctx());
+    expect(opps[0].wantNames).toBeUndefined();
+  });
+
+  it("ignores a name that is only whitespace, rather than tagging with a blank", () => {
+    const opps = wantedOpps([offer()], [named("w1", "   ", { c: { values: ["Turret"] } })], ctx());
+    expect(opps[0].wantNames).toBeUndefined();
+  });
+
 
   it("offers a match with no incumbent to beat, cheapest first", () => {
     const opps = wantedOpps([offer({ cost: 300_000 }), offer({ name: "Cutter", cost: 50_000 })], [r], ctx());

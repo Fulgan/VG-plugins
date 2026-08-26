@@ -244,3 +244,13 @@
 .sf-hops { flex: 0 0 auto; font-size: 10.5px; font-variant-numeric: tabular-nums; color: var(--map-label); }
 .sf-hops.locked { color: var(--map-gate); }   /* reachable only through a gate you cannot pass yet */
 .sf-hops.none { color: var(--map-unreachable); }
+
+/* ---- PHONE (portrait) — see App.css for the rule: the page must not scroll sideways. */
+@media (max-width: 560px) {
+  /* A tooltip wider than the screen cannot be positioned anywhere that shows all of it. */
+  .map-tip { width: min(320px, calc(100vw - 20px)); }
+  .map-search { min-width: 0; }
+  .map-poi-kind { min-width: 0; }
+  /* One sector per row: at 220px minimum, two columns need 460px before gaps. */
+  .map-sectors { grid-template-columns: 1fr; }
+}

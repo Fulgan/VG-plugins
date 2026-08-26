@@ -99,10 +99,91 @@ namespace Hypercom
 
             try
             {
-                var before = Compat.Enumerate(Compat.Get(GamePlayer.current, "allOfficers")).Count();
-                found.Invoke(foundTarget, new[] { officer });
-                var after = Compat.Enumerate(Compat.Get(GamePlayer.current, "allOfficers")).Count();
+                // COUNTED ON THE LIST WE ADD TO, by the name the game actually uses. This read `allOfficers`, which
+                // exists nowhere in the game: reflection answered null, `Enumerate` turned that into an empty
+                // sequence, and 0-before/0-after made every successful hire look like a failure — so the rollback
+                // undid a hire that had worked, refunding the cost and putting the recruit back while the officer
+                // stayed on the roster. A count that cannot be read is a verification we do not have, so a missing
+                // list REFUSES the mutation instead of proceeding blind.
+                var roster = Compat.Get(GamePlayer.current, "officers");
+                if (roster == null)
+                {
+                    report["error"] = "GamePlayer.officers not found — refusing to hire without a way to verify it";
+                    return new Api.Result(501, report);
+                }
+                var before = Compat.Enumerate(roster).Count();
+
+                // THE GAME'S OWN SEQUENCE, MIRRORED. `PersonnelCenter.HireOfficer` does not hire: its whole body is
+                // `officers.Remove(officer)`. The hire is four more steps, and calling only the first took the
+                // recruit off the station's list while nothing joined the crew and nothing was charged — the recruit
+                // simply vanished until the station refreshed. `PersonnelCenterOfficersPanel.HireSelected` is the
+                // order followed here: afford, remove, pay, add, notify.
+                var removed = found.Invoke(foundTarget, new[] { officer });
+                if (removed is bool tookIt && !tookIt)
+                {
+                    report["error"] = "the recruit was no longer on this station's list";
+                    return new Api.Result(409, report);
+                }
+
+                var paid = VG.Game.Wallet.Spend(GamePlayer.current, cost, "Officers");
+                report["paid"] = paid;
+
+                // ⚠ A FAILED PAYMENT MUST STOP THE HIRE. It did not: only a roster that failed to GROW triggered
+                // the rollback below, so `paid == false` with a successful add answered 200 with
+                // `hired: true, paid: false` and toasted "for N cr" — a free officer with a receipt. `Wallet.Spend`
+                // returns false whenever `RemoveCredits` is absent or throws, so this is a live branch.
+                //
+                // Refused HERE rather than after the add, because at this point the only thing to undo is the
+                // station's own list: the roster has not been touched yet.
+                if (!paid)
+                {
+                    var unpaidList = Compat.Get(centre, "officers");
+                    var putBack = unpaidList?.GetType().GetMethod("Add");
+                    try { putBack?.Invoke(unpaidList, new[] { officer }); report["restored"] = putBack != null; }
+                    catch { report["restored"] = false; }
+                    report["hired"] = false;
+                    report["error"] = "the credits could not be taken, so nobody was hired; "
+                                      + "the recruit was put back on the station's list";
+                    return new Api.Result(402, report);
+                }
+
+                // The actual hire: the roster is a list, and joining it is what makes someone crew.
+                var added = false;
+                var add = roster?.GetType().GetMethod("Add");
+                if (add != null)
+                {
+                    try { add.Invoke(roster, new[] { officer }); added = true; }
+                    catch (Exception ex) { report["addError"] = (ex.InnerException ?? ex).Message; }
+                }
+                report["added"] = added;
+
+                // The game's own UI listens for this; without it the crew screens keep the old roster on screen.
+                var crewData = VG.Game.GameMembers.FindType("Source.Personnel.CrewData");
+                var notify = crewData?.GetMethod("NotifyOfficerChanged",
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+                try { notify?.Invoke(null, null); } catch { /* cosmetic: the hire already happened */ }
+
+                var after = Compat.Enumerate(roster).Count();
                 report["hired"] = after > before;                  // did the roster actually grow?
+
+                // A HALF-DONE HIRE IS PUT BACK. If the roster did not grow we have taken a recruit off the station
+                // and possibly charged for them, which is worse than refusing the click: return both.
+                if (after <= before)
+                {
+                    var centreList = Compat.Get(centre, "officers");
+                    var back = centreList?.GetType().GetMethod("Add");
+                    try { back?.Invoke(centreList, new[] { officer }); report["restored"] = back != null; }
+                    catch { report["restored"] = false; }
+                    if (paid)
+                    {
+                        var refunded = VG.Game.Wallet.SetBalance(GamePlayer.current,
+                            Compat.Get<long>(GamePlayer.current, "credits", 0L) + cost);
+                        report["refunded"] = refunded;
+                    }
+                    report["error"] = "the game accepted the calls but the roster did not change; "
+                                      + "the recruit and any credits were put back";
+                    return new Api.Result(500, report);
+                }
                 report["rosterBefore"] = before;
                 report["rosterAfter"] = after;
                 report["creditsAfter"] = Compat.Get<long>(GamePlayer.current, "credits", 0L);

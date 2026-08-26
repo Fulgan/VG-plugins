@@ -1,0 +1,101 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <AssemblyName>CicWatch</AssemblyName>
+    <Product>CicWatch</Product>
+    <Version>0.1.0</Version>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+
+    <!-- GameDir / PinnedRefs / ManagedDir / BepInExCore all resolve in Directory.Build.props, which MSBuild
+         imports automatically. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="BepInEx">
+      <HintPath>$(BepInExCore)\BepInEx.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(BepInExCore)\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(ManagedDir)\Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(ManagedDir)\UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(ManagedDir)\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- The panel is uGUI: canvas, image, pointer events and the game's own text component. These are ENGINE
+         assemblies rather than game ones, so they sit outside the branch check (refs/release-* pins only
+         Assembly-CSharp.dll) and carry no one-binary risk. -->
+    <Reference Include="UnityEngine.UI">
+      <HintPath>$(ManagedDir)\UnityEngine.UI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UIModule">
+      <HintPath>$(ManagedDir)\UnityEngine.UIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Unity.TextMeshPro">
+      <HintPath>$(ManagedDir)\Unity.TextMeshPro.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <!-- The shared settings host draws with IMGUI and reads legacy Input; both are needed to compile it. -->
+    <Reference Include="UnityEngine.IMGUIModule">
+      <HintPath>$(ManagedDir)\UnityEngine.IMGUIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.InputLegacyModule">
+      <HintPath>$(ManagedDir)\UnityEngine.InputLegacyModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- Shared SOURCE, compiled in: no shared DLL, so this stays one self-contained assembly. `Rarity` owns the
+       refit letter this mod is named for reading, and `GameMembers` the name-based access every read here goes
+       through. The update notice is deliberately NOT here: nothing publishes a version for a mod that has not
+       shipped, so it could only ever report "no version published" while costing a thread and a request. -->
+  <ItemGroup>
+    <Compile Include="..\Shared\ModHost.cs" Link="ModHost.cs" />
+    <Compile Include="..\Shared\GameMembers.cs" Link="GameMembers.cs" />
+    <Compile Include="..\Shared\GameState.cs" Link="GameState.cs" />
+    <Compile Include="..\Shared\GameToast.cs" Link="GameToast.cs" />
+    <Compile Include="..\Shared\Rarity.cs" Link="Rarity.cs" />
+    <Compile Include="..\Shared\ShipNames.cs" Link="ShipNames.cs" />
+    <Compile Include="..\Shared\ShipSizes.cs" Link="ShipSizes.cs" />
+    <Compile Include="..\Shared\ShipLook.cs" Link="ShipLook.cs" />
+    <!-- Plural forms come from the shared inflector, so "1 salvage wrecks" cannot happen. -->
+    <Compile Include="..\Shared\Say.cs" Link="Say.cs" />
+    <Compile Include="..\Shared\ConfigurationManagerAttributes.cs" Link="ConfigurationManagerAttributes.cs" />
+    <Compile Include="..\Shared\Updater.cs" Link="Updater.cs" />
+    <Compile Include="..\Shared\UpdateCheck.cs" Link="UpdateCheck.cs" />
+    <Compile Include="..\Shared\UpdateNotice.cs" Link="UpdateNotice.cs" />
+    <Compile Include="..\Shared\UpdateSettings.cs" Link="UpdateSettings.cs" />
+  </ItemGroup>
+
+  <!-- Drop the built DLL straight into the game's plugin folder on every build, unless asked not to. -->
+  <Target Name="DeployToBepInEx" AfterTargets="Build" Condition="Exists('$(GameDir)\BepInEx\plugins') and '$(SkipDeploy)' != 'true'">
+    <Copy SourceFiles="$(TargetPath)"
+          DestinationFolder="$(GameDir)\BepInEx\plugins\$(AssemblyName)"
+          SkipUnchangedFiles="false" />
+    <Message Importance="high" Text="Deployed $(AssemblyName).dll -> $(GameDir)\BepInEx\plugins\$(AssemblyName)" />
+  </Target>
+
+  <!-- Duplication check on every build, same as the other plugins: a shared surface implemented twice raises no
+       compiler error, no failing test and no lint warning, so this is the only detector. -->
+  <Target Name="CheckDupes" BeforeTargets="Build" Condition="Exists('$(MSBuildThisFileDirectory)../tools/check-dupes.ps1')">
+    <Exec Command="pwsh -NoProfile -File &quot;$(MSBuildThisFileDirectory)../tools/check-dupes.ps1&quot; -Quiet"
+          ContinueOnError="false" />
+  </Target>
+</Project>

@@ -11,12 +11,17 @@ const KEY = "shipoptimizer.conn";
 
 // Where to look for the bridge when nothing has been stored yet.
 //
-// In a PRODUCTION build the shell was served BY the bridge, so its own origin is the answer — and on a phone
-// it is the only possible one: a hardcoded 127.0.0.1 would aim every request at the phone's own loopback,
-// where nothing is listening. Under Vite (`npm run dev`) the shell comes from the dev server on :5173
-// instead, so `location` is the wrong answer there and the loopback default is right.
+// The shell's own origin, in BOTH builds, and the reason is the same one twice: whatever served this page is
+// the one address known to reach this device's bridge.
+//
+// In production the bridge served it. Under Vite the dev server did, and the dev server PROXIES the bridge
+// (see `vite.config.ts`), so its origin answers for it too. The old dev default was a hardcoded 127.0.0.1,
+// which is right only while the browser and the game are the same machine: opened from a phone or from
+// another desk it aims every request at that device's own loopback, where nothing is listening.
+//
+// The token stays empty here on purpose. Through the proxy the dev server attaches it, so it never reaches
+// the client; a device talking to the bridge DIRECTLY gets one by pairing, which stores a conn of its own.
 function defaultConn(): Conn {
-  if (import.meta.env.DEV) return { host: "127.0.0.1", port: "8777", token: "" };
   return { host: location.hostname || "127.0.0.1", port: location.port || "8777", token: "" };
 }
 

@@ -1,0 +1,15 @@
+powerMultiplier applied: true
+  fitted  Missile Launcher/Medium=1  Laser/Medium=0.95  Missile Launcher/Medium=1  Railgun/Large=1.1  Railgun/Large=1.1  Burst Railgun/Large=1
+  planned Laser/Medium=0.95  Laser/Medium=0.95  Rad Cannon/Medium=1  Cannon/Large=1  Railgun/Large=1.1  Laser/Large=0.95
+
+MODEL vs GAME — attack power per fitted hardpoint
+  Missile Launcher Mk.XIX Lv74   model    50,731   game    50,731   -0.00%
+  Laserturret I Mk.XVIII Lv72    model    47,461   game    47,461   -0.00%
+  Missile Launcher Mk.XIX Lv74   model    55,761   game    55,761   +0.00%
+  Railgun Mk.XIX Lv74            model    86,484   game    86,484   -0.00%
+  Railgun Mk.XIX Lv74            model    86,260   game    86,260   -0.00%
+  BX Railcaster-L Mk.XIX Lv74    model    83,777   game    83,777   -0.00%
+
+crit chance 43.19%   crit damage 0.4892   attack speed 0.1650
+
+12 jobs → live/arena-jobs.jsonl

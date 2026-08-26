@@ -71,6 +71,8 @@ export interface OptimizeInput {
   slots: number;
   role: string | null;
   hasDroneBay: boolean;
+  /** The hull has a hangar bay slot. Gates `Hangar Extension` the way `hasDroneBay` gates the drone skills. */
+  hasHangarBay?: boolean;
   priorities: string[]; // skill ids, highest priority first
   scope: Scope;
   forced: Set<string>; // officer guids pinned into a slot
@@ -91,10 +93,17 @@ export interface OptimizeResult {
   benchedCount: number;
 }
 
-// In-scope skills: current vs potential, minus drone skills when the ship has no drone bay.
-function inScope(o: Officer, scope: Scope, hasDroneBay: boolean): OfficerSkill[] {
+// In-scope skills: current vs potential, minus the ones this hull cannot use. A drone skill needs a drone bay
+// and `Hangar Extension` needs a hangar bay; on a hull without one they are not weak, they do nothing at all,
+// and counting them would credit an officer for a skill that cannot fire.
+function inScope(o: Officer, scope: Scope, hasDroneBay: boolean, hasHangarBay = false): OfficerSkill[] {
   const src = scope === "potential" ? o.potential : o.current;
-  return src.filter((s) => hasDroneBay || !skillMeta(s.name).drone);
+  return src.filter((s) => {
+    const m = skillMeta(s.name);
+    if (m.drone && !hasDroneBay) return false;
+    if (m.hangar && !hasHangarBay) return false;
+    return true;
+  });
 }
 
 // A priority entry that carries no skill id, only a name. Two things need this: prioritising a skill
@@ -115,8 +124,8 @@ export const namePrioLabel = (p: string) => {
 };
 
 // Score one officer against the ship + priorities: coverage vector, role relevance, idle income.
-export function scoreOfficer(o: Officer, ctx: Pick<OptimizeInput, "role" | "hasDroneBay" | "priorities" | "scope" | "assigned">): ScoredOfficer {
-  const scopeSkills = inScope(o, ctx.scope, ctx.hasDroneBay);
+export function scoreOfficer(o: Officer, ctx: Pick<OptimizeInput, "role" | "hasDroneBay" | "hasHangarBay" | "priorities" | "scope" | "assigned">): ScoredOfficer {
+  const scopeSkills = inScope(o, ctx.scope, ctx.hasDroneBay, ctx.hasHangarBay);
   const ids = new Set(scopeSkills.map((s) => s.id));
   // Names too, so a `name:`-keyed priority still matches the officers who do have the skill.
   const names = new Set(scopeSkills.map((s) => s.name.toLowerCase()));
@@ -286,7 +295,7 @@ export interface ScoredRecruit extends ScoredOfficer {
 // lexicographic comparator) → a hire opportunity. Opportunities first, then comparator order.
 export function evaluateRecruits(
   recruits: RecruitOfficer[],
-  ctx: Pick<OptimizeInput, "role" | "hasDroneBay" | "priorities" | "scope">,
+  ctx: Pick<OptimizeInput, "role" | "hasDroneBay" | "hasHangarBay" | "priorities" | "scope">,
   chosen: ScoredOfficer[],
 ): ScoredRecruit[] {
   const cmp = comparator(ctx.priorities.length);
@@ -303,10 +312,10 @@ export function evaluateRecruits(
 // Derive a priority list from a set of officers (e.g. a ship's currently-assigned crew): rank skills
 // by how many of those officers carry them (majors, then name, as tiebreak). Lets the user seed the
 // priorities from the current loadout and refine. Respects scope + drone-bay gate.
-export function prioritiesFromCrew(crew: Officer[], ctx: { scope: Scope; hasDroneBay: boolean }): string[] {
+export function prioritiesFromCrew(crew: Officer[], ctx: { scope: Scope; hasDroneBay: boolean; hasHangarBay?: boolean }): string[] {
   const freq = new Map<string, { count: number; name: string; major: boolean }>();
   for (const o of crew)
-    for (const s of inScope(o, ctx.scope, ctx.hasDroneBay)) {
+    for (const s of inScope(o, ctx.scope, ctx.hasDroneBay, ctx.hasHangarBay)) {
       const e = freq.get(s.id) ?? { count: 0, name: s.name, major: s.major };
       e.count++;
       freq.set(s.id, e);
@@ -317,9 +326,66 @@ export function prioritiesFromCrew(crew: Officer[], ctx: { scope: Scope; hasDron
 }
 
 // Default priority list for a ship role: the role's own skills, majors first, by the table order.
-export function defaultPriorities(catalog: CatalogSkill[], role: string | null): string[] {
+export function defaultPriorities(catalog: CatalogSkill[], role: string | null, hasHangarBay = false): string[] {
   if (!role) return [];
   const inRole = catalog.filter((c) => c.roles.includes(role));
   const ranked = [...inRole].sort((a, b) => Number(b.major) - Number(a.major) || a.name.localeCompare(b.name));
-  return ranked.slice(0, 4).map((c) => c.id);
+  const out = ranked.slice(0, 4).map((c) => c.id);
+  // A HANGAR SLOT OUTRANKS A PERCENTAGE. On a hull with a bay, `Hangar Extension` adds a whole slot to it, which
+  // is a step no stat bonus in this list competes with, so it leads rather than being sorted among them. On a
+  // hull without a bay it is filtered out upstream and never reaches here.
+  if (!hasHangarBay) return out;
+  const hangar = catalog.find((c) => c.name === "Hangar Extension");
+  return hangar ? [hangar.id, ...out.filter((id) => id !== hangar.id)] : out;
+}
+
+/**
+ * The recruits a station list should still SHOW, given the ones just hired from it.
+ *
+ * A hire is a mutation this list describes, and the refetch that would agree with it lands later: until it does, the
+ * officer sits there with a live `hire` button, which is a second click on someone already crewed. Only guids the
+ * bridge CONFIRMED are hidden — a refused or rolled-back hire leaves the recruit on the station, and hiding them would
+ * be the same lie pointing the other way.
+ */
+export function visibleRecruits<T extends { guid: string }>(officers: T[], hired: ReadonlySet<string>): T[] {
+  return hired.size ? officers.filter((o) => !hired.has(o.guid)) : officers;
+}
+
+/**
+ * A priority id -> the skill's effect text, which is the only machine-readable statement of what it does.
+ *
+ * TWO KEYINGS, and mixing them is why this exists: the CATALOG is keyed by the game's skill id, while the curated
+ * table is keyed by NAME. A `name:` priority is a skill nobody on the roster carries, so it has no real id and only
+ * the name table can answer for it. Asking the name table about an id returns nothing for every skill — silently,
+ * which reads as "there is nothing to rank" rather than as a lookup on the wrong key.
+ */
+export function effectLookup(catalog: CatalogSkill[]): (id: string) => string | undefined {
+  const byId = new Map(catalog.map((c) => [c.id, c.effect]));
+  return (id) => byId.get(id) ?? (isNamePrio(id) ? skillMeta(namePrioLabel(id)).effect : undefined);
+}
+
+/**
+ * ONE ENTRY PER OFFICER, by guid.
+ *
+ * A roster can hold the SAME officer more than once: `GamePlayer.officers` is a plain list and nothing in the game
+ * stops one `OfficerData` being added twice (this repo's own `/officers/hire` did exactly that — root). The
+ * bridge reports what the save holds, which is right, and every consumer that TREATS the list as a set has to say so
+ * here rather than each in its own way.
+ *
+ * The damage a duplicate does is not cosmetic: the optimizer picks `slots` entries, and duplicates of one guid collapse
+ * back to a single officer when the picks are mapped onto slots — so a six-slot ship proposes four officers and two
+ * EMPTY slots, with no visible reason. Coverage counts double for the same crew member as well, which lifts them over
+ * officers who really would add a rank.
+ */
+export function dedupeOfficers(officers: Officer[]): { officers: Officer[]; duplicates: number } {
+  const seen = new Set<string>();
+  const out: Officer[] = [];
+  let duplicates = 0;
+  for (const o of officers) {
+    const key = o.guid ?? "";
+    if (key && seen.has(key)) { duplicates++; continue; }
+    if (key) seen.add(key);
+    out.push(o);
+  }
+  return { officers: out, duplicates };
 }

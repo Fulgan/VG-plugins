@@ -6,6 +6,7 @@
 export interface SkillMeta {
   roles: string[];      // any of: Combat, Mining, Salvaging, Engineering, Industrial, Unique
   drone?: boolean;      // marked [drone] in the doc
+  hangar?: boolean;     // only counts on a hull that HAS a hangar bay, the way `drone` needs a drone bay
   major?: boolean;      // "(major)" in the doc; minors omit this
   effect?: string;      // e.g. "Attack Speed +12%"
 }
@@ -37,6 +38,10 @@ export const OFFICER_SKILLS: Record<string, SkillMeta> = {
   "Fieldwork Power Efficiency": { roles: ["Engineering"], effect: "Mining/Salvage power penalty -2%" },
   "Fire Control Officer": { roles: ["Combat"], major: true, effect: "Attack Speed +12%" },
   "From Memory": { roles: ["Unique"], effect: "Warp travel speed +5%" },
+  // A HANGAR SLOT IS NOT A PERCENTAGE. Every other node here moves a stat; this one adds a whole slot to the
+  // bay, so on a hull that has one it outranks anything measured in percent, and on a hull that does not it is
+  // worth exactly nothing. That is why it carries the `hangar` gate rather than a role.
+  "Hangar Extension": { roles: ["Engineering", "Industrial"], hangar: true, major: true, effect: "+1 hangar slot" },
   "Harvester": { roles: ["Mining", "Salvaging", "Industrial"], major: true, effect: "Yield +2.5%" },
   "Hazard Leech": { roles: ["Mining", "Salvaging", "Engineering", "Industrial"], effect: "25% hazard dmg → Yield +5%" },
   "Hidden Crystals": { roles: ["Engineering", "Industrial"], effect: "0.3% ore refine → crystal" },

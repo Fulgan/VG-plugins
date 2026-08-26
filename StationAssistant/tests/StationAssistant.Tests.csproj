@@ -13,6 +13,7 @@
     <Compile Include="..\..\Shared\Purchase.cs" Link="Purchase.cs" />
     <Compile Include="..\..\Shared\Rarity.cs" Link="Rarity.cs" />
     <Compile Include="..\..\Shared\KeepMatch.cs" Link="KeepMatch.cs" />
+    <Compile Include="..\..\Shared\AmmoPlan.cs" Link="AmmoPlan.cs" />
     <Compile Include="..\..\Shared\Say.cs" Link="Say.cs" />
     <Compile Include="..\..\Shared\GameMembers.cs" Link="GameMembers.cs" />
   </ItemGroup>

@@ -4,7 +4,7 @@ A mod for **Vanguard Galaxy** that powers the **[Ship Optimizer](../ShipOptimize
 runs a small server inside the game so the optimizer can read your inventory, loadouts, shops and the
 galaxy around you, and change things for you: no need to fight the in-game menus or restart.
 
-**Version 0.2.0**: [what changed](../RELEASE-NOTES.md).
+[What changed in the latest release](../RELEASE-NOTES.md).
 
 In a normal install Hypercom is all you need: start the game and the Ship Optimizer opens in your
 browser. The app itself is where the gear ranking, sell lists, map and faction standing live, see its
@@ -71,8 +71,6 @@ You can also change these in `BepInEx\config\fulgan.vanguardgalaxy.hypercom.cfg`
 | `AllowRemote` | off | Listen on every adapter instead of loopback only, so other devices can reach it. Forces the token on. Only use on a network you trust. |
 | `OpenBrowserOnStart` | on | Open the Ship Optimizer in your browser when the game starts. |
 | `PairHost` | empty | The address put in the pairing QR. Empty means "detect it", see [picking the right adapter](#picking-the-right-adapter). |
-| `Updates/Enabled` | on | Check once a day whether a newer Hypercom has been released, and show it on the **Updates** tab of the mod settings window. It only looks: nothing is ever downloaded or installed. |
-| `Updates/CheckIntervalHours` | 24 | Hours to wait between checks. One check per game session at most, whatever this says. |
 
 ## Using your phone or tablet
 

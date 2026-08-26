@@ -13,6 +13,12 @@ import type { Item } from "./types";
 export interface WantRule {
   id: string;
   where: Where;
+  /**
+   * What the player calls this list. OPTIONAL, and absent is the normal case: a rule states itself in words
+   * already, so a name is only worth typing when several rules are being told apart on the rail. Where it exists
+   * it is what a matched offer is tagged with.
+   */
+  name?: string;
 }
 
 export const newWant = (id: string): WantRule => ({ id, where: {} });
@@ -60,6 +66,22 @@ export function wantedBy(it: Item, rules: WantRule[], ctx: FieldCtx): WantRule |
   for (const r of rules) if (!isInert(r) && matchesWhere(it, r.where, ctx)) return r;
   return null;
 }
+
+/**
+ * EVERY rule that claims this offer, not just the first.
+ *
+ * A row is tagged with the lists it belongs to, and belonging to two is the interesting case — it is why the
+ * offer is worth more attention, not less. `wantedBy` stays for the yes/no question.
+ */
+export function wantedByAll(it: Item, rules: WantRule[], ctx: FieldCtx): WantRule[] {
+  return rules.filter((r) => !isInert(r) && matchesWhere(it, r.where, ctx));
+}
+
+/** What to tag a matched offer with: the rule's own name, trimmed, or null when it was never named. */
+export const wantTag = (r: WantRule) => {
+  const t = (r.name ?? "").trim();
+  return t.length ? t : null;
+};
 
 /** Offers one rule claims, for the count beside it in the editor. */
 export const wantMatches = (offers: Item[], r: WantRule, ctx: FieldCtx): Item[] =>

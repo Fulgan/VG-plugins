@@ -4,10 +4,10 @@ A mod for **Vanguard Galaxy** that saves and loads on a keypress. One key writes
 `quicksave` slot; another loads it back.
 
 Its own mod on purpose: it shares nothing with the other Vanguard Galaxy mods, so you don't have to
-install a station automation mod or a web server to get two hotkeys. It will be retired if the feature 
+install a station automation mod or a web server to get two hotkeys. It will be retired if the feature
 is implemented in the game.
 
-**Version 1.0.0**: [what changed](../RELEASE-NOTES.md).
+[What changed in the latest release](../RELEASE-NOTES.md).
 
 ## Installing
 
@@ -27,8 +27,6 @@ Press **F7** for the shared mod settings window and set them on the **Hotkeys** 
 |---|---|---|
 | QuickSave | None | Key that saves your game to the `quicksave` slot. `None` = disabled. |
 | QuickLoad | None | Key that loads the `quicksave` slot. `None` = disabled. |
-| Updates/Enabled | true | Check once a day whether a newer Quick Save has been released, and show it on the **Updates** tab of the settings window. It only looks: nothing is ever downloaded or installed. |
-| Updates/CheckIntervalHours | 24 | Hours to wait between checks. One check per game session at most, whatever this says. |
 
 ## What to expect
 
@@ -44,9 +42,8 @@ Press **F7** for the shared mod settings window and set them on the **Hotkeys** 
   overwrites it, so recover before you load again.
 - **A second press is ignored** while a save or load is still going, rather than running twice. The key
   comes back as soon as the game reports you back in control: it's the load that holds it, not a timer.
-- **The update check only looks.** It reads a small published version list once a day, tells you on the
-  **Updates** tab if a newer release exists, and links to its page. It never downloads or installs
-  anything, so whatever manages your mods stays in charge of what is on disk.
+- **Updates are checked on request.** The **Updates** tab has a button that looks for newer versions and
+  links to the release page. Nothing is downloaded or installed.
 
 ## Help
 

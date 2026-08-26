@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using Behaviour.Equipment.Module;
 using Behaviour.Equipment.Turret;
 using Behaviour.Item;
 using Behaviour.UI;
@@ -28,6 +29,22 @@ namespace StationAssistant
         // Fraction of total cargo capacity to fill with ammo when autoloading.
         private const float AutoloadCapacityFraction = 0.10f;
 
+        // Most of the hold a restock may ever spend on ammo. A target expressed in MINUTES has no idea how big
+        // the ship is, so on a small hull ECHO's own figure asks for more rounds than the ship can physically
+        // carry; the hold then fills in whatever order the ammo types happened to be walked in and the last
+        // gun gets nothing.
+        private const float HoldFillFraction = 0.5f;
+
+        // Fixed seconds inside one torpedo launch that no stat covers: 0.5s deploying the latch, 0.5s fading
+        // the torpedo in, 3s finishing the sequence. The door animation adds more and is driven by a per-prefab
+        // speed modifier rather than a readable constant, so this is the FASTEST a bay can cycle: it stocks
+        // slightly over rather than leaving a bay dry.
+        private const double TorpedoLaunchOverheadSeconds = 4.0;
+
+        // Used only when a bay's own period cannot be read. It is the SLOWEST bay's figure on purpose: guessing
+        // fast would hand the bay a share of the hold the guns then go without, and torpedoes are bulky.
+        private const float TorpedoFallbackPeriodSeconds = 8f;
+
         internal struct AmmoResult
         {
             internal int Stowed;   // moved cargo -> armory
@@ -37,24 +54,40 @@ namespace StationAssistant
             internal string Reason;
         }
 
-        // Distinct ammo item types consumed by the guns currently equipped on the ship.
-        // Reads from ship data (hardpoints), so it works while docked (no live turret components).
+        // Distinct ammo item types consumed by everything currently equipped on the ship.
+        // Reads from ship data (hardpoints and module slots), so it works while docked (no live components).
         internal static List<InventoryItemType> EquippedAmmoTypes(SpaceShipData ship)
         {
             var result = new List<InventoryItemType>();
-            var hardpoints = ship?.hardpoints;
-            if (hardpoints is null)
+            if (ship is null)
                 return result;
 
-            foreach (var hp in hardpoints)
-            {
-                if (hp is null)
-                    continue;
-                var turret = hp.GetComponent<AbstractTurret>();
-                var ammo = turret != null && turret.HasAmmoType() ? turret.ammoType : null;
-                if (ammo != null && !result.Contains(ammo))
-                    result.Add(ammo);
-            }
+            var hardpoints = ship.hardpoints;
+            if (hardpoints != null)
+                foreach (var hp in hardpoints)
+                {
+                    if (hp is null)
+                        continue;
+                    var turret = hp.GetComponent<AbstractTurret>();
+                    var ammo = turret != null && turret.HasAmmoType() ? turret.ammoType : null;
+                    if (ammo != null && !result.Contains(ammo))
+                        result.Add(ammo);
+                }
+
+            // A torpedo bay draws from cargo the same way a gun does — its own `ammoType`, one round taken per
+            // launch — but it sits in a MODULE slot, so a walk over hardpoints alone cannot see it and every
+            // ship carrying one was left to run its bay dry.
+            var modules = ship.equippedModules;
+            if (modules != null)
+                foreach (var m in modules)
+                {
+                    if (m is null)
+                        continue;
+                    var bay = m.GetComponent<TorpedoBayModule>();
+                    var ammo = bay != null ? bay.ammoType : null;
+                    if (ammo != null && !result.Contains(ammo))
+                        result.Add(ammo);
+                }
             return result;
         }
 
@@ -71,26 +104,91 @@ namespace StationAssistant
             return 3;
         }
 
-        // Rounds to stock for one ammo type = sum over the equipped guns that use it of the TRUE ammo
-        // consumed over `ammoSeconds` of sustained fire:
-        //     defaultAttacksPerSecond * ammoSeconds * ammoPerShot / shotsPerAmmo
-        // (`AbstractTurret.RecordShotFired`). ECHO's own reload formula
-        // omits `ammoPerShot`, which under-stocks guns that fire >1 round/shot (autocannons) — so it runs
-        // dry well before the configured minutes. We include it and round UP so the stock actually lasts.
-        private static int EchoAmmoTarget(SpaceShipData ship, InventoryItemType ammo, int ammoSeconds)
+        // Rounds of one ammo type the ship burns per second of sustained fire, summed over everything that
+        // feeds on it. ONE OWNER, because both a target in minutes and a target in cargo volume are this
+        // number times something, and two copies would disagree about which guns count.
+        //
+        // A gun's true draw is `defaultAttacksPerSecond * ammoPerShot / shotsPerAmmo`
+        // (`AbstractTurret.RecordShotFired`). ECHO's own reload formula omits `ammoPerShot`, which under-stocks
+        // a gun firing more than one round per shot (autocannons) so it runs dry before the configured minutes.
+        //
+        // A bay's draw is one torpedo per launch cycle. `fireRate` is a PERIOD in seconds, not a rate, and both
+        // it and `reloadSpeed` are private ∴ read by name: the properties over them are beta-only, and a hard
+        // reference would throw on the release branch the first time this method was JITted.
+        private static double DrainPerSecond(SpaceShipData ship, InventoryItemType ammo)
         {
-            var total = 0;
-            var hardpoints = ship?.hardpoints;
-            if (hardpoints == null) return 0;
-            foreach (var hp in hardpoints)
-            {
-                var t = hp?.GetComponent<AbstractTurret>();
-                if (t == null || !t.HasAmmoType() || t.ammoType != ammo) continue;
-                total += (int)Math.Ceiling((double)t.defaultAttacksPerSecond * ammoSeconds
-                    * Math.Max(1, t.ammoPerShot) / Math.Max(1, t.shotsPerAmmo));
-            }
+            double total = 0;
+            if (ship is null)
+                return 0;
+
+            var hardpoints = ship.hardpoints;
+            if (hardpoints != null)
+                foreach (var hp in hardpoints)
+                {
+                    var t = hp?.GetComponent<AbstractTurret>();
+                    if (t == null || !t.HasAmmoType() || t.ammoType != ammo) continue;
+                    total += (double)t.defaultAttacksPerSecond
+                        * Math.Max(1, t.ammoPerShot) / Math.Max(1, t.shotsPerAmmo);
+                }
+
+            var modules = ship.equippedModules;
+            if (modules != null)
+                foreach (var m in modules)
+                {
+                    var bay = m?.GetComponent<TorpedoBayModule>();
+                    if (bay == null || bay.ammoType != ammo) continue;
+                    var period = VG.Game.GameMembers.GetPrivate(bay, "fireRate") is float f && f > 0f
+                        ? f
+                        : TorpedoFallbackPeriodSeconds;
+                    total += 1.0 / (period + TorpedoLaunchOverheadSeconds);
+                }
             return total;
         }
+
+        // Rounds of `ammo` that last `seconds` of sustained fire. The arithmetic is `VG.Core.AmmoPlan`'s, which
+        // is where it can be tested: a mod is only exercisable by flying a ship.
+        private static int RoundsFor(SpaceShipData ship, InventoryItemType ammo, double seconds)
+            => VG.Core.AmmoPlan.RoundsFor(DrainPerSecond(ship, ammo), seconds);
+
+        /// <summary>
+        /// The volume a restock may put into ammo: a share of the WHOLE hold, capped by what the hold can actually
+        /// reach.
+        ///
+        /// Two figures, and using the wrong one reintroduces the bug this budget exists to fix. `capacity` is TOTAL
+        /// m³ and is the right basis for "ammo may occupy at most half the hold", which is a statement about the
+        /// finished hold. But every add is clamped against FREE space (`ShrinkToCargo` walks `IsFull`) ∴ on a hull
+        /// already more than half full of ore, a target sized off the total cannot be met, the adds are trimmed in
+        /// WALK ORDER, and the last ammo type gets nothing again.
+        ///
+        /// The reachable ceiling is what is already aboard plus what still fits, so the budget is the smaller of
+        /// the two. The even-firing-time split then divides a figure the hold can honour, which is what makes the
+        /// shares fair rather than merely computed.
+        /// </summary>
+        private static float HoldBudget(Context ctx, float fraction)
+        {
+            var share = ctx.Cargo.capacity * fraction;
+            float held = 0f;
+            foreach (var a in ctx.Used)
+                if (a != null && a.m3 > 0f)
+                    held += ctx.Cargo.GetCount(a) * a.m3;
+            var reachable = held + Math.Max(0, ctx.Cargo.GetSpaceAvailable());
+            return Math.Min(share, reachable);
+        }
+
+        // The seconds of fire a volume budget buys when every ammo type is to run out at the SAME moment.
+        private static double SecondsAffordable(SpaceShipData ship, List<InventoryItemType> used, float budgetM3)
+        {
+            if (used == null)
+                return 0;
+            var draws = new List<VG.Core.AmmoDraw>();
+            foreach (var a in used)
+                if (a != null)
+                    draws.Add(new VG.Core.AmmoDraw(DrainPerSecond(ship, a), a.m3));
+            return VG.Core.AmmoPlan.SecondsAffordable(draws, budgetM3);
+        }
+
+        private static int EchoAmmoTarget(SpaceShipData ship, InventoryItemType ammo, int ammoSeconds)
+            => RoundsFor(ship, ammo, ammoSeconds);
 
         // For the settings window: ECHO's minutes + the computed per-ammo target (read-only preview).
         internal static int EchoMinutes() => EchoAmmoMinutes(GamePlayer.current);
@@ -115,6 +213,10 @@ namespace StationAssistant
                 var echoMinutes = cfg.AmmoUseEchoMinutes.Value;
                 var ammoSeconds = echoMinutes ? EchoAmmoMinutes(ctx.Player) * 60 : 0;
 
+                // What the HOLD can actually pay for, as a firing time every ammo type shares. A target set in
+                // minutes, or by hand, knows nothing about the ship it is being asked of.
+                var affordableSeconds = SecondsAffordable(ctx.Ship, ctx.Used, HoldBudget(ctx, HoldFillFraction));
+
                 foreach (var ammo in ctx.Used)
                 {
                     var target = echoMinutes
@@ -122,6 +224,12 @@ namespace StationAssistant
                         : cfg.AmmoTarget(ctx.Ship.guid, ammo.identifier);
                     if (target <= 0)
                         continue; // no target for this ammo — leave it alone
+
+                    // Trimmed to the shared firing time rather than to a per-type volume share: every gun then
+                    // runs dry at the same moment instead of the walk order deciding which one goes short.
+                    var affordable = RoundsFor(ctx.Ship, ammo, affordableSeconds);
+                    if (affordable > 0 && target > affordable)
+                        target = affordable;
 
                     var have = ctx.Cargo.GetCount(ammo);
                     if (have > target)
@@ -155,17 +263,17 @@ namespace StationAssistant
 
                 if (ctx.Used.Count > 0)
                 {
-                    // Volume budget for each ammo type: an even share of 10% of total capacity.
-                    var volumePerType = ctx.Cargo.capacity * AutoloadCapacityFraction / ctx.Used.Count;
+                    // 10% of the hold, spent so every ammo type lasts the same firing time. An even share of the
+                    // VOLUME reads fair and is not: a fast gun and a slow one get the same cubic metres and run
+                    // out minutes apart.
+                    var seconds = SecondsAffordable(ctx.Ship, ctx.Used, HoldBudget(ctx, AutoloadCapacityFraction));
 
                     foreach (var ammo in ctx.Used)
                     {
-                        var perUnit = ammo.m3;
-                        if (perUnit <= 0f)
+                        if (ammo.m3 <= 0f)
                             continue; // can't size a weightless/unknown ammo
 
-                        var desired = Mathf.CeilToInt(volumePerType / perUnit); // round the ammo amount up
-                        var need = desired - ctx.Cargo.GetCount(ammo);
+                        var need = RoundsFor(ctx.Ship, ammo, seconds) - ctx.Cargo.GetCount(ammo);
                         TopUp(ctx, ammo, need, cfg.AmmoAutoBuy.Value, ref r);
                     }
                 }

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   boosterScore, boosterType, boosterValue, defaultSlotTypes, optimizeBoosters, resonanceCredit, resonanceLive,
-  type BoosterCtx,
+  boosterPinKey, type BoosterCtx,
 } from "./booster";
 import { DEFAULT_PROFILE } from "./activityPresets";
 import type { Item, Resonance } from "./types";
@@ -212,5 +212,38 @@ describe("a ship judged by its fit rather than its role", () => {
     // Two reasons are true here — the bonus stat is inert AND the unit is unreachable — and the STAT one is
     // reported, because it is the stronger statement: the bonus would do nothing even if it finished.
     expect(c.why).toContain("Mining Power");
+  });
+});
+
+describe("a pin survives the apply that satisfies it", () => {
+  // A PIN IS AN ANSWER, AND APPLYING IT MUST NOT UNDO IT. Pins used to be keyed by `boosterId`, which carries
+  // the store the booster was sitting in. The moment the player applied the pinned booster it moved from
+  // `cargo` to `equipped`, its id changed, the pin stopped resolving, and the optimizer went back to choosing
+  // freely for a slot whose badge still read `pinned`.
+  const withPlace = (b: Item, location: string, slot: number | null = null): Item =>
+    ({ ...b, location, slot } as Item);
+
+  it("resolves against the equipped copy after the pinned booster is fitted", () => {
+    const chosen = booster("Drone Power", "1781");
+    const rival = booster("Combat Power", "1600");
+    // Before: the pick sits in cargo. The pin is keyed on what was CHOSEN.
+    const before = optimizeBoosters([withPlace(chosen, "cargo"), withPlace(rival, "cargo")],
+      ["Combat Power"], undefined, undefined, undefined, new Map([[0, boosterPinKey(chosen)]]));
+    expect(before.picks[0].chosen?.name).toBe(chosen.name);
+
+    // After the apply the same booster is equipped in that slot, and nothing else may take it.
+    const after = optimizeBoosters([withPlace(chosen, "equipped", 0), withPlace(rival, "cargo")],
+      ["Combat Power"], undefined, undefined, undefined, new Map([[0, boosterPinKey(chosen)]]));
+    expect(after.picks[0].chosen?.name).toBe(chosen.name);
+    expect(after.picks[0].pinUnresolved).toBeFalsy();
+  });
+
+  it("says so when the pinned booster is gone, instead of quietly optimizing the slot", () => {
+    const rival = booster("Combat Power", "1600");
+    const { picks } = optimizeBoosters([withPlace(rival, "cargo")], ["Combat Power"],
+      undefined, undefined, undefined, new Map([[0, "Gone booster:9:Legendary"]]));
+    // Silence here is the defect: the badge says pinned while a different booster is proposed.
+    expect(picks[0].pinUnresolved).toBe(true);
+    expect(picks[0].chosen).toBeNull();
   });
 });

@@ -14,10 +14,10 @@ const BUNDLED = import.meta.glob("./arenaNet.artifact.json", { eager: true, impo
   Record<string, ArenaNetArtifact>;
 
 /** Why the model cannot be used here, in the player's terms. `null` when it can. */
-export type ModelBlock = "no-artifact" | "not-combat" | "bad-sense" | "bad-axis";
+export type ModelBlock = "no-artifact" | "not-combat" | "bad-sense" | "bad-axis" | "no-band";
 
 let cached: ArenaNetArtifact | null | undefined;
-let sense: "ok" | "bad" | "axis" = "ok";
+let sense: "ok" | "bad" | "axis" | "band" = "ok";
 
 /**
  * The bundled artifact, or null.
@@ -35,6 +35,10 @@ export function artifact(): ArenaNetArtifact | null {
   // axis is worse than no net, because every suggestion it makes looks considered.
   const bad = invertedAxes(first);
   if (bad.length) { sense = "axis"; cached = null; return cached; }
+  // The third gate: an artifact must state how well it orders CLOSE pairs, because that is the only kind of
+  // pair a swap suggestion is ever made of. One that does not state it cannot be gated on it, and a mode whose
+  // silence band is unknown reports every gap as a preference.
+  if (nearTieBandOf(first) === null) { sense = "band"; cached = null; return cached; }
   sense = "ok"; cached = first;
   return cached;
 }
@@ -47,9 +51,14 @@ export function artifact(): ArenaNetArtifact | null {
  * must never see it.
  */
 export function modelBlock(role: string | null | undefined): ModelBlock | null {
-  if (sense === "bad") return "bad-sense";
-  if (sense === "axis") return "bad-axis";
-  if (!artifact()) return "no-artifact";
+  // The refusal reason is read AFTER the load, never before it: `sense` is set by `artifact()`, so asking first
+  // reports a refused artifact as an absent one until something else has already loaded it.
+  if (!artifact()) {
+    if (sense === "bad") return "bad-sense";
+    if (sense === "axis") return "bad-axis";
+    if (sense === "band") return "no-band";
+    return "no-artifact";
+  }
   if ((role ?? "").toLowerCase() !== "combat") return "not-combat";
   return null;
 }
@@ -59,6 +68,7 @@ export const MODEL_BLOCK_TEXT: Record<ModelBlock, string> = {
   "not-combat": "The model predicts seconds against a COMBAT target, so it cannot rank a mining or salvage hull.",
   "bad-sense": "The bundled model does not describe its output as a cost. Refusing to rank rather than risk inverting every suggestion.",
   "bad-axis": "The bundled model moves the wrong way on an axis whose direction is known from the game's own arithmetic. Refusing to rank.",
+  "no-band": "The bundled model does not report how well it orders builds that are close together, which is the only comparison a swap is made of. Refusing to rank.",
 };
 
 /**
@@ -68,16 +78,25 @@ export const MODEL_BLOCK_TEXT: Record<ModelBlock, string> = {
  * makes a fight shorter must have a NEGATIVE ablation delta.
  *
  * Why this exists beside `assertCostSense`: that check reads the artifact's declared LABEL and would pass a net
- * whose label is honest and whose coefficients are inverted. A trained model did exactly that — mega-crit came
- * out making fights LONGER, consistently and across the crit range, where `CalculateDamage`'s cascade makes
- * 0 → 3 points go 10.18s → 7.09s. A wrong label is a typo; a wrong axis is a model that ranks backwards while
- * looking healthy, and the one place it can be caught cheaply is the moment it loads.
+ * whose label is honest and whose coefficients are inverted. A wrong label is a typo; a wrong axis is a model that
+ * ranks backwards while looking healthy, and the one place it can be caught cheaply is the moment it loads.
+ *
+ * The sign is asserted of the GAME, never of a fitted curve. A net trained on a feature it encodes badly can
+ * report an honest ablation that disagrees, and refusing it is the intended outcome rather than a false positive.
  */
 const KNOWN_AXIS_SIGN: Record<string, -1 | 1> = {
-  // More mega-crit points ⇒ more damage per shot ⇒ fewer seconds. Saturates past 3 but never reverses.
+  // More mega-crit points ⇒ more damage per shot ⇒ fewer seconds. `CalculateDamage` halves the crit chance on
+  // every success, so the branch saturates: essentially the whole effect is delivered by point 2 and 3 onward is
+  // flat. Flat, never upward — the direction holds across the range even where the magnitude stops.
   "skills.mega_crit_points": -1,
   // A bigger hull takes longer to deplete. The largest axis in the model and the easiest sanity check.
   "defender.hull_log": 1,
+  // Shield that comes BACK is effective hull the battery has to chew through twice. Measured returning 46% of an
+  // 11.2M pool inside one fight, so it is not a rounding term on a shielded target — and an artifact did ship with
+  // it backwards, trained on defenders drawn with no regeneration at all.
+  "defender.shield_regen_log": 1,
+  // Damage the target refuses outright makes the fight longer, whatever else is true of it.
+  "defender.damage_reduction": 1,
   // More crit chance ⇒ more damage ⇒ fewer seconds.
   "battery.mean_crit_chance": -1,
   // More total power ⇒ fewer seconds.
@@ -92,10 +111,31 @@ const KNOWN_AXIS_SIGN: Record<string, -1 | 1> = {
  * existing and the check running are different things and only one of them is worth anything.
  */
 export function invertedAxes(a: ArenaNetArtifact): string[] {
-  const abl = (a.metrics as { ablation?: Record<string, number> } | undefined)?.ablation;
+  const m = a.metrics as {
+    ablation?: Record<string, number>;
+    ablationGrouped?: Record<string, number>;
+    ablationNotAReason?: string[];
+    ablationUnreportableAlone?: string[];
+    constantInTraining?: string[];
+  } | undefined;
+  const abl = m?.ablationGrouped ?? m?.ablation;
   if (!abl) return ["<no ablation reported>"];
+
+  // A COLUMN THE ARTIFACT ITSELF CALLS UNREADABLE IS NOT JUDGED. Three kinds, and each would produce a false
+  // accusation rather than catch a real one: a one-hot or simplex member, whose solo ablation describes a target
+  // weak to every damage type at once; a member of an effect the net splits across several columns, where the
+  // leftovers land wherever they fit and one member's sign says nothing about the effect; and a column the
+  // training set left constant, which was never fitted at all. Refusing an honest artifact for one of these is
+  // the same failure as passing a dishonest one, one direction over.
+  const mute = new Set<string>([
+    ...(m?.ablationNotAReason ?? []),
+    ...(m?.ablationUnreportableAlone ?? []),
+    ...(m?.constantInTraining ?? []),
+  ]);
+
   const bad: string[] = [];
   for (const [name, want] of Object.entries(KNOWN_AXIS_SIGN)) {
+    if (mute.has(name)) continue;
     const d = abl[name];
     if (typeof d !== "number" || !Number.isFinite(d) || d === 0) continue;  // not measured ⇒ not judged
     if (Math.sign(d) !== want) bad.push(name);
@@ -129,12 +169,119 @@ export function scoreFromSeconds(seconds: number): number {
 export function secondsForSet(row: number[]): number {
   const a = artifact();
   if (!a) throw new Error("arenaModel: no artifact bundled");
-  return predictSeconds(a, row);
+  return predictSeconds(a, clampToTrained(a, row));
+}
+
+/**
+ * Hold every feature inside the range the net was TRAINED on, before it is asked anything.
+ *
+ * A column the training set left CONSTANT is standardised at std 1, so it reaches the net unscaled: a live
+ * value on one of those is not a two-sigma move, it is off the end of everything the model has ever seen. An
+ * ordinary armour-regenerating boss predicted a 93x longer fight that way, against a model whose own median
+ * error is under 4%.
+ *
+ * TWO PROPERTIES, both load-bearing:
+ *
+ * IT MAY ONLY EVER DECLINE. An in-range value passes through untouched, so this bounds a prediction and never
+ * moves one — a guard that adjusted a legal input would be a second model nobody could see.
+ *
+ * IT IS CONTAINMENT, NOT A FIX. A clamped untrained column contributes exactly nothing, so the model is
+ * IGNORING that axis rather than reading it. That is honest and survivable where a 93x estimate is not, and the
+ * real repair belongs to whoever draws the training set, not here.
+ *
+ * An artifact that reports no range is passed through: the range travels beside the weights, and inventing one
+ * would be asserting the very thing that is missing.
+ */
+export function clampToTrained(a: ArenaNetArtifact, row: number[]): number[] {
+  const range = (a.metrics as { featureRange?: Record<string, [number, number]> } | undefined)?.featureRange;
+  if (!range) return row;
+  return row.map((v, i) => {
+    const span = range[a.featureNames[i]];
+    if (!span || span.length !== 2) return v;
+    const [lo, hi] = span;
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) return v;
+    return v < lo ? lo : v > hi ? hi : v;
+  });
 }
 
 /** The column order this build must fill, straight from the artifact. Empty when no model is bundled. */
 export function featureNames(): readonly string[] {
   return artifact()?.featureNames ?? [];
+}
+
+/**
+ * The per-row agreement a fact has to clear before it counts as a preference rather than a coin flip.
+ *
+ * 0.50 IS A COIN FLIP and the floor sits just above it, so an axis measured AT chance cannot pass by being
+ * measured on a big enough sample: this is a competence threshold, not a confidence one.
+ */
+export const NEAR_TIE_TRUST = 0.6;
+
+/**
+ * The relative gap inside which this artifact's ordering is worth nothing, or `null` when it does not say.
+ *
+ * `metrics.pairwiseAccuracy` carries the band (`nearTieFraction`) beside the accuracy MEASURED inside it
+ * (`nearTie`) on held-out pairs against one defender. Both halves are needed and neither is assumed:
+ *
+ * - no block at all, or no fraction, is `null`: the artifact is refused at load rather than trusted to the edge
+ *   of a band nobody measured.
+ * - a `nearTie` accuracy that CLEARS `NEAR_TIE_TRUST` collapses the band to 0. The model demonstrated it can
+ *   order close pairs, and suppressing them then would be discarding an ability the file evidences.
+ * - anything else keeps the declared fraction. An artifact reporting the band but no accuracy in it is the
+ *   cautious case, not the trusting one: unmeasured and competent are different claims.
+ */
+export function nearTieBandOf(a: ArenaNetArtifact): number | null {
+  const p = (a.metrics as { pairwiseAccuracy?: { nearTieFraction?: number; nearTie?: number | null } } | undefined)
+    ?.pairwiseAccuracy;
+  const frac = p?.nearTieFraction;
+  if (typeof frac !== "number" || !Number.isFinite(frac) || frac < 0) return null;
+  const acc = p?.nearTie;
+  if (typeof acc === "number" && Number.isFinite(acc) && acc >= NEAR_TIE_TRUST) return 0;
+  return frac;
+}
+
+/** The bundled artifact's silence band, or 0 when nothing is bundled (nothing to be silent about). */
+export function nearTieBand(): number {
+  const a = artifact();
+  return a ? (nearTieBandOf(a) ?? 0) : 0;
+}
+
+/** What the model has to say about one swap. `no-preference` is an ANSWER, not a failure to answer. */
+export type Preference = "candidate" | "incumbent" | "no-preference";
+
+/**
+ * The model's opinion of a swap, with its own blind band applied.
+ *
+ * WHY A THIRD ANSWER EXISTS. The caller's floor for acting on a gain (`MIN_GAIN`) is 1% and the band inside
+ * which this model orders no better than chance is 5%, so every swap the ranking would actually make lives
+ * inside the band: without this, the mode reports coin flips with a number beside them. Falling through to the
+ * tie-break the other rankings already use is worse than nothing only if the model knew something, and inside
+ * the band it does not.
+ *
+ * THE DENOMINATOR IS THE SMALLER PREDICTION, matching how the band itself is measured (`|a-b| / min(a,b)`).
+ * Reading it against the mean or against the incumbent alone would apply a band of a different width than the
+ * one the artifact reports, which is the same defect as inventing the band.
+ *
+ * WHAT THIS CANNOT DO, and it is a limit rather than a bug: the band is measured on TRUE labels and applied
+ * here to PREDICTED ones, because predictions are all a client has. A pair the model wrongly believes to be
+ * far apart is still answered.
+ */
+export function preference(withCandidate: number, withIncumbent: number): Preference {
+  return preferenceWithin(nearTieBand(), withCandidate, withIncumbent);
+}
+
+/**
+ * The same answer against a band stated by the caller.
+ *
+ * Split out because the band is a property of the ARTIFACT and the comparison is not: the rule is testable, and
+ * a caller holding several artifacts (or a suite holding none) is not forced through the bundled one.
+ */
+export function preferenceWithin(band: number, withCandidate: number, withIncumbent: number): Preference {
+  const lo = Math.min(withCandidate, withIncumbent);
+  if (!Number.isFinite(withCandidate) || !Number.isFinite(withIncumbent) || lo <= 0) return "no-preference";
+  const gap = Math.abs(withCandidate - withIncumbent) / lo;
+  if (gap <= band) return "no-preference";
+  return comparePredictions(withCandidate, withIncumbent) < 0 ? "candidate" : "incumbent";
 }
 
 /**

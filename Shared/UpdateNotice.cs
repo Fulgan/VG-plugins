@@ -50,6 +50,10 @@ namespace VG.Core
         /// <summary>Row text for the settings window.</summary>
         public string Status()
         {
+            // BEFORE ANYONE PRESSES THE BUTTON THERE IS NOTHING TO REPORT, and the row must say that rather than
+            // borrow one of the check's wordings. `checking` would be a lie and `up to date` would be a claim
+            // nothing had verified — the state this feature spent the day getting wrong.
+            if (!_asked) return string.IsNullOrEmpty(_installed) ? "?" : _installed;
             return Updater.StatusText(_installed, _latest, _completed, IsEnabled);
         }
 
@@ -60,35 +64,37 @@ namespace VG.Core
         }
 
         /// <summary>
-        /// Start the session's one check. Safe to call from Awake: it returns before the request is made, and a
-        /// disabled check, a not-yet-due interval or a missing version all end here rather than in a thread.
+        /// Run the check now, because the player asked.
+        ///
+        /// ⚠ NO INTERVAL AND NO SCHEDULE. This used to start itself from `Awake` and re-run on a daily timer, and
+        /// the player's only lever was a config key they had to find in three separate .cfg files. It is a BUTTON
+        /// now: nothing leaves the machine unless someone presses it, which is a smaller promise to have to trust
+        /// and removes the whole question of when a mod is talking to the network.
+        ///
+        /// Returns before the request is made. `_asked` stops a second press while one is in flight, since the
+        /// request answers on a worker thread and `Pump` is what collects it.
         /// </summary>
-        public void Begin()
+        public void CheckNow()
         {
             try
             {
                 if (!IsEnabled) return;
                 UpdateCheck.Log = Log;
-
-                var interval = 24.0;
-                if (IntervalHours != null)
-                {
-                    try { interval = IntervalHours(); } catch { }
-                }
-
-                string last = null;
-                if (LastCheckIso != null)
-                {
-                    try { last = LastCheckIso(); } catch { }
-                }
-
-                UpdateCheck.Begin(_guid, _installed, last, interval);
+                _asked = true;
+                _completed = false;
+                // Interval 0 and no bookmark: "due" is not a question a button asks.
+                UpdateCheck.Begin(_guid, _installed, null, 0.0);
             }
             catch (Exception e)
             {
-                Warn("update notice could not start: " + e.Message);
+                Warn("update check could not start: " + e.Message);
             }
         }
+
+        private bool _asked;
+
+        /// <summary>Whether the player has asked this session, so the row can say "not checked" rather than lie.</summary>
+        public bool Asked { get { return _asked; } }
 
         /// <summary>
         /// Call every frame from the mod's Update. Cheap when there is nothing waiting: the check hands its

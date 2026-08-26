@@ -159,11 +159,38 @@ namespace VG.Core
         public static string StatusText(string installed, string latest, bool completed, bool enabled)
         {
             var have = string.IsNullOrEmpty(installed) ? "?" : installed;
-            if (!enabled) return have + " - checks off";
-            if (!completed) return have + " - checking";
-            if (string.IsNullOrEmpty(latest)) return have + " - no version published";
-            if (IsNewer(installed, latest)) return have + " - " + latest + " available";
-            return have + " - up to date";
+            return have + Separator + StateText(installed, latest, completed, enabled);
+        }
+
+        /// <summary>
+        /// What splits the installed version from the state in <see cref="StatusText"/>.
+        ///
+        /// The settings window draws the two in SEPARATE COLUMNS so the versions line up, and it recovers them by
+        /// splitting on this. Both ends live in `Shared/`, so there is one owner for the shape rather than a
+        /// convention two files have to remember.
+        /// </summary>
+        /// <remarks>ASCII, and never rendered: the window splits on it and draws the two halves in columns.</remarks>
+        public const string Separator = " | ";
+
+        /// <summary>
+        /// The state half alone: no version, so a caller can column it beside one.
+        ///
+        /// Kept SHORT because it shares a row with three other things. "unreleased (published: 0.3.3)" wrapped the
+        /// column onto a second line and left every row a different height, which is the alignment the whole
+        /// tab is judged on.
+        /// </summary>
+        public static string StateText(string installed, string latest, bool completed, bool enabled)
+        {
+            if (!enabled) return "checks off";
+            if (!completed) return "checking";
+            if (string.IsNullOrEmpty(latest)) return "not published";
+            if (IsNewer(installed, latest)) return latest + " available";
+            // ⚠ INSTALLED AHEAD OF PUBLISHED IS ITS OWN ANSWER, ⊥ "up to date". `IsNewer` answers one question, so
+            // "not behind" was being reported as "current" — which told a player running an UNPUBLISHED build that
+            // it was the released one. It is also the state every machine is in between a version bump and the
+            // release, which is exactly when someone reads this row.
+            if (IsNewer(latest, installed)) return "unreleased, latest " + latest;
+            return "up to date";
         }
 
         /// <summary>The one-line toast for a newer release. Names both versions: "newer" alone is not actionable.</summary>

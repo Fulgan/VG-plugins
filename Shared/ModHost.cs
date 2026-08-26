@@ -11,13 +11,18 @@ using UnityEngine;
 // that only passes FRAMEWORK types (string / Action / Func<KeyCode> / KeyCode / int). Differing copies
 // or versions never break casts: the first mod to load creates the host; the rest drive it by method
 // name and feature-check (a missing method is simply skipped).
+//
+// ⚠ ONE DEPENDENCY, AND IT IS ENFORCED BY NOTHING BUT THIS LINE: the Updates tab splits a row on
+// `VG.Core.Updater.Separator`, so any csproj that compiles this file must also compile `Shared/Updater.cs`. All
+// four mods do today. A new mod that takes the window and not the update feature will fail to compile until it
+// adds that one Compile line, which is a better failure than the tab silently drawing one wrong column.
 namespace VG.ModApi
 {
     // Entry point: the one shared settings window + hotkey manager. Call from Awake.
     internal static class VGModSettings
     {
-        // 1: tabs, hotkeys, game gate.  2: RegisterUpdateRow.
-        internal const int Version = 2;
+        // 1: tabs, hotkeys, game gate.  2: RegisterUpdateRow.  3: RegisterUpdateCheck (the check is a button now).
+        internal const int Version = 3;
         private const string HostObjectName = "VGModSettings";
         private static Handle _cached;
 
@@ -56,7 +61,7 @@ namespace VG.ModApi
     {
         private readonly object _host;
         private readonly VGModSettingsHost _native;
-        private readonly MethodInfo _regTab, _regKey, _setKey, _open, _close, _toggle, _setGate, _setUngated, _regUpdate;
+        private readonly MethodInfo _regTab, _regKey, _setKey, _open, _close, _toggle, _setGate, _setUngated, _regUpdate, _regCheck;
 
         private const BindingFlags Flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
 
@@ -76,6 +81,7 @@ namespace VG.ModApi
                 _setGate = t.GetMethod("SetGameGate", Flags);
                 _setUngated = t.GetMethod("SetHotkeyUngated", Flags);
                 _regUpdate = t.GetMethod("RegisterUpdateRow", Flags);
+                _regCheck = t.GetMethod("RegisterUpdateCheck", Flags);
             }
         }
 
@@ -123,6 +129,20 @@ namespace VG.ModApi
             try { _regUpdate?.Invoke(_host, new object[] { modName, status, url }); } catch { /* older host lacks it */ }
         }
 
+        /// <summary>
+        /// The action the host's one "Check now" button runs for this mod.
+        ///
+        /// A SEPARATE METHOD rather than a fourth argument to <see cref="RegisterUpdateRow"/>: the forwarder finds
+        /// methods by NAME, so adding an overload would make that lookup ambiguous and break every host it reflects
+        /// into. An older host lacks this one and simply gets no button, which is the honest degradation now that
+        /// there is no unattended check to fall back on.
+        /// </summary>
+        internal void RegisterUpdateCheck(string modName, Action check)
+        {
+            if (_native != null) { _native.RegisterUpdateCheck(modName, check); return; }
+            try { _regCheck?.Invoke(_host, new object[] { modName, check }); } catch { /* older host lacks it */ }
+        }
+
         internal void Open() { if (_native != null) _native.Open(); else try { _open?.Invoke(_host, null); } catch { } }
         internal void Close() { if (_native != null) _native.Close(); else try { _close?.Invoke(_host, null); } catch { } }
         internal void Toggle() { if (_native != null) _native.Toggle(); else try { _toggle?.Invoke(_host, null); } catch { } }
@@ -146,6 +166,7 @@ namespace VG.ModApi
 
         private KeyCode _toggle = KeyCode.F7;
         private static string TogglePath => Path.Combine(Application.persistentDataPath, "vg-modsettings-toggle.txt");
+
 
         // "Is a game loaded": supplied by a mod, because the host is game-neutral and holds no game reference.
         // Null until a mod sets it, and null means ungated: a host older than this feature behaves as before.
@@ -242,13 +263,111 @@ namespace VG.ModApi
             }
         }
 
+        // THE WINDOW OWNS BOTH HALVES OF THE CONTRAST PAIR, and until it did every tab had to guess at one of them.
+        //
+        // A colour tag only sets the INK. What that ink sits on is whatever skin the game installed, and this one is
+        // a mid grey: on it, the game's own rarity blue and purple are unreadable, and so is any grey a tab picks
+        // for secondary text. CIC Watch worked around it by painting its own near-black panel; doing that per tab
+        // means every tab has the same bug until someone notices it there too, so the HOST paints it once and every
+        // tab inherits a known background.
+        //
+        // ⚠ SET, DRAW, RESTORE. `GUI.skin` is global and shared with the game's own IMGUI, so these are put back
+        // immediately after the window is drawn rather than left mutated — a permanently re-tinted label style
+        // would follow the game into every other OnGUI pass.
+        private static Texture2D _panelTex;
+        private static readonly Color Ink = new Color(0.91f, 0.93f, 0.95f);
+
+        private static Texture2D PanelTexture()
+        {
+            if (_panelTex != null) return _panelTex;
+            _panelTex = new Texture2D(1, 1);
+            _panelTex.SetPixel(0, 0, new Color(0.09f, 0.10f, 0.12f, 0.96f));
+            _panelTex.Apply();
+            // Not collected between frames: a texture built per OnGUI would allocate every frame and then vanish.
+            UnityEngine.Object.DontDestroyOnLoad(_panelTex);
+            _panelTex.hideFlags = HideFlags.HideAndDontSave;
+            return _panelTex;
+        }
+
         private void OnGUI()
         {
             if (!_open || _tabs.Count == 0) return;
             GUI.skin.label.richText = true;
             GUI.skin.button.richText = true;
-            _rect.height = 0f;
-            _rect = GUILayout.Window(WindowId, _rect, DrawWindow, "Mod Settings");
+
+            // ⚠ EVERY STATE, ⊥ JUST `normal`. Setting `normal` alone changed nothing on screen, because a GUIStyle
+            // has eight of them and Unity picks by state: a window that is FOCUSED — which ours is, the moment it
+            // is open — draws `onNormal`, so the one state being set was the one never used. The button on the
+            // Updates tab changed in the same build, which is what proved the code was running and the target was
+            // wrong.
+            var tex = PanelTexture();
+            var win = Save(GUI.skin.window);
+            var box = Save(GUI.skin.box);
+            var lab = Save(GUI.skin.label);
+            Paint(GUI.skin.window, tex, Ink);
+            Paint(GUI.skin.box, tex, Ink);
+            Paint(GUI.skin.label, null, Ink);
+            try
+            {
+                _rect.height = 0f;
+                _rect = GUILayout.Window(WindowId, _rect, DrawWindow, "Mod Settings");
+            }
+            finally
+            {
+                // Restored because `GUI.skin` is global and shared with the game's own IMGUI: a permanently
+                // re-tinted style would follow the game into every other OnGUI pass.
+                Restore(GUI.skin.window, win);
+                Restore(GUI.skin.box, box);
+                Restore(GUI.skin.label, lab);
+            }
+
+            if (!_describedSkin)
+            {
+                _describedSkin = true;
+                // WHAT WE ACTUALLY PAINTED, once. Three attempts at this contrast were guesses about a skin nobody
+                // had measured; a line in the log turns "still grey on grey" into something checkable.
+                Debug.Log($"[VGModSettings] panel painted: tex={(tex != null ? tex.width + "x" + tex.height : "null")}"
+                          + $", window.onNormal.bg={(GUI.skin.window.onNormal.background != null ? "set" : "none")}"
+                          + $", label ink was {lab[0].textColor}");
+            }
+        }
+
+        private static bool _describedSkin;
+
+        // The eight states a GUIStyle draws from. Unity chooses among them by control state, and a control that is
+        // active, hovered, focused or "on" reads a different one than `normal` — so a paint that misses any of them
+        // is a paint that sometimes does nothing.
+        private static GUIStyleState[] States(GUIStyle s)
+        {
+            return new[] { s.normal, s.hover, s.active, s.focused, s.onNormal, s.onHover, s.onActive, s.onFocused };
+        }
+
+        private static GUIStyleState[] Save(GUIStyle s)
+        {
+            var src = States(s);
+            var copy = new GUIStyleState[src.Length];
+            for (var i = 0; i < src.Length; i++)
+                copy[i] = new GUIStyleState { background = src[i].background, textColor = src[i].textColor };
+            return copy;
+        }
+
+        private static void Paint(GUIStyle s, Texture2D bg, Color ink)
+        {
+            foreach (var st in States(s))
+            {
+                if (bg != null) st.background = bg;
+                st.textColor = ink;
+            }
+        }
+
+        private static void Restore(GUIStyle s, GUIStyleState[] saved)
+        {
+            var live = States(s);
+            for (var i = 0; i < live.Length && i < saved.Length; i++)
+            {
+                live[i].background = saved[i].background;
+                live[i].textColor = saved[i].textColor;
+            }
         }
 
         private static bool IsVisible(TabEntry t)
@@ -259,6 +378,13 @@ namespace VG.ModApi
 
         private void DrawWindow(int id)
         {
+            // THE BACKGROUND, PAINTED RATHER THAN CONFIGURED. Setting it on the window's GUIStyle depends on which
+            // of the style's eight states Unity resolves for a focused window, which is exactly the kind of guess
+            // that already failed twice here. Drawing the texture FIRST cannot miss: everything the tabs draw after
+            // this lands on top of it, and the GUI clip stack trims the rect to the window, which is why the
+            // oversized rect is the idiom `GUI.DragWindow` below already uses.
+            GUI.DrawTexture(new Rect(0f, 0f, 10000f, 10000f), PanelTexture());
+
             var vis = new List<TabEntry>();
             foreach (var t in _tabs)
                 if (IsVisible(t)) vis.Add(t);
@@ -290,12 +416,41 @@ namespace VG.ModApi
             GUI.DragWindow(new Rect(0f, 0f, 10000f, 22f));
         }
 
-        // The standing readout: what is installed, what is published, and a way to go read about it. Nothing on
-        // this tab downloads or installs anything: the button opens a page in the player's browser.
+        /// <summary>
+        /// The action this mod's row runs when the player presses the check button.
+        ///
+        /// THE CHECK IS A BUTTON, so the host holds actions and not a setting. It was an automatic daily check with
+        /// a per-mod `Updates/Enabled`, then briefly a global switch defaulting to off; a button is what both were
+        /// reaching for. Nothing leaves the machine unless someone presses it, there is no schedule to reason
+        /// about, and there is no state to persist or explain.
+        /// </summary>
+        internal void RegisterUpdateCheck(string modName, Action check)
+        {
+            if (string.IsNullOrEmpty(modName) || check == null) return;
+            _updateChecks[modName] = check;
+        }
+
+        private readonly Dictionary<string, Action> _updateChecks = new Dictionary<string, Action>();
+
+        // The standing readout: what is installed, what is published, and a way to go read about it. Nothing here
+        // downloads or installs anything.
         private void DrawUpdatesTab()
         {
-            GUILayout.Label("Version check only: nothing is downloaded or installed.");
-            GUILayout.Space(4f);
+            // ONE button for every mod, ⊥ one per row: "is there a newer version" is a question about the install,
+            // and asking it four times is four requests for one answer.
+            if (_updateChecks.Count > 0)
+            {
+                if (GUILayout.Button("Check for new versions"))
+                {
+                    foreach (var kv in _updateChecks)
+                    {
+                        // One mod's check failing must not cost the others theirs.
+                        try { kv.Value(); }
+                        catch (Exception ex) { Debug.LogWarning($"[VGModSettings] update check for '{kv.Key}' failed: {ex.Message}"); }
+                    }
+                }
+                GUILayout.Space(4f);
+            }
 
             foreach (var u in _updates)
             {
@@ -304,9 +459,19 @@ namespace VG.ModApi
                 try { status = u.Status(); } catch { status = "unavailable"; }
                 try { url = u.Url != null ? u.Url() : null; } catch { url = null; }
 
+                // THREE COLUMNS, ⊥ TWO. Version and state in one 200px label wrapped the longer states onto a
+                // second line and left every row a different height. Split on `Updater.Separator`, which the same
+                // shared code puts there, so the versions line up under each other and the state gets the rest of
+                // the row with no fixed width to wrap inside.
+                var cut = (status ?? "").IndexOf(Core.Updater.Separator, StringComparison.Ordinal);
+                var version = cut > 0 ? status.Substring(0, cut) : status ?? "";
+                var state = cut > 0 ? status.Substring(cut + Core.Updater.Separator.Length) : "";
+
                 GUILayout.BeginHorizontal();
-                GUILayout.Label(u.Mod, GUILayout.Width(160f));
-                GUILayout.Label(status ?? "", GUILayout.Width(200f));
+                GUILayout.Label(u.Mod, GUILayout.Width(150f));
+                GUILayout.Label(version, GUILayout.Width(55f));
+                GUILayout.Label(state);
+                GUILayout.FlexibleSpace();
                 if (!string.IsNullOrEmpty(url) && GUILayout.Button("Release page", GUILayout.MinWidth(110f)))
                     Application.OpenURL(url);
                 GUILayout.EndHorizontal();

@@ -56,7 +56,11 @@
 .act-summary { color: #7d7d86; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .act-body { display: flex; flex-direction: column; gap: 8px; margin-top: 9px; }
 .act-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.act-row.main { flex-wrap: nowrap; }
+/* The stance went from two buttons to five, so the select and both groups no longer fit on one line in a
+   340px panel: `nowrap` clipped the last steps and the whole layer pair rather than dropping them to a
+   second line, which hid the lit one and made the control look broken. It wraps, and the five steps are
+   padded to fit a group of that many. */
+.seg-group.stance .seg { padding: 4px 7px; }
 .act-row .spacer { flex: 1; }
 .act-label { font-size: 12px; color: #8a8a8a; }
 .act-row select { background: #1b1b1f; border: 1px solid #333; color: #eee; padding: 4px 7px; border-radius: 4px; font-size: 12.5px; }
@@ -80,10 +84,27 @@
 .prio-row .grip { color: #5a5a62; font-size: 12px; text-align: center; user-select: none; }
 .prio-row .pos { color: #6f6f78; font-size: 11px; text-align: center; }
 .prio-main { min-width: 0; }
-.prio-name-row { display: flex; align-items: center; gap: 6px; }
-.prio-name { font-size: 13px; color: #e6e6e6; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* WRAPS rather than truncates. The booster panel is narrow, and a `wanted` badge beside a long resonance name
+   squeezed the name to `Re...` — a ranking row whose subject cannot be read is not a ranking row. The badge
+   drops to its own line before the name gives up any glyphs. */
+.prio-name-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* WRAPS, never ellipsises. This list is 230px wide and its rows carry a `wanted` badge and a measured value
+   beside the name; with `nowrap` the NAME is what gave way, and `Critical Cha...` names nothing. A row the
+   player is ranking has to be readable, and two lines cost less than an unreadable one. */
+.prio-name { font-size: 13px; color: #e6e6e6; font-weight: 500; min-width: 0; white-space: normal;
+  overflow-wrap: break-word; }
+/* The value sits UNDER the name, on its own line: beside it, the two fought for a 230px row and the name lost. */
+.prio-name-row { row-gap: 2px; }
+.prio-worth { flex-basis: 100%; }
 .prio-eff { font-size: 11px; color: #7d7d86; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .prio-name-row .spacer { flex: 1; }
+/* Inert rank: the bonus is ordered but nothing owned can roll it, so it is greyed to the weight of a disabled
+   control. The name stays legible — a row you may want to remove has to be readable to be identified. */
+.prio-row.prio-inert .prio-name { color: #8a8a94; }
+/* WHAT A RANKED BONUS IS WORTH, beside the rank it justifies. Dim: it is evidence for the ordering, not a second
+   thing to read first. */
+.prio-worth { flex: 0 0 auto; font-size: 10px; color: #7fb3ff; font-variant-numeric: tabular-nums; cursor: help; }
+.prio-row.prio-inert .pos { color: #55555e; }
 .prio-rank { flex: 0 0 auto; font-size: 11px; font-weight: 700; line-height: 1; padding: 3px 7px; border-radius: 10px; color: #6a6a72; background: #1b1b1f; border: 1px solid #2a2a30; }
 .prio-rank.on { color: #86efac; background: #16241a; border-color: #2b3a24; }
 .prio-btns { display: flex; gap: 2px; align-items: center; }
@@ -432,7 +453,48 @@
 .gear-panel:hover { border-color: #ffcf7066; }
 .gear-panel-head { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: #7d7d86; margin-bottom: 6px; }
 .gear-swap { display: flex; align-items: stretch; gap: 6px; }
-.gear-vig { flex: 1; min-width: 0; background: #0c0e12; border: 1px solid #23232a; border-radius: 5px; padding: 5px 6px; }
+/* A CARD LAID OUT IN A GRID FILLS THE HEIGHT THE GRID GIVES IT. `align-items: stretch` hands every card in a row
+   band the tallest card's height, and without this the extra height lands as dead space UNDER the swap: the two
+   vignettes stay short, the border stretches, and a row reads as cards of different sizes inside equal boxes.
+   The gear tab stacks its cards and does not want this. THE BOOSTER TAB SOLVED THE SAME PROBLEM DIFFERENTLY, by
+   clamping its vignettes to a fixed 58px box (below), which it can do because a booster vignette's content is
+   bounded. An officer's is not: the skill chips WRAP, so a crew card is honestly variable in height and has to
+   grow into the band instead of being cut to fit. It matters most where the two sides differ, which is exactly
+   what a `kept` target side is: one line facing a portrait and a wrap of chips. */
+.oslot-grid > .gear-panel { display: flex; flex-direction: column; }
+/* A STACKED SWAP HUGS ITS CONTENT. Growing it hands the spare height to a one-line `kept` box, which is the
+   empty bordered rectangle this was meant to remove; the card is already equal to its neighbours through
+   the grid, so the leftover belongs below the swap, inside the border, where it reads as nothing. */
+.oslot-grid > .gear-panel > .gear-swap { flex: 0 0 auto; }
+/* STACKED: current ABOVE new, for a card whose vignettes are tall. Two of those side by side are narrow
+   columns with the width left empty, and worst where one side is a one-line `kept`.
+
+   THE BAND'S SPARE HEIGHT GOES IN ONE NAMED PLACE, AND THAT PLACE IS THE CURRENT VIGNETTE. `align-items:
+   stretch` makes the CARDS equal, which is only half of looking aligned: an officer card's height is driven
+   by how many rows its skill chips WRAP into, so if the spare height is left wherever it falls, every card's
+   arrow and target box sit at a different Y and a row reads as ragged even though its borders line up.
+   Letting the current vignette absorb it pins the arrow and the target box to the bottom of every card in the
+   band, so they line up across the row and the variable part stays where the variation actually is.
+
+   The target box must NOT also grow, or the two split the slack and the alignment goes with it: one line of
+   `kept` stretched to the height of a portrait is the empty box the stacking was introduced to remove.
+
+   The booster tab reaches the same alignment by CLAMPING its vignettes to a fixed box, which it can do because
+   its content is bounded. Clipping is not available here: the chips are what an officer is chosen ON. */
+/* THE TWO HALVES ARE THE SAME SIZE. They hold the same kind of thing, so a card that gives one of them more
+   room reads as two different cards side by side, and the narrow half truncates the name it is showing. An
+   uneven split was tried to buy the current side more room and cost exactly that. Room comes from the TRACK
+   instead, which widens both halves at once. */
+.gear-swap:not(.stack) > .gear-vig { flex: 1 1 0; }
+.gear-swap.stack { flex-direction: column; }
+.gear-swap.stack > .gear-vig { flex: 0 0 auto; }
+.gear-swap.stack > .gear-arrow { flex: 0 0 auto; }
+/* ONE HEIGHT WHATEVER THE SLOT SAYS. The three states carry different amounts of text — an item body, a one-line
+   `keep current`, and a `kept` verdict with its reason underneath — and letting each size itself made neighbouring
+   slot cards stand at different heights in the same row. The floor is the item body's own height (icon 30px + the
+   tag line), so the tallest ordinary state sets it and nothing is clipped. */
+.gear-vig { flex: 1; min-width: 0; background: #0c0e12; border: 1px solid #23232a; border-radius: 5px; padding: 5px 6px;
+            min-height: 54px; display: flex; flex-direction: column; }
 .gear-vig.best { border-color: #2b3a24; }
 .gear-vig-tag { font-size: 9px; text-transform: uppercase; letter-spacing: .05em; color: #6a6a72; }
 /* icon beside the name/stat lines — game-rendered art, so a slot panel is recognisable without hovering */
@@ -446,9 +508,14 @@
 .gear-vig-sub { font-size: 10.5px; color: #86efac; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* A slot's "no proposal" verdict. Wraps, unlike .gear-vig-name: it is a sentence, and truncating it to an
    ellipsis would hide exactly the part that distinguishes the four reasons from each other. */
-/* "changes nothing" — a pick identical to what is fitted. Quiet, but present: the slot would otherwise show a
-   pending swap that `changes` has already discarded. */
-.gear-vig-same { display: block; font-size: 10px; color: #8a8a94; font-style: italic; margin-top: 2px; }
+/* An action about the item in this vignette, on the item. It is a WORD rather than a glyph: a bare cross
+   was read as closing something, and nothing on the card said which of the several 'not that' controls
+   it was. Quiet until hovered, since it is not the thing the card is for. */
+.bblock-label { font-size: 11px; color: #9aa4b2; font-weight: 600; margin-right: 2px; }
+.bblock-label::after { content: ":"; }
+.vig-action { align-self: flex-start; margin-top: 4px; background: none; border: 1px solid #3a3a42;
+              border-radius: 3px; color: #7d7d86; font-size: 10px; padding: 1px 5px; cursor: pointer; }
+.vig-action:hover { border-color: #a04a4a; color: #ff9b9b; }
 .gear-vig-verdict { font-size: 11px; font-weight: 600; color: #9aa4b2; padding: 2px 4px; }
 .gear-vig-why { display: block; font-size: 10px; font-weight: 400; color: #6b7280; margin-top: 2px; white-space: normal; }
 
@@ -491,12 +558,22 @@
 /* gear v2: two-column (slots + shared list), drag-drop, rich tooltip */
 .gear-main { display: flex; gap: 12px; align-items: flex-start; }
 .gear-slots { flex: 1; min-width: 0; }
-.gear-mod-head { display: flex; align-items: center; gap: 8px; margin: 4px 0 8px; }
+/* WRAPS, because this row grows. It holds a panel title, a set-all picker, the auto toggle and TWO segmented
+   controls, and a `nowrap` flex row does not overflow visibly — it pushes its last children past the edge, where
+   the page's own overflow rules then clip them. That is a control the player cannot reach and has no reason to
+   suspect exists, so anything appended here would silently disappear on a narrow window. */
+.gear-mod-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 4px 0 8px; }
+/* The title yields first: it is the one child that can give up a whole line without losing meaning. */
+.gear-mod-head .panel-title { min-width: 0; }
 .gear-mod-head .spacer { flex: 1; }
 .setall { width: auto; flex: 0 0 auto; }
 .fsel.setall { margin-top: 0; }
 .fsel.setall .fsel-btn { padding: 4px 10px; }
 .fsel.setall .fsel-pop { left: auto; right: 0; min-width: 220px; }
+/* A pin the pool can no longer satisfy. Said on the card, because a slot badged `pinned` that is quietly being
+ optimized anyway contradicts itself, and the player has no way to see which of the two is true. */
+.slot-warn { float: right; font-size: 10px; color: #e0a030; border: 1px solid #e0a03055; border-radius: 4px;
+             padding: 0 5px; margin-left: 4px; }
 .slot-sug { float: right; background: none; border: 1px solid #2a2a30; border-radius: 4px; color: #ffcf70; cursor: pointer; font-size: 11px; line-height: 1; padding: 1px 5px; }
 .slot-sug:hover { border-color: #ffcf70; background: #ffcf7022; }
 /* Lock the slot to whatever is fitted. Sits beside the per-slot suggest because it is the answer to the same
@@ -566,7 +643,15 @@
    hovered item, dark gold = a compared item that beats it on the same main stat. */
 .git.hovered { border-color: #4aa3ff; box-shadow: 0 0 0 1px #4aa3ff55, 0 0 18px #4aa3ff5c, 0 6px 24px #000a; }
 .git.better { border-color: #a87d1a; box-shadow: 0 0 0 1px #b8860b66, 0 0 16px #b8860b70, 0 6px 24px #000a; }
-.git-tag { color: #7d7d86; font-weight: 400; }
+/* WHAT EACH PANEL IS, on a strip of its own. The panel the hovered item would displace and the panels for
+   slots it merely also fits are all equipped, so the word "equipped" separated nothing; and the border is
+   already spoken for by `better`, which can land on any of them. Coral marks the one going away, faint grey
+   the ones that are only context, and the context panels sit back so the pair being compared reads first. */
+.git-role { display: block; margin-bottom: 6px; padding: 2px 6px; border-radius: 4px; font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; }
+.git-role-hovered { background: #4aa3ff1f; color: #7cc0ff; box-shadow: inset 0 0 0 1px #4aa3ff4d; }
+.git-role-target { background: #f8717124; color: #fca5a5; box-shadow: inset 0 0 0 1px #f871714d; }
+.git-role-alt { background: #ffffff0a; color: #7d7d86; box-shadow: inset 0 0 0 1px #ffffff14; }
+.git.git-alt { opacity: .74; }
 
 /* persistent action log */
 .sum-log { margin-top: 14px; padding: 10px 12px; border: 1px solid #23252c; border-radius: 8px; background: #101216; }
@@ -580,30 +665,36 @@
 .log-req { margin: 3px 0 0; padding-left: 84px; list-style: none; }
 .log-req li { font-family: ui-monospace, monospace; font-size: 11px; color: #9aa4b2; white-space: pre-wrap; }
 
-/* officer optimizer before→after slot grid (mirrors the booster bslot layout). Each slot is a compact
-   flex column (current card → ▼ → proposed card) sized to its own content; columns are top-aligned so
-   nothing is stretched to fill empty space. Cards vary in height with skill count — that's fine. */
-/* align-items: stretch → every slot in a row band takes the band's tallest height; the two cards
-   inside each slot are flex:1 so they split that height evenly. Result: all current cards match, all
-   proposed cards match, and the arrows line up across columns. Slack sits at the bottom of shorter
-   cards (inside the border), not as a floating gap. */
-.oslot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; align-items: stretch; }
-.oslot { display: flex; flex-direction: column; gap: 6px; background: #15151a; border: 1px solid #262626; border-radius: 8px; padding: 10px; }
+/* A crew slot is a `gear-panel` like a hardpoint and a booster slot. The cell only has to hold ONE vignette
+   wide, because the card stacks (see `.gear-swap.stack`), so the track is sized to a readable officer card
+   rather than to two of them side by side: more slots fit per row, and none of them is half empty. */
+.oslot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; align-items: stretch; }
+.oslot { margin-bottom: 0; }
 .oslot.chg { border-color: #2b3a24; box-shadow: 0 0 0 1px #2b3a2455; }
-.bslot-head .spacer { flex: 1; }
+/* The head is a plain block on the other two tabs, where `float: right` is enough for two buttons. A crew slot
+   also carries a changes/unchanged badge, so it lays the row out and the floats become ordinary flex items. */
+.oslot > .gear-panel-head { display: flex; align-items: center; gap: 6px; }
+.oslot > .gear-panel-head .spacer, .bslot-head .spacer { flex: 1; }
 .oslot-tag { flex: 0 0 auto; font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; color: #86efac; background: #1c2a18; border: 1px solid #2b3a24; border-radius: 8px; padding: 1px 7px; }
 .oslot-same { flex: 0 0 auto; font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; color: #6a6a72; }
-.ocard { flex: 1 1 0; display: flex; flex-direction: column; gap: 6px; background: #101014; border: 1px solid #23232a; border-radius: 6px; padding: 8px; }
-.ocard.best { border-color: #2b3a24; }
-.ocard.empty { align-items: center; justify-content: center; color: #6a6a72; }
+.ocard-body { display: flex; flex-direction: column; gap: 6px; }
 .oc-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .oc-portrait { position: relative; overflow: hidden; flex: 0 0 auto; width: 34px; height: 34px; border-radius: 5px; background: #0e1420; border: 1px solid #555; display: flex; align-items: center; justify-content: center; font-size: 11px; }
 .oc-id { min-width: 0; }
 .oc-name-row { display: flex; align-items: center; gap: 5px; }
 .oc-name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .oc-sub { font-size: 10.5px; color: #7d7d86; }
-.oc-skills { display: flex; flex-wrap: wrap; gap: 4px; }
-.oc-bonus { font-size: 10.5px; color: #86efac; }
+/* THE CHIP WRAP IS WHAT MADE A CREW CARD'S HEIGHT UNPREDICTABLE, and an unpredictable height is what left
+   every card's arrow and target box at a different Y. Three rows is the cap: past that the card is not
+   telling the player anything they can take in at a glance anyway, and the full list is on the vignette's
+   own `title`. Same answer the booster tab reached with its fixed 58px box, for the same reason. */
+/* FIXED, not capped. A cap only stops a card being TALLER than three chip rows; a card with two rows was
+   still shorter than its neighbour, so the arrow and the target box sat at a different height in every
+   column. The height is the same on every card and the slack is inside this block. */
+.oc-skills { display: flex; flex-wrap: wrap; align-content: flex-start; gap: 4px; height: 66px; overflow: hidden; }
+/* Always drawn, even with nothing to say: an officer without a chosen bonus would otherwise make a card one
+   line shorter than the one beside it, which is the same misalignment one row further down. */
+.oc-bonus { font-size: 10.5px; color: #86efac; min-height: 14px; }
 
 .preset-row.active { background: #12203a; border-radius: 6px; } /* highlight only — padding matches normal rows so content stays aligned */
 
@@ -617,6 +708,12 @@
 .recruit-hire.blocked:hover { border-color: #7a3030; }
 
 /* priority list export / import — portable across ships, playthroughs and players */
+/* The three controls that WRITE the priority list, on one row directly under it. They sit together because they
+   are one family, and a player deciding between them is comparing them: two discard the list and one only sorts
+   it, which is the whole reason the labels carry the verb. The undo is pushed to the far end, where an undo is
+   looked for, rather than beside the buttons that need undoing. */
+.prio-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 6px 0 2px; }
+.prio-actions .spacer { flex: 1; }
 .prio-io { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 6px 0 4px; font-size: 11px; }
 .prio-io button, .prio-io .import-cfg {
   font-size: 11px; padding: 1px 8px; cursor: pointer;
@@ -637,7 +734,7 @@
 .prio-wanted {
   font-size: 9px; text-transform: uppercase; letter-spacing: .05em;
   color: #ffb020; border: 1px solid #4a3a1a; background: #241c10;
-  border-radius: 3px; padding: 0 4px; margin-left: 5px;
+  border-radius: 3px; padding: 0 4px; margin-left: 5px; flex: 0 0 auto;
 }
 
 /* Aspect damage uplift beside a gear row's headline number — it explains an ordering that the headline
@@ -791,7 +888,21 @@
    vignettes were ~85px each and every booster name truncated to "C… Co…" while the kept-verdict sentence wrapped
    over five lines — the layout was right and the column was wrong. Wide enough for two readable vignettes, and
    `auto-fit` so six slots use whatever the screen allows rather than insisting on six columns. */
-.bres-main .bslot-grid { grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); }
+.bres-main .bslot-grid { grid-template-columns: repeat(auto-fit, minmax(520px, 1fr)); align-items: stretch; }
+/* EVERY BOOSTER SLOT CARD IS THE SAME HEIGHT, and it is the CONTENT that guarantees it rather than the grid's
+   stretch: a card whose right half holds a wrapped `kept` sentence grew past a card whose right half holds an
+   item, and two cards side by side at different heights read as one of them being broken. So the vignette is a
+   FIXED box here (the tallest ordinary state, icon + name + sub, sets it) and the verdict clamps into it, with
+   the full sentence still on the element's own `title`. Scoped to this tab: the gear tab's vignettes carry an
+   aspect row that must not be clipped, and the crew grid's carry a wrap of skill chips that cannot be. */
+/* ROOM FOR THE ACTION LINE ON EVERY CARD, present or not. The ban button is drawn only where something was
+   proposed, so without a reserved line the vignettes that have one are taller, the swap above the foot is
+   taller with them, and the type selects sit at a different height in every card of the row. A conditional
+   element that changes layout height has to be given its space whether or not it is there. */
+.bres-main .gear-vig { min-height: 78px; }
+.bres-main .gear-vig-body { overflow: hidden; }
+.bres-main .gear-vig-verdict { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+                               overflow: hidden; }
 
 /* The two lines a booster card carries without being hovered: where the booster lives, and where its resonance
    sits in the order this ship states. The full detail is in the shared hover card, so this stays to one row. */
@@ -807,6 +918,9 @@
 .brefuse:hover { border-color: #a04a4a; color: #ff9b9b; }
 .bblock.border-top { border-top: 1px solid #26262c; padding-top: 6px; margin-top: 2px; }
 .sl-vchip .x[disabled] { opacity: 0.3; cursor: default; }
+/* A refused booster the player no longer owns. Still listed, because it is still in the set and would suppress
+   that booster if it came back; dimmed, because it is not acting on anything today. */
+.sl-vchip.gone { opacity: .55; font-style: italic; }
 
 /* How much of a defensive layer a suggestion may spend. Sits with the ranking controls because it is part of the
    same question — what "better" means for this ship — and reads as a sentence rather than a bare field, since a
@@ -815,3 +929,140 @@
 .gear-cap input { width: 52px; background: #1b1b1f; border: 1px solid #333; border-radius: 4px; color: #dbeafe;
                   padding: 3px 6px; font-size: 12.5px; text-align: right; }
 .gear-cap input:focus { outline: none; border-color: #3a4a63; }
+
+/* THE STATED ORDER over the measurements, on its own full-width row.
+   It began wedged into the button bar beside the cap input, where a five-row list had to share a line with a
+   number field and two buttons: the header wrapped, the arrows collided, and the whole control read as damage.
+   Collapsed it is one sentence; open it gets the width a list needs. */
+.goal-order { border: 1px solid #2a2a30; border-radius: 6px; background: #16161a; margin: 0 0 8px; }
+.goal-order.open { background: #191920; }
+.goal-bar { display: flex; align-items: center; gap: 10px; padding: 6px 10px; font-size: 12px; }
+.goal-title { color: #9a9aa4; white-space: nowrap; }
+/* The sentence wraps rather than clipping: an order long enough to wrap is still readable, and a truncated one
+   silently hides the keys at the end, which are exactly the ones a player forgets are there. */
+.goal-said { flex: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
+.goal-chip { color: #dbeafe; white-space: nowrap; }
+.goal-chip.unread { color: #b98a3a; }
+.goal-arrow { font-style: normal; color: #4d4d57; margin-left: 4px; }
+.goal-none { color: #6d6d78; font-style: italic; }
+.goal-edit { background: none; border: 1px solid #333; border-radius: 4px; color: #9a9aa4; cursor: pointer;
+             padding: 2px 10px; font-size: 11.5px; }
+.goal-edit:hover { color: #dbeafe; border-color: #3a4a63; }
+
+/* TWO HALVES SIDE BY SIDE: one carries positions, the other carries none, and putting them in one column made
+   the second look like a continuation of the first. */
+.goal-body { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(200px, 1fr); gap: 14px;
+             padding: 2px 10px 10px; border-top: 1px solid #24242b; }
+@media (max-width: 720px) { .goal-body { grid-template-columns: 1fr; } }
+.goal-head { display: flex; align-items: baseline; gap: 8px; color: #9a9aa4; font-size: 11.5px;
+             margin: 8px 0 5px; }
+.goal-hint { color: #6d6d78; font-size: 10.5px; cursor: help; }
+.goal-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.goal-row { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border: 1px solid #2a2a30;
+            border-radius: 4px; background: #1b1b1f; cursor: grab; font-size: 12px; }
+.goal-row.held { opacity: 0.45; }
+/* The insertion target, not a selection: it marks where the held row would land. */
+.goal-row.over { border-color: #3a4a63; background: #20222b; }
+.goal-rank { min-width: 14px; text-align: right; color: #6d6d78; font-variant-numeric: tabular-nums; }
+.goal-name { flex: 1; color: #c9c9d2; }
+/* A stated gap, so an unanswerable key cannot read as one the plan happened to tie on. */
+.goal-unread { font-size: 10px; color: #b98a3a; cursor: help; white-space: nowrap; }
+/* Fixed slot for the controls, so a row never shifts as the list is reordered. */
+.goal-moves { display: inline-flex; gap: 1px; }
+.goal-moves button { background: none; border: none; color: #6d6d78; cursor: pointer; padding: 0 4px;
+                     font-size: 10px; line-height: 1; }
+.goal-moves button:hover:not(:disabled) { color: #dbeafe; }
+.goal-moves button:disabled { opacity: 0.22; cursor: default; }
+.goal-moves .goal-drop { font-size: 13px; }
+.goal-moves .goal-drop:hover { color: #e08a8a; }
+.goal-empty { color: #6d6d78; font-style: italic; font-size: 11.5px; padding: 4px 8px; }
+
+/* CHIPS, not rows: nothing here has a position, so a numbered list would imply one. */
+.goal-rest { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px; }
+.goal-rest button { background: #1b1b1f; border: 1px solid #2a2a30; border-radius: 4px; color: #8b8b96;
+                    cursor: pointer; padding: 4px 8px; font-size: 11.5px; }
+.goal-rest button:hover { color: #dbeafe; border-color: #3a4a63; }
+.goal-rest i { font-style: normal; color: #4d4d57; margin-left: 6px; }
+.goal-rest button:hover i { color: #7fe08a; }
+
+/* The priority list's own controls, directly under its title so a control for the list is where the list is. */
+
+/* THE ALLOWANCE SWEPT, directly under the goal order it bounds: the order says which stat wins, the `allow` box
+   says how much of the others a plan may spend, and this shows what the other settings of that box return.
+   Collapsed to one line by default — each row behind it is a whole-ship search, so it opens only when asked. */
+.sweep { border: 1px solid #2a2a30; border-radius: 6px; background: #16161a; margin: 0 0 8px; }
+.sweep.open { background: #191920; }
+.sweep-bar { display: flex; align-items: center; gap: 10px; padding: 6px 10px; font-size: 12px; }
+/* Takes the `flex: 1` the removed hint used to carry, so the button stays at the right edge rather than sitting
+   against the title. */
+.sweep-title { flex: 1; color: #dbeafe; white-space: nowrap; min-width: 0; }
+.sweep-go { background: none; border: 1px solid #333; border-radius: 4px; color: #9a9aa4; cursor: pointer;
+            padding: 2px 10px; font-size: 11.5px; white-space: nowrap; }
+.sweep-go:hover:not(:disabled) { color: #dbeafe; border-color: #3a4a63; }
+.sweep-go:disabled { opacity: 0.5; cursor: default; }
+.sweep-body { padding: 2px 10px 8px; border-top: 1px solid #24242b; }
+.sweep-none { color: #9a9aa4; font-size: 11.5px; padding: 8px 2px; }
+.sweep-tbl { width: 100%; border-collapse: collapse; font-size: 12px; margin: 6px 0 4px; }
+.sweep-tbl th { text-align: left; color: #6d6d78; font-weight: 400; font-size: 10.5px; padding: 2px 6px; }
+.sweep-tbl th.n, .sweep-tbl td.n { text-align: right; font-variant-numeric: tabular-nums; }
+.sweep-tbl td { padding: 4px 6px; color: #c9c9d2; border-top: 1px solid #24242b; }
+/* The delta rides with its figure rather than in a column of its own: the number and what it changed are one
+   fact, and splitting them makes a row read as four unrelated cells. */
+.sweep-tbl td.n i { font-style: normal; color: #6d6d78; font-size: 10.5px; margin-left: 6px; }
+/* The row the player is already flying under, marked rather than annotated: it is the anchor the others are
+   read against, so it has to be findable without reading every cell. */
+.sweep-tbl tr.mine td { color: #dbeafe; }
+.sweep-tbl tr.mine td i { color: #7f9ec9; }
+.sweep-tbl button { background: #1b1b1f; border: 1px solid #2a2a30; border-radius: 4px; color: #9a9aa4;
+                    cursor: pointer; padding: 3px 10px; font-size: 11px; }
+.sweep-tbl button:hover { color: #dbeafe; border-color: #3a4a63; }
+.sweep-foot { color: #6d6d78; font-size: 10.5px; padding: 2px 2px 4px; }
+
+/* ---- PHONE (portrait) -----------------------------------------------------------------------------
+   See App.css for the rule this follows: the page must not scroll sideways. The tab strip is the worst
+   offender in the app — seven buttons in a `nowrap` flex row, one of them labelled "Inventory &
+   opportunities" — and it pushed the DOCUMENT wide, so every tab inherited a broken layout from the
+   navigation above it.
+
+   The strip SCROLLS rather than wraps. Wrapping seven buttons costs three rows of a screen that has
+   about fourteen, and it moves the tab under your thumb every time a badge appears or clears; a strip
+   that scrolls keeps each tab in one place. */
+@media (max-width: 560px) {
+  .tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    /* The strip owns the overflow, so it must also own the gesture: without this a horizontal swipe on
+       iOS bubbles to the document and pulls the whole page. */
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    /* Padding rather than margin so the last tab clears the screen edge when scrolled to the end. */
+    padding-bottom: 2px;
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  /* A flex child shrinks by default; a label that shrinks to an ellipsis is a tab you cannot read. */
+  .tabs button { flex: 0 0 auto; padding: 7px 11px; }
+
+  /* ONE column. Every one of these is `auto-fit, minmax(210..360px, 1fr)`, and a 360px minimum on a
+     390px screen leaves a card wider than the space it sits in once padding is counted. */
+  .gear-cols, .crew-grid, .bslot-grid, .oslot-grid, .opt-grid,
+  .bres-main .bslot-grid { grid-template-columns: 1fr; }
+
+  /* A search field with a 220px floor in a wrapping row is the same defect as `.cyc`. */
+  .roster-search { min-width: 0; width: 100%; }
+
+  /* The allowance sweep keeps its columns and scrolls inside its own frame: the rows are read ACROSS
+     (this allowance, these figures), so stacking them would destroy the comparison the panel exists for. */
+  .sweep-body { overflow-x: auto; }
+  .sweep-tbl { min-width: 340px; }
+
+  /* The panel title takes its own line so the controls behind it are not pushed to a second screen. `spacer`
+     is a `flex: 1` child and would otherwise eat the whole first row on its own. */
+  .gear-mod-head .panel-title { flex: 1 0 100%; }
+  .gear-mod-head .spacer { display: none; }
+  /* Both segmented controls stay whole: a group split across a line break reads as two unrelated pairs. */
+  .gear-mode { display: inline-flex; gap: 4px; }
+
+  /* Touch targets. 5px of vertical padding is a 22px button, under the ~44px a thumb expects. */
+  .undo-suggest { padding: 8px 12px; }
+  .gear-cap input { width: 56px; padding: 5px 6px; }
+}

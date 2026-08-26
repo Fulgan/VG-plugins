@@ -1,75 +1,73 @@
-SHIP  Monsoon · Combat · game 0.8.1.24
-      docked=false statsLive=true equivalentTurrets=15
+SHIP  Bogatyr · Combat · game 0.8.1.27
+      docked=false statsLive=true equivalentTurrets=12
 
 MOUNTED — hardpoints
-  [0] Small  Plasma Spitter Mk.XVII Lv66 Q20  draw 0
-        Combat Power 3,417, Power 491, Precision 918, Reload Speed 0
-  [1] Small  Plasma Spitter Mk.XVI Lv63  draw 374
-        Combat Power 2,689, Precision 572, Shield HP 578, Critical Damage 0
-  [2] Large  Plasma Cannon Mk.XVIII Lv72 Q15  draw 2,093
-        Combat Power 13,254, Armor HP 2,842, Combat Power 2,325
-  [3] Large  Plasma Cannon Mk.XIX Lv74  draw 0
-        Combat Power 15,246, Attack Speed 0, Reload Speed 0
-  [4] Large  Plasma Cannon Mk.XVIII Lv70 Q15  draw 1,688
-        Combat Power 12,076, Weapon Range 0, Attack Speed 0
-  [5] Medium Plasma Cannon Mk.XVIII Lv69 Q20  draw 1,181
-        Combat Power 8,155, Armor HP 1,525, Combat Power 1,505, Shield HP 1,481
-  [6] Medium Plasma Repeater Mk.XIX Lv74 Q15  draw 1,474
-        Combat Power 10,440, Combat Power 2,016, Critical Damage 0
+  [0] Large  BX Railcaster-L Mk.XIX Lv74  draw 2,502
+        Combat Power 17,259, Turret Rotation Speed 0, Torpedo Power 2,617, Shield HP 2,900
+  [1] Large  Rad Cannon Mk.XIX Lv74  draw 2,173
+        Combat Power 15,793, Drone Power 2,554, Reload Speed 0
+  [2] Large  BX Railcaster-L Mk.XVIII Lv71 Q20  draw 1,681
+        Combat Power 14,498, Magazine Size 0, Turret Rotation Speed 0, Armor HP 3,037
+  [3] Large  Cannon Mk.XIX Lv74  draw 2,050
+        Combat Power 15,950, Turret Rotation Speed 0, Shield HP 2,459
 MOUNTED — modules
-  Reactor      Reactor Mk.XVIII Lv71 Q20  draw 0
-        Energy 18,739, Precision 2,878, Hull HP 2,637, Shield HP 3,010
-  Engine       Engine Mk.XVI Lv64 Q25  draw 0
-        Thrust 42,974, Salvage Power 1,964, Shield HP 2,061, Cold Resistance 0, Side Thrust 21,197, Rotational Thrust 124,078
+  Reactor      Reactor Mk.XIX Lv74  draw 0
+        Energy 21,594, Power 1,647, Torpedo Power 2,506
+  Engine       Engine Mk.XIX Lv74  draw 2,405
+        Rotational Thrust 93,175, Side Thrust 16,092, Thrust 41,007, Combat Power 2,751, Energy Resistance 0, Mining Power 2,635
   Scanner      Scanner Mk.XVIII Lv72 Q20  draw 2,158
         Precision 11,286, Power 1,662, Combat Power 3,341, Armor HP 3,354
-  TractorBeam  Tractor Beam Mk.XVIII Lv71 Q20  draw 0
-        Shield HP 2,827, Hull HP 2,799, Precision 2,924
-  Hull         Hull Kit Mk.XVIII Lv72 Q20  draw 0
-        Hull HP ×149.645233, Hull HP 2,998, Power 2,265, Armor HP 3,396
-  ShieldGenerator Shield Mk.XIX Lv74 Q15  draw 0
-        Shield HP ×158.145172, Power 2,176, Drone Power 2,782
+  TractorBeam  Tractor Beam Mk.XVI Lv64  draw 1,250
+        Hull HP 1,571, Drone Power 1,407, Torpedo Power 1,390
+  Hull         Hull Kit Mk.XIX Lv74  draw 0
+        Hull HP ×147.722977, Mining Power 2,429, Salvage Power 2,416
+  Armor        Armor Plating Mk.XVI Lv64  draw 1,130
+        Armor HP ×75.575676, Shield HP 1,244, Combat Power 1,164
+  TopedoBay    Torpedo Bay Mk.XVI Lv63  draw 676
+        Torpedo Power 8,192, Energy Resistance 0, Kinetic Resistance 0, Explosive Resistance 0
 
-TAB STATE  25 keys loaded from /client/state
-PUBLISHED — what the player's tab last drew (ship b9ce41c1-38dc-4719-9bb6-634495bd954f, expanded)
-  Plasma Repeater Mk.XIX Lv74 Q15  →  Plasma Cannon Mk.XVIII Lv69
-     main 10.4K → 8,067   draw 1,474 → 1,004
-     aspects [Firestarter] → [Firestarter, Gamma Ward]
-    DPS index                   409,593 →        414,825  (+1.28%)
-    combatPower                 341,785 →        324,915  (-4.94%)
-    precision                    18,579 →         19,871  (+6.95%)
-    critChance                    57.1% →          58.5%  (+2.35%)
-    load                          39.6% →          37.5%  (-5.24%)
-    hull                      3,872,747
-    armor                        25,842
-    shield                    6,585,000
+TAB STATE  26 keys loaded from /client/state
+PUBLISHED — what the player's tab last drew (ship 857cb5e7-2c8d-496a-a470-e85ff7dde4c5, expanded)
+  Torpedo Bay Mk.XVI Lv63  →  Torpedo Bay Mk.XVI Lv63
+     main 8,192 → 6,684   draw 676 → 685
+     aspects [Repair Nanites] → []
+    DPS index                   204,444 →        207,324  (+1.41%)
+    combatPower                 248,173
+    precision                    11,286 →         12,068  (+6.93%)
+    critChance                    46.3% →          47.2%  (+1.79%)
+    load                          74.2% →          74.3%  (+0.06%)
+    hull                      1,017,056
+    armor                     1,729,044
+    shield                       10,646
 
 PROPOSED (Suggest whole ship, expanded)
-  (nothing — the objective proposes no change)
+  TopedoBay  Torpedo Bay Mk.XVI Lv63
+        → Torpedo Bay Mk.XVI Lv63   draw 676 → 685
+        → Torpedo Power 6,684, Precision 782
 
 PREDICTED — current → planned
-  DPS index (tier 2)            409,593
-  Combat power                  341,785
-  Precision                      18,579
-  Crit chance                     57.1%
-  Mining power                   10,406
-  Salvage power                  13,382
-  Energy used                     8,969
-  Reactor capacity               22,675
-  Load                            39.6%
-  Reactor bonus                   20.0%
-  Hull (game)                 3,872,747
-  Armor (game)                   25,842
-  Shield (game)               6,585,000
+  DPS index (tier 2)            201,823 →        204,665  (+1.41%)
+  Combat power                  245,106
+  Precision                      11,286 →         12,068  (+6.93%)
+  Crit chance                     46.3% →          47.2%  (+1.79%)
+  Mining power                   12,118
+  Salvage power                   8,350
+  Energy used                    16,025 →         16,034  (+0.06%)
+  Reactor capacity               21,594
+  Load                            74.2% →          74.3%  (+0.06%)
+  Reactor bonus                   10.0%
+  Hull (game)                 1,017,056
+  Armor (game)                1,729,044
+  Shield (game)                  10,646
 
-  VERDICT  worthSwitching = false   rank 409593.4 → 409593.4  (+0.00%)
-  loadAsRead(now) = 39.6%   loadAsRead(proj) = 39.6%   (must be equal — V73)
+  VERDICT  worthSwitching = true   rank 201823.0 → 204664.6  (+1.41%)
+  loadAsRead(now) = 74.2%   loadAsRead(proj) = 74.2%   (must be equal — V73)
 
 RECONCILE — the game's own sources vs the model
-  Combat Power   total      341,785  mult 3.8440  additive     88,156 of     88,914  (short 0.85%)  via: CombatPower, Power
-  Mining Power   total       10,406  mult 1.5650  additive      6,594 of      6,649  (short 0.83%)  via: Power
-  Salvage Power  total       13,382  mult 1.5623  additive      8,558 of      8,565  (short 0.09%)  via: Power, SalvagePower
-  Precision      total       18,579  mult 1.0000  additive     18,579 of     18,579  (short 0.00%)  via: Precision
+  Combat Power   total      245,106  mult 2.8989  additive     84,114 of     84,552  (short 0.52%)  via: CombatPower, Power
+  Mining Power   total       12,118  mult 1.4474  additive      8,372 of      8,372  (short 0.00%)  via: MiningPower, Power
+  Salvage Power  total        8,350  mult 1.4586  additive      5,725 of      5,725  (short 0.00%)  via: Power, SalvagePower
+  Precision      total       11,286  mult 1.0000  additive     11,286 of     11,286  (short 0.00%)  via: Precision
 
 MAIN POWER the model subtracts as each gun's own (GetMainPowerSum):
-  65,276
+  63,501

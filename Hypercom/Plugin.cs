@@ -21,7 +21,7 @@ namespace Hypercom
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "fulgan.vanguardgalaxy.hypercom";
-        public const string Version = "0.3.3";
+        public const string Version = "0.4.0";
 
         internal static ManualLogSource Log;
 
@@ -213,6 +213,10 @@ namespace Hypercom
         // allocation, and rebuilding one every OnGUI frame would leak a few MB a second.
         private Texture2D _qr;
         private string _qrForCode;
+        // `copied` is shown for a few seconds rather than until the next repaint: OnGUI runs every frame, so a
+        // flag cleared on the following pass is a message nobody can read.
+        private float _copiedUntil;
+        private bool _copyFailed;
         private int _addressIndex;
         private string _pairMessage;
 
@@ -251,20 +255,47 @@ namespace Hypercom
                 var addresses = HttpServer.LanCandidates();
                 var address = _server.LanAddress();
                 var current = addresses.Find(a => a.Address == address);
-                GUILayout.Label($"Scan this with your phone's camera, or open <b>{_server.LanUrl}</b> "
-                                + $"and enter the code. Expires in <b>{session.SecondsLeft}s</b>.");
+                GUILayout.Label($"Scan this with your phone's camera, copy the link, or open "
+                                + $"<b>{_server.LanUrl}</b> and enter the code. Expires in <b>{session.SecondsLeft}s</b>.");
 
+                var pairUrl = _server.PairUrl(session.Code);
                 if (_qr == null || _qrForCode != session.Code)
                 {
                     QrTexture.Release(ref _qr);
                     // Over capacity → the encoder returns null rather than a truncated symbol, and the URL
                     // below is then the only way in. A truncated QR would still scan, to the wrong place.
-                    _qr = QrTexture.Build(VG.Util.QrCode.Encode(Encoding.UTF8.GetBytes(_server.PairUrl(session.Code))));
+                    _qr = QrTexture.Build(VG.Util.QrCode.Encode(Encoding.UTF8.GetBytes(pairUrl)));
                     _qrForCode = session.Code;
                 }
                 if (_qr != null) GUILayout.Label(_qr, GUILayout.Width(_qr.width), GUILayout.Height(_qr.height));
-                else GUILayout.Label($"<color=#e0a030>URL too long for a QR — type it in:</color> {_server.PairUrl(session.Code)}");
+                else GUILayout.Label($"<color=#e0a030>URL too long for a QR, copy it or type it in:</color> {pairUrl}");
 
+                // SCANNING NEEDS A SECOND DEVICE WITH A WORKING CAMERA aimed at this monitor, which is a
+                // precondition this panel cannot check. The same link, on the clipboard, reaches a device that
+                // has no camera or cannot focus on a screen, and it is the ONLY route on the branch above,
+                // where the symbol could not be built at all.
+                //
+                // What goes on the clipboard is the pairing URL, which carries a short-lived attempt-limited
+                // CODE and never a token: any process on this machine can read the clipboard, so what is put
+                // there must be no more than the QR already shows to every camera in the room.
+                GUILayout.BeginHorizontal();
+                if (GUILayout.Button("Copy pairing link", GUILayout.Width(140f)))
+                {
+                    GUIUtility.systemCopyBuffer = pairUrl;
+                    // A button that reports nothing is indistinguishable from one that did nothing, and
+                    // `systemCopyBuffer` is a Unity static with no success to return, so the claim is read
+                    // BACK out of the buffer rather than assumed from the assignment.
+                    _copiedUntil = GUIUtility.systemCopyBuffer == pairUrl ? Time.realtimeSinceStartup + 3f : 0f;
+                    _copyFailed = _copiedUntil == 0f;
+                }
+                if (_copyFailed)
+                    GUILayout.Label("<color=#e0a030>clipboard unavailable, select the URL above instead</color>");
+                else if (Time.realtimeSinceStartup < _copiedUntil)
+                    GUILayout.Label("<color=#7fc8a0>copied</color>");
+                GUILayout.EndHorizontal();
+
+                // The link is long and a copy can fail; the CODE alone is always typeable (8 Crockford base32
+                // characters, no I/L/O/U) against the plain URL above.
                 GUILayout.Label($"Code: <b>{session.Code}</b>   ({session.AttemptsLeft} wrong "
                                 + $"attempt{(session.AttemptsLeft == 1 ? "" : "s")} allowed)");
 
@@ -309,6 +340,10 @@ namespace Hypercom
             QrTexture.Release(ref _qr);
             _qrForCode = null;
             _pairMessage = null;
+            // A new session means a new link, so a "copied" from the previous one would name a code that is
+            // already spent, and a clipboard failure is worth retrying rather than remembering forever.
+            _copiedUntil = 0f;
+            _copyFailed = false;
         }
 
         private void DrawDeviceList()

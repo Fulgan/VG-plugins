@@ -7,6 +7,89 @@ Each mod versions on its own, so a date can carry one mod or all of them. Every 
 
 ---
 
+## 2026-08-26: Hypercom 0.4.0 | Station Assistant 1.1.6 | Quick Save 1.0.1 | CIC Watch 0.1.0
+
+A new mod, the biggest Hypercom yet, and a rework of the settings window.
+
+### Hypercom 0.4.0
+
+**Better suggestions**
+
+- Some guns hit harder than their number suggests. Suggestions now know which.
+- Torpedo bays are now ranked.
+- Potential workshop quality improvement is now included: the optimizer can either take into account the current
+  stats of your gear or use the stats as if all items are upgraded to the max. This lets it balance upgraded items
+  vs unupgraded ones.
+- You can now specify how to balance offence and defence (to some degree).
+- **alternate builds** shows the same search under a looser or tighter loss limit, so you can see what trading
+  defence for damage costs before you take it.
+- The officers, gear and booster cards now use the same controls and logic. The card design has also been improved
+  and simplified (in particular the pinning).
+
+**Easier to read**
+
+- The gear tab, the map and the tab strip fit a phone.
+- A **Copy pairing link** button, for a phone that will not scan the QR code.
+- Hovering a swap now shows which item you would be replacing.
+- Hovering a crew card now has a tooltip.
+- Booster cards show what resonance is worth.
+- A new **Updates** tab, with a button that checks whether newer versions of the mods are out.
+
+**Fixed**
+
+- Gear plans no longer swap a gun for a weaker one for no real gain (well, not as much as before anyway).
+- **Suggest guns** could not see your hull, armour or shield, so it would trade away any amount of them. It can
+  now, and it will not spend more of a stat you ranked than your loss limit allows.
+- The note saying why nothing was proposed no longer carries over from the ship you were just looking at.
+- Pinning a booster and applying it used to lose the pin.
+
+### Station Assistant 1.1.6
+
+- **The ammo valet loads torpedoes.** It never used to: a torpedo bay is a module rather than a gun, so the valet
+  could not see that anything aboard needed feeding.
+- **Restocking fits your hold.** Ask for twenty minutes of ammo on a small hull and it used to fill the hold with
+  whichever gun came first, leaving the others with none. It now fills half the hold at most and
+  shares it out so every gun lasts about as long.
+- **Copy stock targets from another ship**, instead of only pushing yours out to the whole fleet. Ships are listed
+  by size, role and type so you can tell them apart.
+- **Rework of the ECHO setting.** One toggle to control whether the quartermaster will restock while ECHO is
+  driving or not, and one specific to the automatic decoy deployment.
+- A new **Updates** tab, with a button that checks whether newer versions of the mods are out.
+
+**Fixed**
+
+- Turning off decoy restocking also stopped decoys being deployed.
+- A restock that stood down because ECHO was flying said it had nothing to do. It now says why.
+
+### Quick Save 1.0.1
+
+- A new **Updates** tab, with a button that checks whether newer versions of the mods are out.
+
+### CIC Watch 0.1.0
+
+First release. **CIC Watch** is a standing readout of what is in the area: a combat information centre panel
+that notifies you of important sensor changes and lists the notable contacts. Includes an editor to let you
+specify precisely what is worth listing, and announcements from the CIC to the bridge to add some flavour.
+
+**Beta branch only**: hull refits and improvements, as well as boarding, only exist in the beta branch, so this
+plugin does nothing in the release branch of the game at this time.
+
+- **You say what is worth naming, one rule per hull size.** A Size8 hull is worth a line whatever it is
+  refitted to; a Size2 rarely is unless it is `X`. Each size takes its own quality, or `off`, and a level rule
+  can be added beside them.
+- **It says which hulls can be captured, and which have to be killed for their loot.** Those are opposite
+  answers and the game shows neither: a hull carrying loot can never be boarded, and neither can anything above
+  level 80, so grinding one down to 1% is wasted time.
+- **It calls what changed, in one sentence.** Arrivals, hulls destroyed, contacts that broke off, and
+  friendlies that turn hostile, gathered into one call rather than several a second apart. A kill and a contact
+  leaving the area are named as the different things they are.
+- **The panel follows the situation.** It raises itself while something is worth watching and stays out of the
+  way otherwise, and never while you are docked. Dismissing it keeps it shut until the area clears.
+- **The hotkey ships unbound**, so it cannot collide with a key you already use. The settings tab carries a
+  button to open the panel.
+
+---
+
 ## 2026-08-17: Hypercom 0.3.3 | Station Assistant 1.1.5
 
 Bug fix.
