@@ -6,7 +6,7 @@ you specify precisely what is worth listing.
 
 It also has announcements from the CIC to the bridge to add some flavour.
 
-**Beta branch only.** Hull refits and improvements, as well as boarding, only exist in the beta branch. Since this mod makes heavy use of those, it cannot be used on the release branch and will do nothing there.
+**Needs game 0.8.2 or newer.** Hull refits and improvements, as well as boarding, arrived in 0.8.2. This mod makes heavy use of those, so on an older game it switches itself off and says so once in the log rather than showing you an empty panel.
 
 [What changed in the latest release](../RELEASE-NOTES.md).
 

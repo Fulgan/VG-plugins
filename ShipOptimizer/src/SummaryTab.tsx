@@ -87,7 +87,7 @@ function pairs<T>(leave: T[], join: T[]): { cur: T | null; next: T | null }[] {
 // The apply hub: a current→new change list per category (officers, boosters), applied to the CURRENT
 // ship via POST /loadout/apply (officers by guid, boosters by exact handle). Undo reverts the last apply.
 export default function SummaryTab({
-  officer, boosters, gear, portraitUrl, conn, crewSupported, currentShipGuid, playthrough, playthroughName, reloadNonce, apply,
+  officer, boosters, gear, portraitUrl, conn, currentShipGuid, playthrough, playthroughName, reloadNonce, apply,
 }: {
   officer: OfficerBuilder;
   boosters: BoosterBuilder;
@@ -95,7 +95,6 @@ export default function SummaryTab({
   apply: ApplyApi;   // the app's ONE apply owner — see useApply
   portraitUrl: (guid: string | null) => string | null;
   conn: Conn;
-  crewSupported: boolean; // false on the release game (crew API renamed) — hide/mute all officer bits
   docked: boolean;
   hasHangar?: boolean;   // a personal hangar at the docked station — where a refit happens
   currentShipGuid: string | null;
@@ -117,10 +116,10 @@ export default function SummaryTab({
   const oShip = officer.ship;
   const oAssigned = new Set((oShip?.assigned ?? []).filter((g): g is string => !!g));
   const oChosen = new Set((officer.result?.chosen ?? []).map((o) => o.guid));
-  const oJoin = crewSupported ? (officer.result?.chosen ?? []).filter((o) => !oAssigned.has(o.guid)) : [];
-  const oLeave = crewSupported ? officer.officers.filter((o) => oAssigned.has(o.guid) && !oChosen.has(o.guid)) : [];
+  const oJoin = (officer.result?.chosen ?? []).filter((o) => !oAssigned.has(o.guid));
+  const oLeave = officer.officers.filter((o) => oAssigned.has(o.guid) && !oChosen.has(o.guid));
   const officerPairs = pairs<Officer>(oLeave, oJoin);
-  const officerOnCurrent = crewSupported && !!oShip && oShip.guid === currentShipGuid;
+  const officerOnCurrent = !!oShip && oShip.guid === currentShipGuid;
 
   // ---- booster changes: SET diff by booster identity (equipped set → chosen set) ----
   // A booster that stays on the ship (just moved slots) is not a change — skip it.
@@ -258,7 +257,7 @@ export default function SummaryTab({
       {/* Saved loadouts */}
       <div className="sum-presets">
         <div className="sum-card-head">
-          <div><b>Saved loadouts</b> <span className="dim">— {crewSupported ? "gear + officers" : "gear"} for this ship</span></div>
+          <div><b>Saved loadouts</b> <span className="dim">— gear + officers for this ship</span></div>
         </div>
         <div className="preset-save">
           <input value={presetName} onChange={(e) => setPresetName(e.target.value)} placeholder="name this loadout…" onKeyDown={(e) => { if (e.key === "Enter") savePreset(); }} />
@@ -269,7 +268,7 @@ export default function SummaryTab({
           : shownPresets.map((p) => (
             <div key={p.name} className={`preset-row${active?.name === p.name ? " active" : ""}`}>
               <span className="preset-name">{p.name}{active?.name === p.name && <span className="dim"> · active{dirty ? " · modified" : ""}</span>}</span>
-              <span className="dim">{p.ship} · {p.gearSlots} gear{crewSupported ? ` · ${p.officers} officers` : ""}</span>
+              <span className="dim">{p.ship} · {p.gearSlots} gear · {p.officers} officers</span>
               <span className="spacer" />
               {/* Saving only records state (bridge-side) — no docking needed, unlike Restore. Offered
                   whenever the active loadout has drifted, AND whenever there's no active loadout at all:
@@ -283,8 +282,7 @@ export default function SummaryTab({
       </div>
 
       <div className="sum-sections">
-        {/* Officers — hidden on the release game (crew API unavailable) */}
-        {crewSupported && (
+        {/* Officers */}
         <div className="sum-card">
           <div className="sum-card-head">
             <div><b>Officers</b> <span className="dim">— {oShip?.name ?? "—"}{officerOnCurrent ? "" : " · not the current ship"} · {officerPairs.length} change{officerPairs.length === 1 ? "" : "s"}</span></div>
@@ -296,7 +294,6 @@ export default function SummaryTab({
               next={r.next && { label: r.next.name, color: RARITY_COLOR[r.next.rarity] ?? "#cfcfcf", img: portraitUrl(r.next.guid), tip: { officer: r.next } }} />
           )) : <div className="sum-none">No officer changes{oJoin.length || oLeave.length ? "" : " (crew unchanged)"}.</div>}
         </div>
-        )}
 
         {/* Boosters */}
         <div className="sum-card">

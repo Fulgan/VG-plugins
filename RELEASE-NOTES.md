@@ -7,6 +7,54 @@ Each mod versions on its own, so a date can carry one mod or all of them. Every 
 
 ---
 
+## 2026-08-29: Hypercom 0.5.0 | CIC Watch 0.2.0 | Station Assistant 1.1.7 | Quick Save 1.0.2
+
+Keeps up with game version 0.8.2, and CIC Watch leaves the beta branch. Every mod in this release is built
+and checked against 0.8.2.1, so the whole set runs on one game version.
+
+### Hypercom 0.5.0
+
+**Needs game 0.8.2 or newer**
+
+- The game's 0.8.2 update is out. This release is built and checked against 0.8.2.1, the current patch.
+- Support for the old 0.8.0.15 game release is dropped. If you are still on it, stay on Hypercom 0.4.0.
+- Officers, hiring and applying a crew are always available now. They used to be hidden on game builds
+  that did not carry the officer API.
+
+**Better suggestions**
+
+- Mining and salvage goals split three ways: Surface, Core (Structural for salvage) and balanced. You can 
+  specify what you want as a goal. A hull with a single hardpoint is not offered balanced, because one gun serves one layer.
+- The gear tab no longer suggests a build it calls worse in the same breath. A plan whose own score drops
+  is refused before your goal order is read, so it cannot arrive with Apply live.
+
+**Fixed**
+
+- Comparison tooltips are solid again. The panels beside the hovered item had gone see-through, so the
+  inventory table read through their numbers.
+- When every hardpoint's filter shuts a layer out, the tab says so and points at the filter rather than
+  quietly scoring you on the other layer.
+- Quieter log. Two performance lines that fired during normal use, and got noisier the bigger your save,
+  are now developer-only, and mission events no longer write a line each.
+
+### CIC Watch 0.2.0
+
+- Runs on any game build from 0.8.2, instead of the beta branch only. Hull refits, upgrade points and
+  boarding are what the panel is built on, and 0.8.2 brought them to everyone.
+- On an older game it still switches itself off, and the log line now names the game version it needs
+  rather than telling you to change branch.
+- Nothing else changed: same panel, same rules, same settings.
+
+### Station Assistant 1.1.7
+
+- Nothing you will notice. Rebuilt and checked against 0.8.2.1, released with the rest of the set.
+
+### Quick Save 1.0.2
+
+- Nothing you will notice. Rebuilt and checked against 0.8.2.1, released with the rest of the set.
+
+---
+
 ## 2026-08-26: Hypercom 0.4.0 | Station Assistant 1.1.6 | Quick Save 1.0.1 | CIC Watch 0.1.0
 
 A new mod, the biggest Hypercom yet, and a rework of the settings window.
@@ -32,7 +80,7 @@ A new mod, the biggest Hypercom yet, and a rework of the settings window.
 - A **Copy pairing link** button, for a phone that will not scan the QR code.
 - Hovering a swap now shows which item you would be replacing.
 - Hovering a crew card now has a tooltip.
-- Booster cards show what resonance is worth.
+- Booster cards show the resonance score (and the progress toward unlocking it).
 - A new **Updates** tab, with a button that checks whether newer versions of the mods are out.
 
 **Fixed**

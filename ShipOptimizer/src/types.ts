@@ -193,13 +193,8 @@ export interface Ships {
 // the beta, and they don't carry the same API — so features are hidden rather than offered-and-broken.
 // Every flag is optional: an older bridge sends no `caps` at all, and the UI must not read that as "off".
 export interface Caps {
-  crew?: boolean;         // officers/crew (release renamed the whole namespace)
   shopRefresh?: boolean;  // shop restock countdown
   conquest?: boolean;     // conquest map + umbral state
-  // The release cuts each turret's share again once the battery grows (see EXTRA_TURRET_PENALTY in fleetDps.ts).
-  // Beta 0.8.1.19 deleted that formula and compensated with enemy HP, so scoring a beta build with the ladder
-  // — or a release build without it — misprices every multi-turret set.
-  extraTurretPenalty?: boolean;
 }
 
 // One spendable currency: the identifier a barter offer's `costItem` carries, its display name, and holdings.
@@ -228,7 +223,6 @@ export interface Status {
   currencies?: Currency[] | null;
   // The beta's barter currency alone, kept for older bridges only. Prefer `currencies`.
   vanguardMarks?: number | null;
-  crewSupported?: boolean; // game >= 0.8.1.19 — gate the (future) crew optimizer
   caps?: Caps;             // what the running game build supports; absent on an older bridge
   gameVersion?: string;
   pluginVersion?: string;

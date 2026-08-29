@@ -138,10 +138,6 @@ export interface ShipPools {
     //. Absent ⇒ the capacity has not moved, which is every case but a reactor.
     capacityAll?: number;
   };
-  // Does this build cut each gun's share AGAIN as the battery grows? Release only — see `poolShare`. Off when
-  // the bridge sends no `caps`, which is the beta's behaviour and the safer default: applying a penalty a build
-  // does not have would under-value every turret past the second on the branch this UI was written against.
-  extraTurretPenalty?: boolean;
 }
 
 /**
@@ -161,7 +157,6 @@ export function poolsFromStatus(s: {
   combatReactorOutputCP?: number | null;
   critDamage?: number | null; megaCrit?: number | null;
   poolAttackSpeed?: number | null; poolReloadSpeed?: number | null; poolMagazineSize?: number | null;
-  caps?: { extraTurretPenalty?: boolean } | null;
   energyCapacity?: number | null; energyUsed?: number | null; energyUsage?: number | null;
   reactorBonus?: number | null;
   poolTorpedoPower?: number | null; torpedoLatches?: number | null;
@@ -208,7 +203,6 @@ export function poolsFromStatus(s: {
       ? { used: s.energyUsed, capacity: s.energyCapacity, mod: s.reactorBonus ?? 0,
           usage: s.energyUsage ?? undefined }
       : undefined,
-    extraTurretPenalty: s.caps?.extraTurretPenalty === true,
   };
 }
 
@@ -983,20 +977,11 @@ function poolParts(reported: number, set: Item[], energy: ShipPools["energy"],
   return { shared: reported / now / residual, mult: residual * next * setMul };
 }
 
-// The RELEASE cuts a battery's per-gun share again once it grows, on top of dividing the pool: thresholds on the
-// equivalent-turret count, checked high to low, straight out of `AbstractTurret.CalculateAttackPower`. Beta
-// 0.8.1.19 deleted this formula ("we removed the existing formula that reduced damage output of extra turrets
-// beyond the first") and raised enemy HP to compensate ∴ it is per build, never a constant.
-const EXTRA_TURRET_PENALTY: ReadonlyArray<readonly [above: number, factor: number]> = [
-  [5.9, 0.65], [4.9, 0.68], [3.9, 0.72], [2.9, 0.78], [1.9, 0.85],
-];
-
 /**
  * ONE gun's share of a power pool — the only place a pool is divided by the equivalent-turret count.
  *
- * Combat, mining and salvage all go through here because the game's own formula is per `powerStat` and applies
- * the same two steps to each: floor the divisor at 0.45, then scale by the release's ladder. Three call sites
- * dividing by hand is how one of them ends up without the ladder.
+ * Combat, mining and salvage all go through here because the game's own formula is per `powerStat` and floors
+ * the divisor at 0.45 for each. Three call sites dividing by hand is how one of them ends up without the floor.
  *
  * The floor matters at the bottom of the range: a lone Tiny gun rates 0.45, and `pool / 0.45` is more than the
  * pool — the game floors the DIVISOR, so a single small gun cannot out-damage the whole pool.
@@ -1019,11 +1004,8 @@ export const powerFactor = (it: Item): number => {
   return m != null && Number.isFinite(m) && m > 0 ? m : 1;
 };
 
-export function poolShare(pool: number, nEq: number, bg: ShipPools): number {
-  const eq = Math.max(0.45, nEq);
-  if (!bg.extraTurretPenalty) return pool / eq;
-  for (const [above, factor] of EXTRA_TURRET_PENALTY) if (eq > above) return (pool / eq) * factor;
-  return pool / eq;
+export function poolShare(pool: number, nEq: number): number {
+  return pool / Math.max(0.45, nEq);
 }
 
 export function setDps(set: Item[], bg: ShipPools): number {
@@ -1088,7 +1070,7 @@ export function setDps(set: Item[], bg: ShipPools): number {
     const vsLayer = vsLayerCredit(
       contribs.reduce((n, c) => n + c.vsShield, 0) + loc.vsShield,
       contribs.reduce((n, c) => n + c.vsArmor, 0) + loc.vsArmor);
-    total += ((own + poolShare(shared, nEq, bg) * rating(it)) * mult * powerFactor(it) / 5)
+    total += ((own + poolShare(shared, nEq) * rating(it)) * mult * powerFactor(it) / 5)
       * speedRatio(it, attackSpeed + loc.attackSpeed, reloadSpeed + loc.reloadSpeed, magazineSize + loc.magazineSize)
       * crit
       * (1 + typed + allDamage)
@@ -1163,7 +1145,7 @@ export function setPower(set: Item[], bg: ShipPools, act: PowerActivity): number
   let total = 0;
   for (const it of set)
     if (catOf(it) === act)
-      total += (own(contributionOf(it)) + poolShare(shared, nEq, bg) * rating(it)) * mult * powerFactor(it);
+      total += (own(contributionOf(it)) + poolShare(shared, nEq) * rating(it)) * mult * powerFactor(it);
   return total;
 }
 
@@ -1214,7 +1196,7 @@ export function setPowerByLayer(set: Item[], bg: ShipPools, act: PowerActivity, 
   const nEq = count && count > 0 ? count : mine.reduce((n, it) => n + rating(it), 0);
   if (!(nEq > 0)) return null;
   const mainOf = (it: Item) => (act === "Mining" ? contributionOf(it).miningPower : contributionOf(it).salvagePower);
-  return own.reduce((n, it) => n + (mainOf(it) + poolShare(shared, nEq, bg) * rating(it)) * mult * powerFactor(it), 0);
+  return own.reduce((n, it) => n + (mainOf(it) + poolShare(shared, nEq) * rating(it)) * mult * powerFactor(it), 0);
 }
 
 /** Which non-combat pool a set is judged against. Mining wins a mixed non-combat battery — one number has to be
@@ -1730,7 +1712,10 @@ export type GoalSign = -1 | 0 | 1;
 
 /** What a goal may rank. Each is a figure the objective computes for a WHOLE build and that `reconcile.test.ts`
  *  covers — a key nothing validates would be an opinion with no measurement under it. */
-export const GOAL_KEYS = ["dps", "combat", "precision", "mining", "salvage", "hull", "armor", "shield"] as const;
+export const GOAL_KEYS = ["dps", "combat", "precision",
+  "miningSurface", "miningCore", "miningBalanced",
+  "salvageSurface", "salvageStructural", "salvageBalanced",
+  "hull", "armor", "shield"] as const;
 export type GoalKey = (typeof GOAL_KEYS)[number];
 
 /** One build's figures, in the units the panel already shows. A key this build has no reading for is absent, and
@@ -1856,8 +1841,29 @@ export function bracketed(p: ShipPools): ShipPools {
   };
 }
 
+/**
+ * What a BATTERY reaches per layer, in the units the panel's own Surface and Core rows use.
+ *
+ * A pool is the wrong figure for a ranked key even though it is the easy one: pooled substats can rise while the
+ * throughput they are supposed to serve falls, and then a key reading the pool authorises a plan the objective
+ * scores lower. These come from `setPowerByLayer`, the same function the panel prints, so one quantity
+ * has one owner. Absent where no fitted gun covers that layer, which is what makes an unreachable layer legible
+ * rather than a zero.
+ */
+export interface PowerReading {
+  miningSurface?: number | null;
+  miningCore?: number | null;
+  salvageSurface?: number | null;
+  salvageStructural?: number | null;
+}
+
+/** Both layers of one activity as a balanced figure: the bottleneck, which is what `setPowerTargeted` ranks. */
+const balancedOf = (a?: number | null, b?: number | null) =>
+  a != null && b != null ? Math.min(a, b) : undefined;
+
 export function goalReadingOf(pools: ShipPools | null | undefined, rank?: Rank,
-                              layers?: { hull?: number | null; armor?: number | null; shield?: number | null }): GoalReading {
+                              layers?: { hull?: number | null; armor?: number | null; shield?: number | null },
+                              power?: PowerReading | null): GoalReading {
   if (!pools) return {};
   // EVERY RANKED READING IS BRACKETED, at the one owner rather than at each caller: a reading that skipped it
   // would be the same defect back in whichever surface forgot.
@@ -1865,12 +1871,32 @@ export function goalReadingOf(pools: ShipPools | null | undefined, rank?: Rank,
   return {
     combat: p.poolCombatPower,
     precision: p.poolPrecision,
-    mining: p.poolMiningPower,
-    salvage: p.poolSalvagePower,
+    // The activity keys are LAYER figures off the candidate battery, never `poolMiningPower`/`poolSalvagePower`:
+    // a pool is a property of the whole ship's stat lines, and ranking on it cost.
+    miningSurface: power?.miningSurface ?? undefined,
+    miningCore: power?.miningCore ?? undefined,
+    miningBalanced: balancedOf(power?.miningSurface, power?.miningCore),
+    salvageSurface: power?.salvageSurface ?? undefined,
+    salvageStructural: power?.salvageStructural ?? undefined,
+    salvageBalanced: balancedOf(power?.salvageSurface, power?.salvageStructural),
     dps: rank && rank[0] === 2 ? rank[1] : undefined,
     hull: layers?.hull ?? undefined,
     armor: layers?.armor ?? undefined,
     shield: layers?.shield ?? undefined,
+  };
+}
+
+/**
+ * Both layers of both activities for one battery — the ONE place a `PowerReading` is built, so a caller cannot
+ * assemble a half of it and no surface can disagree with the panel about what a layer reaches.
+ */
+export function powerReadingOf(set: Item[], bg: ShipPools): PowerReading {
+  return {
+    miningSurface: setPowerByLayer(set, bg, "Mining", "Surface"),
+    miningCore: setPowerByLayer(set, bg, "Mining", "Core"),
+    salvageSurface: setPowerByLayer(set, bg, "Salvage", "Surface"),
+    // The game's Core layer under salvage's own name for it. ONE enum value, so the reading is the same call.
+    salvageStructural: setPowerByLayer(set, bg, "Salvage", "Core"),
   };
 }
 
@@ -1882,13 +1908,37 @@ export function goalReadingOf(pools: ShipPools | null | undefined, rank?: Rank,
  * is enough to refuse the class of plan that prompted this: a battery whose Combat Power FALLS is not an upgrade
  * to a combat ship, whatever it does for a stat further down.
  */
-export function defaultGoalOrder(role?: string | null): GoalKey[] {
+export function defaultGoalOrder(role?: string | null, hardpoints?: number): GoalKey[] {
+  // ONE hardpoint cannot balance anything: a single gun serves one layer ∴ `min` is structurally 0 and a balanced
+  // default would state a goal no build on that hull can meet. Which layer that gun is for is a real question, but
+  // it is the player's, not a default ∴ no opinion at all, and the objective's own floor decides as it always did.
+  const balanced = hardpoints == null || hardpoints > 1;
   switch (role) {
     case "Combat": return ["combat"];
-    case "Mining": return ["mining"];
-    case "Salvaging": return ["salvage"];
+    case "Mining": return balanced ? ["miningBalanced"] : [];
+    case "Salvaging": return balanced ? ["salvageBalanced"] : [];
     default: return [];      // no role, no default opinion — the objective behaves exactly as before
   }
+}
+
+/**
+ * The keys worth OFFERING on this hull, in `GOAL_KEYS` order.
+ *
+ * A key nothing can read orders nothing (`goalSign`), so listing it in the picker invites a player to state a goal
+ * the app will then silently ignore — V48's shape. Two exclusions, both structural rather than cosmetic:
+ * a balanced key on a single hardpoint (see `defaultGoalOrder`), and an activity the hull's own hardpoints cannot
+ * serve at all.
+ */
+export function goalKeysFor(hardpoints: number, acts: readonly PowerActivity[]): GoalKey[] {
+  const mining = acts.includes("Mining"), salvage = acts.includes("Salvage");
+  return GOAL_KEYS.filter((k) => {
+    if (k === "miningBalanced" || k === "salvageBalanced") {
+      if (hardpoints <= 1) return false;
+    }
+    if (k.startsWith("mining")) return mining;
+    if (k.startsWith("salvage")) return salvage;
+    return true;
+  });
 }
 
 /**
@@ -2052,6 +2102,19 @@ export function liveVeto(recorded: { sig: string; key: GoalKey } | null | undefi
 }
 
 /**
+ * Has the ranked value FALLEN by more than the band? Losses only — a rise and a tie both answer false.
+ *
+ * Tier-aware, and the asymmetry is deliberate: a tier RISE is a different job rather than a bigger number, so
+ * it is never a loss, while a tier DROP always is. Within a tier the comparison is a fraction of the baseline, so
+ * one predicate serves a DPS index and a Mining Power figure alike.
+ */
+export function rankLoses(plan: Rank, now: Rank, band = OBJECTIVE_TIE): boolean {
+  if (plan[0] !== now[0]) return plan[0] < now[0];
+  if (!(now[1] > 0)) return plan[1] < now[1];
+  return (now[1] - plan[1]) / now[1] > band;
+}
+
+/**
  * Is this plan worth offering — the ONE gate, with the order and the floor each owning the case it can answer.
  *
  * V17 puts the worth-it floor in the objective rather than in the tab, so the rule about WHEN the floor still
@@ -2078,6 +2141,12 @@ export function goalAccepts(order: readonly GoalKey[], fitted: GoalReading, plan
   // decides whether a plan is OFFERED — a constraint applied at one of the two is the half-applied helper V17
   // names.
   if (allow != null && allowanceBreach(order, fitted, planned, allow)) return false;
+  // A MEASURABLE LOSS IN THE RANKED VALUE IS NEVER OFFERED, and this sits ABOVE the order for the same reason the
+  // allowance does. An order sequences keys; it cannot make a worse battery into a better one, and a key that reads
+  // a POOL can rise while the battery's own throughput falls (a gun carrying a second pooled line while giving up
+  // main power and layer coverage does exactly that). Losses only: a GAIN on the player's first key still decides,
+  // which is what keeps the order theirs. Same band `goalSign` uses ∴ "identical" stays a tie, not a refusal.
+  if (rankLoses(plan, now, band)) return false;
   if (!order.length) return worthSwitching(plan, now);
   const signs = goalVector(order, planned, fitted, band);
   if (signs.every((s) => s === 0)) return worthSwitching(plan, now);
@@ -2104,8 +2173,13 @@ export function goalUnread(order: readonly GoalKey[], fitted: GoalReading, plann
 
 /** How a refused key reads on screen. */
 export const GOAL_LABEL: Record<GoalKey, string> = {
-  dps: "DPS", combat: "Combat Power", precision: "Precision", mining: "Mining Power",
-  salvage: "Salvage Power", hull: "Hull", armor: "Armor", shield: "Shield",
+  dps: "DPS", combat: "Combat Power", precision: "Precision",
+  // The game's own vocabulary, and it is not symmetric: `TargetLayerExtensions.GetSalvageName` renders the Core
+  // layer as "Structural" for salvage while mining calls it "Core". One enum, two words.
+  miningSurface: "Mining · Surface", miningCore: "Mining · Core", miningBalanced: "Mining · balanced",
+  salvageSurface: "Salvage · Surface", salvageStructural: "Salvage · Structural",
+  salvageBalanced: "Salvage · balanced",
+  hull: "Hull", armor: "Armor", shield: "Shield",
 };
 
 /** What layer a hardpoint is FOR. `any` leaves the choice to the meta search. */
@@ -2275,9 +2349,12 @@ export function optimizeTurretSet(slots: SlotChoice[], bg: ShipPools, maxPasses 
       // A ranked key is a figure of the SHIP ∴ the hardpoint deltas are folded onto the reported pools, and
       // the layers are projected from the same assignment — they are vitals rather than pools, so they arrive by
       // their own callback or not at all.
+      // The activity keys are read off the CANDIDATE battery with the same `bg` the rank uses ∴ no callback: the
+      // set is right here, and a projection assembled anywhere else could disagree with the ranking beside it.
       reading: (chosen, rank) =>
         goalReadingOf(poolsWithModules(goal.pools, gunsOut, gunsIn(chosen)), rank,   // goal-projection
-                      goal.layers?.(gunsIn(chosen))),
+                      goal.layers?.(gunsIn(chosen)),
+                      powerReadingOf([...fixed, ...gunsIn(chosen).filter((x): x is Item => !!x)], bg)),
     } : undefined,
     score: (chosen) => setRank([...fixed, ...chosen.values()], bg, target, act),
     alone: (it) => setRank([...fixed, it], bg, target, act),
@@ -2364,8 +2441,11 @@ export function optimizeModuleSet(
       order: goal.order,
       fitted: goal.fitted,
       allow: goal.allow,
+      // A module search does not move a gun ∴ the battery is fixed and its layer figures are read from it under
+      // the CANDIDATE modules, which is what changes the pool the layers divide.
       reading: (chosen, rank) =>
-        goalReadingOf(scored ?? pools, rank, goal.layers?.(inn(chosen))),
+        goalReadingOf(scored ?? pools, rank, goal.layers?.(inn(chosen)),
+                      powerReadingOf(turrets, background(scored ?? pools, turrets))),
     },
     score: (chosen) => {
       const next = poolsWithModules(pools, out, inn(chosen));
@@ -2477,7 +2557,9 @@ export function optimizeShipSet({
         const mods = inn(chosen);
         // BOTH halves of the candidate reach the projection: this search moves guns as well as modules, and a
         // layer read off the fitted battery would price every candidate's armor the same.
-        return goalReadingOf(shipPoolsFor(chosen, mods), rank, goal.layers?.(mods, gunsIn(chosen)));
+        const guns = gunsIn(chosen).filter((x): x is Item => !!x);
+        return goalReadingOf(shipPoolsFor(chosen, mods), rank, goal.layers?.(mods, gunsIn(chosen)),
+                             powerReadingOf(guns, bgFor(mods)));
       },
     },
     feasible: floor && ((chosen) => {
@@ -2581,7 +2663,10 @@ export function frontier(search: ShipSearch, steps: readonly number[]): Frontier
       rank,
       // BOTH halves of the candidate reach the projection, or a row prints the fitted battery's layers beside a
       // battery the search actually replaced.
-      reading: goalReadingOf(ranked, rank, goal.layers?.(mods, picked)),
+      // `guns` already carries the pinned hardpoints, and the background is the one the rank was taken against ∴
+      // the layer figures and the rank beside them describe the same battery.
+      reading: goalReadingOf(ranked, rank, goal.layers?.(mods, picked),
+                             powerReadingOf(guns, background(projected, search.fittedTurrets))),
     });
   }
   return out;

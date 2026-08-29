@@ -37,18 +37,15 @@ Ranks your crew by the skills you care about and fills the ship you pick, and it
 station worth hiring over what you have. Officers are shared between ships, so crewing one doesn't take
 anyone off another.
 
-Beta branch only. Crew moved there, and the release branch is going away in a few weeks, so making it work
-there as well is more effort than it is worth.
-
 ### Boosters
 
 Picks the strongest boosters for your slots, looking at your ship, your inventory and the armory. You can
-tie a slot to one type, and it shows how close each resonance is to unlocking. (resonance is beta-only)
+tie a slot to one type, and it shows how close each resonance is to unlocking.
 
 ### Ship gear
 
 Each slot with what's in it next to what it suggests, ranked on a DPS index rather than the main stat alone
-([how that works](#how-gear-is-judged)). Filt er by activity (combat, mining, salvage), by type, by damage
+([how that works](#how-gear-is-judged)). Filter by activity (combat, mining, salvage), by type, by damage
 or by aspect, and lock a slot to keep what's already fitted. Below that: what the ship's power adds up to,
 what your reactor is using now and what it would use after the change, and how your ship is holding up.
 
@@ -72,20 +69,41 @@ save can post the difference it finds as a correction entry.
 
 ## How gear is judged
 
-Two modes, switched with the button in the Gear tab header.
+Two ranking modes, picked with the segmented control in the Gear tab header.
 
 **simple** uses the main stat, like the game shows it.
 
 **expanded** (the default) starts from that number and adds what the item's own bonuses do: fire rate,
 crit, damage bonuses and aspects. Fire rate is the real one, with reload counted in.
 
-The rest is what makes a gun better or worse than its number looks:
+Beside them, **current** or **full potential** decides what an item *is*: the stats it rolls today, or the
+stats it would roll with workshop quality maxed. Quality never moves the main stat, only the lines under it,
+so a gun's headline hides it completely. **full potential** is the one to use when you are deciding what to
+upgrade; **current** when you are deciding what to fly tonight. The officers tab shares this control, so
+changing it in either place changes both.
 
-- **A gun's main power is its own (beta).** A harder hitting gun hits harder itself. It used to be
-  averaged over all your guns, the last beta stopped that.
-- **Release and beta don't count it the same way.** Release still averages, beta doesn't. The app uses the
-  beta rule for both, so on release the order can be off (the more guns you have, the bigger the
-  difference). Worth checking the game's own numbers before you buy.
+### What "better" means is yours to set
+
+**goal order** is the list of measurements you care about on this ship, in the order you care about them.
+The first is what the search tries to raise; the rest are read top down, each one breaking a tie the one
+above it left. A hull is only offered the goals its own hardpoints can serve, so a one-hardpoint miner is
+never asked to balance two ore layers. Rank nothing and the objective has no opinion beyond its own score.
+
+**allow N% loss** is the only control that can price a trade. An order can sequence goals but cannot say
+what one is worth in terms of another, and rather than invent an exchange rate, this asks how much of the
+build you already fly you are willing to spend: a plan costing any goal below the first more than that
+share is refused. The first goal is exempt, because it is the one being bought.
+
+**warn over N% drop** reports instead of refusing. Anything tracked that falls further than this is named
+in the note under the plan, with the figure, so a cost you chose to accept is still said out loud.
+
+**alternate builds** runs the same search at a looser and a tighter allowance and shows what each would
+buy, so you can read the price of a trade before you take it.
+
+### What makes a gun better or worse than its number looks
+
+- **A gun's main power is its own.** A harder hitting gun hits harder itself, instead of being averaged
+  over all your guns.
 - **Substats are shared.** Precision (crit chance), crit damage, damage bonuses and fire rate are read
   from all your guns at once, so a bonus on one gun helps the others. That's why a small gun with good
   substats can still win a slot, and why the app looks at all your guns together instead of one slot at a
@@ -110,16 +128,19 @@ The rest is what makes a gun better or worse than its number looks:
   So a gun that draws nothing can beat a bigger one just by keeping you in a better band. Swaps are
   counted together, because two guns that each fit on their own can still push you over a line. The tab
   shows what your usage would become.
-- **Combat, mining and salvage aren't compared.** Different jobs, so no percentage between them. That
-  choice is yours.
-- **Mining and salvage have two layers.** Surface and Core. The score is the worse of the two, so
-  ignoring Core doesn't win. If you don't own the gear for both, it says so.
+- **Combat, mining and salvage aren't compared.** Different jobs, so no percentage between them.
+- **Mining and salvage have two layers.** Surface and Core, Structural in place of Core for salvage. You
+  say which one you are after: rank Surface, rank Core, or rank balanced, which scores the worse of the
+  two so ignoring one layer doesn't win. Balanced is only offered on a hull with more than one hardpoint,
+  since one gun serves one layer. If your filters shut a layer out on every hardpoint, it says so and
+  names the filter.
 - **Small gains are ignored.** Under 1% isn't worth the trip to the workshop. Changing job (a weapon where
   a mining laser was) always counts, and so does filling an empty slot.
-- **How it picks.** Best item for each slot first, then it keeps swapping one slot at a time until nothing
-  gets better. Each item is only used once.
-- **The numbers come from the game.** It reads the game's own stats instead of redoing the maths. Splash
-  damage isn't counted (it depends on the fight).
+- **How it picks.** It starts twice over, from the best item for each slot and from what you already fly,
+  and keeps whichever scores higher, so a suggestion is never a downgrade of your current build. Then it
+  re-picks one slot at a time until a full pass changes nothing. Each item is used once. It is not
+  guaranteed to find the single best answer: every slot changes what every other slot is worth, so it can
+  settle on a good one rather than the best one.
 
 ## Using it
 

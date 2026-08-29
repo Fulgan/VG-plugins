@@ -100,9 +100,9 @@ namespace VG.Loadout
 
     public static class LoadoutCore
     {
-        // Module slots to snapshot. Hardpoint/Booster are array-based (handled separately). HangarBay is
-        // beta-only, so it's added by reflection only when the enum defines it (keeps one binary valid on
-        // both game versions).
+        // Module slots to snapshot. Hardpoint/Booster are array-based (handled separately). HangarBay is absent
+        // before game 0.8.2, so it's added by reflection only when the enum defines it (keeps one binary valid on
+        // every game version).
         public static readonly EquipmentSlot[] ModuleSlots = BuildModuleSlots();
         private static EquipmentSlot[] BuildModuleSlots()
         {
@@ -388,9 +388,9 @@ namespace VG.Loadout
         }
 
         // Apply a partial, additive transient: equip each gear slot's best match (finder plan) and assign
-        // officers by guid. Touches ONLY the pushed slots; captures each prior occupant for undo. Displaced gear goes to the armory. Officers gate on `crewSupported`. Returns the
+        // officers by guid. Touches ONLY the pushed slots; captures each prior occupant for undo. Displaced gear goes to the armory. Returns the
         // undo record (null only if there is no ship); `changed` = # slots actually altered.
-        public static AppliedTransient ApplyTransient(SpaceShipData ship, LoadoutPreset gear, List<OfficerAssign> officers, bool crewSupported, out int changed)
+        public static AppliedTransient ApplyTransient(SpaceShipData ship, LoadoutPreset gear, List<OfficerAssign> officers, out int changed)
         {
             changed = 0;
             if (ship == null) return null;
@@ -416,18 +416,15 @@ namespace VG.Loadout
                     catch (Exception ex) { Debug.LogWarning($"[VG.Loadout] apply gear {e.slot.kind}{e.slot.slot} failed: {ex.Message}"); }
                 }
 
-            // Officer assignment lives in ApplyOfficers (touches SpaceShipData.officers/OfficerData) and is
-            // only invoked when crewSupported — so it never JITs on a game version without the Personnel
-            // crew API.
-            if (crewSupported && officers != null)
+            // Officer assignment lives in ApplyOfficers, which owns every touch of SpaceShipData.officers.
+            if (officers != null)
                 changed += ApplyOfficers(ship, officers, t);
 
             if (changed > 0) RefreshView(ship);
             return t;
         }
 
-        // Assign officers by guid to their slots on the ship, recording undo entries. Isolated so its
-        // OfficerData typeref only resolves on crew-capable versions (caller gates on crewSupported).
+        // Assign officers by guid to their slots on the ship, recording undo entries.
         private static int ApplyOfficers(SpaceShipData ship, List<OfficerAssign> officers, AppliedTransient t)
         {
             if (ship.officers == null) return 0;
@@ -490,9 +487,7 @@ namespace VG.Loadout
                 catch (Exception ex) { Debug.LogWarning($"[VG.Loadout] undo gear {g.slot.kind}{g.slot.slot} failed: {ex.Message}"); }
             }
 
-            // Officer undo is isolated in UndoOfficers (OfficerData typeref). t.officers is only ever
-            // populated by ApplyOfficers, which runs solely on crew-capable versions — so on other
-            // versions this stays empty and UndoOfficers never JITs.
+            // t.officers is populated only by ApplyOfficers ∴ a gear-only apply undoes without touching it.
             if (t.officers.Count > 0)
                 restored += UndoOfficers(ship, t);
 

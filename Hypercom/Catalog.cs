@@ -282,9 +282,9 @@ namespace Hypercom
                 ["size"] = b.equipmentSize.ToString(),
                 // ⚠ `fireRate` is a PERIOD in seconds (`nextFireTime = Time.time + fireRate`), not a rate.
                 //
-                // Read by NAME rather than through the `FireRate` property: that property is beta-only
-                // (`the build checks` reports `get_FireRate` absent on release), and a hard reference to it
-                // would throw `MissingMethodException` the first time this method is JITted on that branch —
+                // Read by NAME rather than through the `FireRate` property, so a build that moves or renames
+                // the property costs this ONE field rather than throwing `MissingMethodException` the first
+                // time this method is JITted —
                 // taking the whole dump down rather than leaving one field null.
                 ["fireRate"] = Compat.PrivateNum(tb, "fireRate"),
                 ["reloadSpeed"] = Compat.PrivateNum(tb, "reloadSpeed"),
@@ -356,7 +356,7 @@ namespace Hypercom
                 ["minLevel"] = b.minLevel,
                 ["maxLevel"] = b.maxLevel,
                 ["rarities"] = Rarities(b),
-                ["inGeneralShop"] = Compat.Get(b, "IncludedInGeneralShop"), // beta-only
+                ["inGeneralShop"] = Compat.Get(b, "IncludedInGeneralShop"),
                 ["damageType"] = damageType,
                 ["powerStat"] = powerStat,
                 ["mainStats"] = Stats(MainStatsF?.GetValue(b) as IEnumerable),

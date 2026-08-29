@@ -199,7 +199,9 @@ namespace Hypercom
             entry.Remove("failed");
             Store.Append(entry);
             var what = row.TryGetValue("name", out var n) ? n?.ToString() : null;
-            Plugin.Log.LogInfo($"mission {ev}: {what ?? "?"}");
+            // Debug level: the row is already in `hypercom-missions.jsonl`, which is what serves it back. A second
+            // copy per mission event in the player's log adds nothing, and BepInEx keeps Debug off disk by default.
+            Plugin.Log.LogDebug($"mission {ev}: {what ?? "?"}");
         }
 
         private static string SafeStation()

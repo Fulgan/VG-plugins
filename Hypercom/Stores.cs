@@ -33,7 +33,7 @@ namespace Hypercom
         //   material STATION-LOCAL, materials ONLY — each starbase has its own, which is the "where is my
         //            stuff" problem the Stuff tab answers
         //
-        // Deliberately NOT included: `GamePlayer.dataInventory` (beta-only, a fourth store). It holds
+        // Deliberately NOT included: `GamePlayer.dataInventory`, a fourth store. It holds
         // blueprints, sell-only oddments and crafting fragments — nothing worth optimising or hunting for,
         // so surfacing it would be clutter.
         internal static readonly string[] All = { Cargo, Armory, Material };
@@ -142,7 +142,7 @@ namespace Hypercom
             // TORPEDO BAY, whose numbers cannot ride on the turret fields above: `fireRate` there is a RATE and
             // a bay's is a PERIOD, so one key holding both would be wrong on whichever it was not named for.
             // Prefab constants ∴ they travel with a loose candidate too, which is what lets a bay be compared
-            // before it is fitted. Private fields with beta-only properties over them ∴ read by name.
+            // before it is fitted. Private fields ∴ read by name.
             var bay = eq as TorpedoBayModule;
             dto["torpedoFireDelay"] = bay != null ? (object)Compat.PrivateNum(bay, "fireRate") : null;
             dto["torpedoReloadTime"] = bay != null ? (object)Compat.PrivateNum(bay, "reloadSpeed") : null;
@@ -192,7 +192,7 @@ namespace Hypercom
             // fitted (ship draw multiplier + aspects) and base when it is in storage, so comparing an equipped
             // item against a stored one on that field alone reports a difference between two identical items.
             dto["powerUsageBase"] = eq != null ? (object)eq.capacityCost : null;
-            dto["emp"] = turret != null ? Compat.Get(turret, "empPerSecond") : null; // beta-only
+            dto["emp"] = turret != null ? Compat.Get(turret, "empPerSecond") : null;
             dto["range"] = turret != null ? (object)turret.range : null;             // _range × (1 + WeaponRange)
             var mf = item.GetManufacturer();                                          // brand, e.g. "Spirit Design"
             dto["manufacturer"] = mf.HasValue ? mf.Value.GetDisplayName() : null;
@@ -203,14 +203,14 @@ namespace Hypercom
             dto["aspectSlots"] = eq?.aspectSlots?.Count ?? 0; // slot count is fixed per item (identity)
             dto["stats"] = Stats(eq);
             dto["substats"] = Substats(eq);                              // "item bonuses" — non-main stat lines
-            dto["bonus"] = eq != null ? Compat.Get(eq, "qualityLevel") : null; // workshop quality (beta-only)
+            dto["bonus"] = eq != null ? Compat.Get(eq, "qualityLevel") : null; // workshop quality
             dto["bonusStat"] = BonusStat(eq);                             // the stat the quality affix boosts
             dto["resonance"] = ResonanceDto(item);                        // resonant boosters only, else null
             return dto;
         }
 
         // Resonant-booster progress + unlock bonus (null for non-resonant / when the feature doesn't exist
-        // in this game build). Reflection-only (ResonantBooster is beta-only) so one binary runs on both.
+        // in this game build). Read by name: a missing member has to cost this ONE field rather than the item.
         private static Dictionary<string, object> ResonanceDto(InventoryItemType item)
         {
             var rb = Compat.GetComponent(item, "Behavior.Equipment.Booster.ResonantBooster");
@@ -455,7 +455,7 @@ namespace Hypercom
                 return null;
             try
             {
-                if (!(Compat.Get(eq, "qualityBonusStatIndex") is int idx)) return null; // beta-only
+                if (!(Compat.Get(eq, "qualityBonusStatIndex") is int idx)) return null;
                 if (idx < 0)
                     return null;
                 var stats = eq.GetStats().ToList();
@@ -531,15 +531,46 @@ namespace Hypercom
         }
 
         // ---- officers (crew roster, read-only) ----
-        // These methods reference the Source.Personnel crew API (OfficerData). They are ONLY called from
-        // Api.Officers()/Recruits(), which gate on CrewSupported() — so on a game version without this
-        // API they never JIT and can't TypeLoad.
 
         // {ships:[{shipGuid, slots, hasDroneBay, assigned:[guid?]}], officers:[officer]}.
-        // `/officers` for a BETA build: the shared envelope (`Crew.Envelope`, one owner for the shape) over
-        // `officers`, with the typed officer DTO that carries the bonuses and skills only this branch has.
+        //
+        // The ship walk is REFLECTIVE while the per-officer DTO is typed: `officers` is the same member name on
+        // `GamePlayer` as on `SpaceShipData`, and a member that moves degrades to an empty roster rather than
+        // taking the endpoint down.
         internal static Dictionary<string, object> OfficersDto()
-            => Crew.Envelope("officers", o => OfficerDto((OfficerData)o));
+        {
+            var p = GamePlayer.current;
+
+            var ships = new List<object>();
+            foreach (var s in Compat.Enumerate(Compat.Get(p, "spaceShips")))
+            {
+                if (s == null) continue;
+                var assigned = new List<object>();
+                var slots = 0;
+                // The slot array is FIXED-LENGTH and its index IS the slot ∴ a null entry is an empty slot and
+                // has to survive as a null in the list, or a client cannot tell slot 2 from slot 0.
+                foreach (var m in Compat.Enumerate(Compat.Get(s, "officers")))
+                {
+                    slots++;
+                    assigned.Add(Compat.Get<string>(m, "guid", null));
+                }
+                ships.Add(new Dictionary<string, object>
+                {
+                    ["shipGuid"] = Compat.Get<string>(s, "guid", null),
+                    ["slots"] = slots,
+                    // Null where the build has no such method at all, ⊥ false: a client must not read "this
+                    // ship has no bay" out of "this game has no bays".
+                    ["hasDroneBay"] = Compat.Call(s, "HasDroneBay"),
+                    ["assigned"] = assigned,
+                });
+            }
+
+            var roster = new List<object>();
+            foreach (var o in Compat.Enumerate(Compat.Get(p, "officers")))
+                if (o != null) roster.Add(OfficerDto((OfficerData)o));
+
+            return new Dictionary<string, object> { ["ships"] = ships, ["officers"] = roster };
+        }
 
         // Recruitable officers at the docked station's Personnel Center + hire cost.
         internal static Dictionary<string, object> RecruitsDto()

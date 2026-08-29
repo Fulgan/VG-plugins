@@ -7,11 +7,12 @@
 // about the design is only correct if it holds.
 import { describe, expect, it } from "vitest";
 import {
-  defaultGoalOrder, goalCompare, goalDrops, goalPrefers, goalRefuses, goalSign, goalVector, GOAL_KEYS, GOAL_LABEL,
-  OBJECTIVE_TIE,
-  type GoalCandidate, type GoalKey, type GoalReading,
+  defaultGoalOrder, goalCompare, goalDrops, goalKeysFor, goalPrefers, goalReadingOf, goalRefuses, goalSign,
+  goalVector, GOAL_KEYS, GOAL_LABEL, OBJECTIVE_TIE,
+  type GoalCandidate, type GoalKey, type GoalReading, type ShipPools,
   expectedCrit,
 } from "./fleetDps";
+import { cleanOrder } from "./GearTab";
 
 const ORDER: GoalKey[] = ["combat", "armor", "precision"];
 const build = (combat: number, armor: number, precision: number): GoalReading => ({ combat, armor, precision });
@@ -126,10 +127,17 @@ describe("incumbency, copied from the officer comparator", () => {
 
 describe("the key list", () => {
   it("offers only figures the reconciler covers", () => {
-    // A key with no measurement under it would be an opinion the model cannot check — every one of these is a
-    // pool the game enumerates through `/stat/sources`, or the battery score built from them.
-    expect([...GOAL_KEYS].sort()).toEqual(
-      ["armor", "combat", "dps", "hull", "mining", "precision", "salvage", "shield"]);
+    // A key with no measurement under it would be an opinion the model cannot check. Each of these is a pool the
+    // game enumerates through `/stat/sources`, the battery score built from them, or a LAYER figure from
+    // `setPowerByLayer` — the same call the panel's own Surface and Core rows print. What is NOT here is
+    // a raw `mining`/`salvage` pool: ranking on one let a pooled substat authorise a plan whose throughput fell.
+    expect([...GOAL_KEYS].sort()).toEqual([
+      "armor", "combat", "dps", "hull",
+      "miningBalanced", "miningCore", "miningSurface",
+      "precision",
+      "salvageBalanced", "salvageStructural", "salvageSurface",
+      "shield",
+    ]);
   });
 });
 
@@ -142,10 +150,20 @@ describe("the key list", () => {
 describe("the veto refuses a regression and nothing else", () => {
   const combatShip = defaultGoalOrder("Combat");
 
-  it("defaults to the hull's own pool, and to nothing at all without a role", () => {
+  it("defaults to the hull's own job, and to nothing at all without a role", () => {
     expect(combatShip).toEqual(["combat"]);
-    expect(defaultGoalOrder("Mining")).toEqual(["mining"]);
+    expect(defaultGoalOrder("Mining", 4)).toEqual(["miningBalanced"]);
+    expect(defaultGoalOrder("Salvaging", 4)).toEqual(["salvageBalanced"]);
     expect(defaultGoalOrder(null)).toEqual([]);
+  });
+
+  it("states no balanced default on a hull with one hardpoint", () => {
+    // One gun serves one layer ∴ `min` is structurally 0 and a balanced default would be a goal no build on that
+    // hull can meet. Which layer it should be is the player's call, not a default's.
+    expect(defaultGoalOrder("Mining", 1)).toEqual([]);
+    expect(defaultGoalOrder("Salvaging", 1)).toEqual([]);
+    // Combat has no layers at all, so nothing about it changes.
+    expect(defaultGoalOrder("Combat", 1)).toEqual(["combat"]);
   });
 
   it("refuses the Aquila plan: Combat Power fell", () => {
@@ -171,8 +189,10 @@ describe("the veto refuses a regression and nothing else", () => {
   });
 
   it("is silent on a key the objective cannot read for this ship", () => {
-    // A mining pool the bridge never reported orders nothing rather than counting as a collapse to zero.
-    expect(goalRefuses(defaultGoalOrder("Mining"), { mining: undefined }, { mining: undefined })).toBeNull();
+    // A layer no gun on this hull reaches orders nothing rather than counting as a collapse to zero. Two
+    // hardpoints, so the Mining default is the balanced key.
+    expect(goalRefuses(defaultGoalOrder("Mining", 2),
+                       { miningBalanced: undefined }, { miningBalanced: undefined })).toBeNull();
   });
 });
 
@@ -251,5 +271,51 @@ describe("which layer a drop warning is allowed to name", () => {
     const spent: GoalReading = { ...NOW, combat: 95_100 };
     const drops = goalDrops({ ...NOW, combat: 100_000 }, spent, 0.02, "armor");
     expect(drops.map((d) => d.key)).toEqual(["combat"]);
+  });
+});
+
+// THE SPLIT ITSELF: which keys a hull is offered, and what a stored order from before it becomes.
+describe("the layer keys", () => {
+  it("offers an activity's keys only where the hull can serve it", () => {
+    expect(goalKeysFor(4, ["Mining"])).toEqual(
+      ["dps", "combat", "precision", "miningSurface", "miningCore", "miningBalanced", "hull", "armor", "shield"]);
+    expect(goalKeysFor(4, ["Salvage"])).toEqual(
+      ["dps", "combat", "precision", "salvageSurface", "salvageStructural", "salvageBalanced",
+       "hull", "armor", "shield"]);
+    // A hull doing both is offered both, in GOAL_KEYS order.
+    expect(goalKeysFor(4, ["Mining", "Salvage"])).toEqual([...GOAL_KEYS]);
+    // And a combat hull is offered no layer key at all, which is why the rank floor covers it instead.
+    expect(goalKeysFor(4, [])).toEqual(["dps", "combat", "precision", "hull", "armor", "shield"]);
+  });
+
+  it("withholds balanced on a single hardpoint but keeps the layer choice", () => {
+    const one = goalKeysFor(1, ["Mining", "Salvage"]);
+    expect(one).not.toContain("miningBalanced");
+    expect(one).not.toContain("salvageBalanced");
+    expect(one).toContain("miningSurface");
+    expect(one).toContain("miningCore");
+    expect(one).toContain("salvageStructural");
+  });
+
+  it("reads balanced as the bottleneck, and absent where a layer is unreached", () => {
+    const r = goalReadingOf({ poolCombatPower: 1, precisionDivisor: 1 } as ShipPools, undefined, undefined,
+                            { miningSurface: 9_000, miningCore: 4_000 });
+    expect(r.miningBalanced).toBe(4_000);
+    // A layer no gun covers reads absent, and balanced cannot be computed from half a pair — absent orders
+    // nothing, which is what keeps an unreachable layer legible instead of scoring 0.
+    const half = goalReadingOf({ poolCombatPower: 1, precisionDivisor: 1 } as ShipPools, undefined, undefined,
+                               { miningSurface: 9_000, miningCore: null });
+    expect(half.miningSurface).toBe(9_000);
+    expect(half.miningCore).toBeUndefined();
+    expect(half.miningBalanced).toBeUndefined();
+  });
+
+  it("maps a stored order written before the split", () => {
+    // MAPPED, not dropped: dropping would silently un-state a goal the player set, and `balanced` is what the
+    // derived target already was for a hull with mixed slots.
+    expect(cleanOrder(["mining", "armor"])).toEqual(["miningBalanced", "armor"]);
+    expect(cleanOrder(["salvage"])).toEqual(["salvageBalanced"]);
+    // A key that never existed is still dropped, and a duplicate is still collapsed.
+    expect(cleanOrder(["mining", "miningBalanced", "nonsense"])).toEqual(["miningBalanced"]);
   });
 });

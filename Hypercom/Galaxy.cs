@@ -20,8 +20,7 @@ namespace Hypercom
     //                   shopRefreshTime (-1 until first visit)
     //
     // Everything goes through Compat reflection rather than typed references: these types are new
-    // territory in a beta, and a rename should degrade to a partial map instead of failing to load the
-    // plugin (the same reasoning behind the crew-API gate in Api.CrewSupported).
+    // territory, and a rename should degrade to a partial map instead of failing to load the plugin.
     internal static class Galaxy
     {
         // What the player is allowed to see. Anything below `Known` is never sent to the client at all —

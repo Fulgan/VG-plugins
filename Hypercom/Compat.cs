@@ -7,8 +7,8 @@ using UnityEngine;
 
 namespace Hypercom
 {
-    // Cross-version reflection shim. The beta and release games differ (renamed/added/removed members:
-    // crew API, resonant boosters, EMP, item quality, drone-bay, HangarBay slot, …). To ship ONE binary
+    // Cross-version reflection shim. Game versions rename, add and remove members (the crew API, resonant
+    // boosters, EMP, item quality, drone-bay, the HangarBay slot, …). To ship ONE binary
     // that keeps FULL functionality on the version that has a member and degrades gracefully on the one
     // that doesn't, every version-specific member is touched through here — no compile-time typeref, so
     // a missing member is just a null at runtime instead of a TypeLoadException.

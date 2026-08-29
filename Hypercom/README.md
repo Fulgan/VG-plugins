@@ -18,6 +18,9 @@ browser. The app itself is where the gear ranking, sell lists, map and faction s
 
 ## Installing
 
+Needs **game 0.8.2 or newer**; this build is checked against 0.8.2.1. On an older game it will not load.
+The last version that worked on 0.8.0.15 is Hypercom 0.4.0.
+
 1. Install **[BepInEx 5](https://github.com/BepInEx/BepInEx/releases)** into your game folder (the
    mod loader Hypercom runs on).
 2. Get the zip from the **[Releases](https://github.com/Fulgan/VG-plugins/releases)** page, then install

@@ -639,44 +639,18 @@ describe("per-activity objective (mining and salvage)", () => {
   });
 });
 
-// The release cuts each gun's share again as the battery grows; beta 0.8.1.19 deleted that formula. Both
-// behaviours ship in one client, chosen by `caps.extraTurretPenalty`, so both are pinned here — and the
-// thresholds are pinned at their EDGES, since a ">" written as ">=" moves every boundary by one turret.
-describe("poolShare — the release's extra-turret ladder", () => {
-  const off: ShipPools = { ...bg, extraTurretPenalty: false };
-  const on: ShipPools = { ...bg, extraTurretPenalty: true };
-
-  it("divides by the equivalent-turret count and nothing else on the beta", () => {
-    for (const nEq of [1, 2, 3, 4, 5, 6, 7]) expect(poolShare(1000, nEq, off)).toBeCloseTo(1000 / nEq, 6);
-  });
-
-  it("applies the game's ladder on the release", () => {
-    expect(poolShare(1000, 1, on)).toBeCloseTo(1000, 6);              // one gun: no penalty
-    expect(poolShare(1000, 2, on)).toBeCloseTo((1000 / 2) * 0.85, 6);
-    expect(poolShare(1000, 3, on)).toBeCloseTo((1000 / 3) * 0.78, 6);
-    expect(poolShare(1000, 4, on)).toBeCloseTo((1000 / 4) * 0.72, 6);
-    expect(poolShare(1000, 5, on)).toBeCloseTo((1000 / 5) * 0.68, 6);
-    expect(poolShare(1000, 6, on)).toBeCloseTo((1000 / 6) * 0.65, 6);
-    expect(poolShare(1000, 9, on)).toBeCloseTo((1000 / 9) * 0.65, 6);  // the last rung is the floor
-  });
-
-  it("keeps the thresholds exclusive, as the game writes them", () => {
-    expect(poolShare(1000, 1.9, on)).toBeCloseTo(1000 / 1.9, 6);            // 1.9 is NOT > 1.9
-    expect(poolShare(1000, 1.91, on)).toBeCloseTo((1000 / 1.91) * 0.85, 6);
-    expect(poolShare(1000, 5.9, on)).toBeCloseTo((1000 / 5.9) * 0.68, 6);   // still the 4.9 rung
-    expect(poolShare(1000, 5.91, on)).toBeCloseTo((1000 / 5.91) * 0.65, 6);
+// One gun's share of a pool: the count divides it and the divisor is floored, nothing else.
+describe("poolShare", () => {
+  it("divides by the equivalent-turret count", () => {
+    for (const nEq of [1, 2, 3, 4, 5, 6, 7]) expect(poolShare(1000, nEq)).toBeCloseTo(1000 / nEq, 6);
   });
 
   it("floors the divisor at 0.45 so one small gun cannot out-damage the pool", () => {
     // A lone Tiny rates 0.45: pool/0.45 would hand it more than the whole pool, which is why the game floors
     // the DIVISOR rather than the count.
-    expect(poolShare(1000, 0.45, off)).toBeCloseTo(1000 / 0.45, 6);
-    expect(poolShare(1000, 0.1, off)).toBeCloseTo(1000 / 0.45, 6);
-    expect(poolShare(1000, 0, off)).toBeCloseTo(1000 / 0.45, 6);
-  });
-
-  it("defaults to no penalty when the bridge sends no caps", () => {
-    expect(poolShare(1000, 6, bg)).toBeCloseTo(1000 / 6, 6);
+    expect(poolShare(1000, 0.45)).toBeCloseTo(1000 / 0.45, 6);
+    expect(poolShare(1000, 0.1)).toBeCloseTo(1000 / 0.45, 6);
+    expect(poolShare(1000, 0)).toBeCloseTo(1000 / 0.45, 6);
   });
 });
 
@@ -1518,9 +1492,10 @@ describe("bracketed — a ranked reading sees the reactor collapse", () => {
     const halved = pools(11_075, 9_129);                 // 82% -> no bonus at all
     const before = goalReadingOf(fitted);
     const after = goalReadingOf(halved);
-    // 99,386 measured at +20% reads 82,821 at +0%: the pool is divided by 1.2, not multiplied by anything.
-    expect(after.salvage!).toBeCloseTo(99_386 / 1.2, 0);
-    expect(after.salvage!).toBeLessThan(before.salvage!);
+    // 12,000 measured at +20% reads 10,000 at +0%: the pool is divided by 1.2, not multiplied by anything.
+    // Read on `combat` because that is what a POOL key is now — the activity keys are layer throughput off the
+    // battery, and they re-bracket through `poolParts` on their own path.
+    expect(after.combat!).toBeCloseTo(12_000 / 1.2, 0);
     expect(after.combat!).toBeLessThan(before.combat!);
     // No bracket applies to Precision, so a reading that moved it would be inventing a loss.
     expect(after.precision).toBe(before.precision);
@@ -1529,16 +1504,38 @@ describe("bracketed — a ranked reading sees the reactor collapse", () => {
   it("makes the goal refuse the swap it used to accept", () => {
     const fitted = goalReadingOf(pools(22_190, 9_129));
     const planned = goalReadingOf(pools(11_075, 9_129));
-    expect(goalRefuses(["salvage"], fitted, planned)).toBe("salvage");
+    expect(goalRefuses(["combat"], fitted, planned)).toBe("combat");
     // And unbracketed — the old reading — it looked like no change at all, which is how it shipped.
     const raw = pools(11_075, 9_129);
-    expect(raw.poolSalvagePower).toBe(99_386);
+    expect(raw.poolCombatPower).toBe(12_000);
   });
 
   it("is inert where the load does not move the bracket", () => {
     const a = goalReadingOf(pools(22_190, 9_129));       // 41%
     const b = goalReadingOf(pools(22_190, 10_000));      // 45%, same band
-    expect(b.salvage).toBe(a.salvage);
+    expect(b.combat).toBe(a.combat);
+  });
+});
+
+// The reported plan: a pool key rises while the battery's own ranked throughput falls, and an order
+// naming that key used to authorise it. Figures are the live Assayer's, off `liveReport`.
+describe("goalAccepts — a measurable loss in the ranked value", () => {
+  const fitted = { miningBalanced: 205_281 };
+  const planned = { miningBalanced: 205_835 };                 // +0.27%, five times OBJECTIVE_TIE ∴ the key speaks
+
+  it("refuses the plan the tab was calling worse in the same frame", () => {
+    // Rank 106,592 -> 104,616: -1.85% on the layer-targeted objective the panel prints as "Mining power".
+    expect(goalAccepts(["miningBalanced"], fitted, planned, [1, 104_616], [1, 106_592])).toBe(false);
+    // And with no order stated, which is the path that was always right.
+    expect(goalAccepts([], fitted, planned, [1, 104_616], [1, 106_592])).toBe(false);
+  });
+
+  it("still lets the player's order decide a GAIN, and a tie stays a tie", () => {
+    expect(goalAccepts(["miningBalanced"], fitted, planned, [1, 108_000], [1, 106_592])).toBe(true);
+    // Inside the band: not a loss, so the order speaks and accepts on its rising key.
+    expect(goalAccepts(["miningBalanced"], fitted, planned, [1, 106_570], [1, 106_592])).toBe(true);
+    // A tier RISE is a different job, never a loss.
+    expect(goalAccepts(["miningBalanced"], fitted, planned, [2, 1], [1, 106_592])).toBe(true);
   });
 });
 
@@ -1567,8 +1564,8 @@ describe("allowanceBreach — the price an order cannot state", () => {
 
   it("says nothing about a key the player did not rank", () => {
     // A salvage refit legitimately sheds mining power; nobody asked for it to be held.
-    const planned = { dps: 290_705, armor: 6_033_609, combat: 397_269, mining: 1 };
-    expect(allowanceBreach(order, { ...fitted, mining: 5_585 }, planned, 0.02)).toBeNull();
+    const planned = { dps: 290_705, armor: 6_033_609, combat: 397_269, miningBalanced: 1 };
+    expect(allowanceBreach(order, { ...fitted, miningBalanced: 5_585 }, planned, 0.02)).toBeNull();
   });
 
   it("skips a key absent on either side rather than reading it as destroyed", () => {

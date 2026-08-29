@@ -9,9 +9,8 @@ namespace Hypercom
     // Hiring an officer from the docked station's Personnel Center.
     //
     // Everything here is reflection-only and DISCOVERED AT RUNTIME rather than typed. Two reasons:
-    //   * The crew API is the most volatile part of this game — it was renamed wholesale between the
-    //     0.8.0.15 release and the 0.8.1.19 beta, which is why Api.CrewSupported() exists at all. A typed
-    //     reference to OfficerData would risk a TypeLoad on a version that doesn't have it.
+    //   * The crew API is the most volatile part of this game — it was renamed wholesale once already, so a
+    //     typed reference to OfficerData risks a TypeLoad on a build that moves it again.
     //   * `HireOfficer` takes a parameter, so it can't be found by enumerating zero-arg members; the host
     //     object isn't documented anywhere. So the hosts are searched in order and the first plausible
     //     one-parameter method wins.
@@ -34,7 +33,6 @@ namespace Hypercom
 
         internal static Api.Result Hire(Dictionary<string, object> body) => MainThread.Run(() =>
         {
-            if (!Api.CrewSupported()) return Api.Result.Err(400, "crew not supported by this game version");
             if (!Api.Docked) return Api.Result.Err(403, "not docked");
             if (GamePlayer.current?.currentAutopilotSessionStats != null) return Api.Result.Err(409, "ECHO active");
 

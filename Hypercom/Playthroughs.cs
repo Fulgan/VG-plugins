@@ -6,7 +6,7 @@ namespace Hypercom
 {
     // User-chosen display names for playthroughs, keyed by the stable galaxy fingerprint (see
     // Api.PlaythroughId). Purely cosmetic — the fingerprint stays the real key everywhere (presets,
-    // action log). Persisted next to the presets file so it survives restarts and beta/release switches.
+    // action log). Persisted next to the presets file so it survives restarts and game updates.
     internal static class Playthroughs
     {
         private static readonly object Gate = new object();

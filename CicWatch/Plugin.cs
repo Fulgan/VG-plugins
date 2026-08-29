@@ -13,10 +13,10 @@ namespace CicWatch
     // Its own plugin for Quick Save's reason: it shares no surface with the station automation or the bridge, and
     // someone who wants only this should not install either to get it.
     //
-    // BETA ONLY, and it says so once rather than pretending. Hull rarity, upgrade points, boarding and even the
-    // hook that reports a hull arriving are all absent on the release branch, so there is no reduced version of
-    // this mod to run there (see Gate).
-    [BepInPlugin(Guid, "CIC Watch", "0.1.0")]
+    // NEEDS GAME 0.8.2 OR NEWER, and it says so once rather than pretending. Hull rarity, upgrade points,
+    // boarding and even the hook that reports a hull arriving are all absent on an older build, so there is no
+    // reduced version of this mod to run there (see Gate).
+    [BepInPlugin(Guid, "CIC Watch", "0.2.0")]
     public sealed class Plugin : BaseUnityPlugin
     {
         internal const string Guid = "fulgan.vanguardgalaxy.cicwatch";
@@ -28,14 +28,14 @@ namespace CicWatch
             Log = Logger;
             VG.Game.GameToast.Warn = m => Log.LogWarning(m);
 
-            // Config first, whatever the branch: the file is how a player turns things off, and it should exist
+            // Config first, whatever the build: the file is how a player turns things off, and it should exist
             // to be read even where the features cannot run.
             Cfg = new Config(base.Config);
 
             if (!Gate.Check())
             {
                 Log.LogInfo($"CIC Watch is off: this game build has no {Gate.Missing}. "
-                            + "The area readout needs the beta branch (hull rarity and boarding).");
+                            + "The area readout needs game 0.8.2 or newer (hull rarity and boarding).");
                 // ⚠ `enabled = false` AND ⊥ ONLY `return`: returning leaves `Update` running, and `Update` drives
                 // `Watch.Tick` into `Scan`, which reads the very members this gate just declared missing. A log
                 // line saying the mod is off while it keeps running at 4 Hz is the worst of both.
@@ -43,7 +43,7 @@ namespace CicWatch
                 return;
             }
 
-            // Patched only past the gate, which is what keeps the beta-only reads inside these bodies unreached
+            // Patched only past the gate, which is what keeps the newer-build reads inside these bodies unreached
             // on a build that lacks them: a method is bound when it first RUNS, not when the assembly loads.
             try
             {

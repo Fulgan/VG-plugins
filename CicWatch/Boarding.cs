@@ -12,9 +12,9 @@ namespace CicWatch
     // So a boarding in progress is read from the simulation and never recomputed, or the panel would sit at the
     // starting figure while the fight it describes is being lost.
     //
-    // ALL BY NAME. `BoardableUnit` and `DungeonSimulation` do not exist on the release branch, so a compiled reference
-    // to either would break the one-binary rule; the mod is beta-only, and this stays reflected anyway because a
-    // missing member has to cost the READOUT rather than the method it sits in.
+    // ALL BY NAME. `BoardableUnit` and `DungeonSimulation` do not exist before game 0.8.2, so a compiled reference
+    // to either would break the one-binary rule; Gate already refuses such a build, and this stays reflected anyway
+    // because a missing member has to cost the READOUT rather than the method it sits in.
     internal static class Boarding
     {
         internal const float None = -1f;

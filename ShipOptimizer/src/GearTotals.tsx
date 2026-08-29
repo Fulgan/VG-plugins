@@ -172,12 +172,17 @@ export default function GearTotals({ pools, reactor, ranking, vitals, curTurrets
 
   // Per-layer throughput, because a gun can only reach the layer it is built for. Scored against the same fixed
   // background as the headline figure, so the rows and the index agree.
+  // The layer is ONE enum value with two names: the game renders `TargetLayer.Core` as "Structural" under salvage
+  // (`TargetLayerExtensions.GetSalvageName`) and as "Core" under mining. The reading is the same call either way ∴
+  // only the word changes, and it changes here rather than at each row.
   const LAYERS = ["Surface", "Core"];
+  const layerWord = (act: "Mining" | "Salvage", layer: string) =>
+    act === "Salvage" && layer === "Core" ? "Structural" : layer;
   const powerRows = !pools ? [] : (["Mining", "Salvage"] as const).flatMap((act) => {
     const bg = background(pools, curTurrets);
     const bgPlan = projPools ? background(projPools, curTurrets) : bg;
     return LAYERS.map((layer) => ({
-      label: `${act} power · ${layer}`,
+      label: `${act} power · ${layerWord(act, layer)}`,
       cur: setPowerByLayer(curTurrets, bg, act, layer),
       // The PLANNED battery against the PLANNED pools — both halves of the change, or the row reports a gun swap
       // while ignoring the module swap sitting beside it in the same plan.

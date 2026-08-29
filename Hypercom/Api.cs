@@ -43,8 +43,6 @@ namespace Hypercom
 
         private static AppliedTransient _lastApplied; // last apply, for one-level undo
 
-        // Crew (officer) management changed in the 0.8.1.19 beta and will likely change again, so crew
-        // features gate on this. Call on the Unity main thread (reads Application.version).
         // Stable id for the current playthrough — the web uses it to drop cached inventory/loadout when you
         // switch save/playthrough. The game has no persisted "universe seed": the galaxy is generated once at
         // new-game (SeededRandom.Global, itself seeded from DateTime.Now.Ticks) and then serialized whole into
@@ -68,31 +66,15 @@ namespace Hypercom
             try { return PlaythroughId(GamePlayer.current); } catch { return null; }
         }
 
-        // Crew (officer) features gate on the game version. This binary is built against the beta's
-        // Source.Personnel crew API (>= 0.8.1.19); the 0.8.0.15 release renamed it to Source.Crew, whose
-        // members this binary doesn't reference — so crew is OFF there. Crucially, every method that
-        // touches OfficerData is only *invoked* behind this gate, so it never JIT-compiles (and can't
-        // TypeLoad) on a version that lacks the type.
-        internal static bool CrewSupported() => GameVersion.IsAtLeast(Application.version, 0, 8, 1, 19);
-
-        // Does a turret's share of a power pool get cut AGAIN as the battery grows? True on the release, whose
-        // `AbstractTurret.CalculateAttackPower` scales the share by a ladder on the equivalent-turret count
-        // (0.85 past ~2 down to 0.65 past ~6). Beta 0.8.1.19 deleted that formula and raised enemy HP instead.
-        //
-        // Version-gated because it must be: the ladder is arithmetic inside a method body, so no member's
-        // presence can stand in for it. Sharing 0.8.1.19 with the crew gate is coincidence — two unrelated
-        // changes that happened to ship in one patch — so it is written out rather than derived from the other.
-        internal static bool ExtraTurretPenalty() => !GameVersion.IsAtLeast(Application.version, 0, 8, 1, 19);
-
         // The barter currency's item identifier, as it arrives in a shop offer's `costItem`.
         private const string VanguardMarkId = "VanguardMark";
 
         // Every currency THIS BUILD ships, as `{id, name, owned}`.
         //
         // Read out of the item registry by CATEGORY, never by identifier. Two reasons, and the second one is a
-        // crash: (1) the set differs per build — the release earns four commendations and has no `VanguardMark`;
-        // the beta replaced them with it and the retired entries LINGER in the registry at 0, which is why this
-        // reports everything and lets the client filter on holdings (a retired currency and one you simply have
+        // crash: (1) the set differs per build — a currency a game update retires LINGERS in the registry at 0
+        // rather than leaving it, which is why this reports everything and lets the client filter on holdings
+        // (a retired currency and one you simply have
         // none of are indistinguishable from here) — so the answer is only knowable at runtime, data-driven
         // (`InventoryItemType.FromJson`); (2) `CountAvailableItems(string)` reaches the game's implicit
         // `string`→`InventoryItemType` conversion, which INDEXES the registry (`allItems[name]`) ∴ an
@@ -160,9 +142,7 @@ namespace Hypercom
                 // Kept for clients written before `currencies` existed. 0 where this build ships no such
                 // currency, which is a wallet an old client can render as "none" rather than a failed request.
                 ["vanguardMarks"] = Owned(wallet, VanguardMarkId),
-                ["crewSupported"] = CrewSupported(),
-                // What this game build supports, so the UI can hide rather than offer-and-fail. `crewSupported`
-                // stays for older clients.
+                // What this game build supports, so the UI can hide rather than offer-and-fail.
                 ["caps"] = Caps.Dto(),
                 // Crit context for the web UI's expanded gear ranking. A turret's own "Critical Damage" roll is
                 // worth nothing without a chance to crit, and worth MORE the higher that chance is — so a crit
@@ -192,7 +172,7 @@ namespace Hypercom
                 // The FITTED bay's own launch cycle, so a client can price the hull it actually has rather than
                 // only the candidates it is offered. Both are PERIODS IN SECONDS despite their names
                 // (`nextFireTime = Time.time + fireRate`), which is why they are not called rates here, and both
-                // are private with beta-only properties over them ∴ read by name (see `TorpedoPrefabDto`).
+                // are private ∴ read by name (see `TorpedoPrefabDto`).
                 // Null together with `torpedoLatches` when no bay is fitted: a hull with no bay has no cadence,
                 // and 0 would read as one that can never launch.
                 ["torpedoFireDelay"] = TorpedoBayNum(p, "fireRate"),
@@ -581,17 +561,8 @@ namespace Hypercom
             });
         });
 
-        // Owned officer roster + per-ship officer-slot counts. Crew-only; older builds → error.
-        internal static Result Officers() => MainThread.Run(() =>
-        {
-            // Beta first, because its reader is typed and richer. The release answers the same question under
-            // different names and without per-stat bonuses (Crew.cs) ∴ it gets the same envelope with those
-            // fields null, rather than a 400 that reads as "this game has no crew" when it plainly does.
-            if (CrewSupported()) return Result.Ok(Stores.OfficersDto());
-            var p = GamePlayer.current;
-            if (Crew.Supported(p)) return Result.Ok(Crew.Dto());
-            return Result.Err(400, "crew not supported by this game version");
-        });
+        // Owned officer roster + per-ship officer-slot counts.
+        internal static Result Officers() => MainThread.Run(() => Result.Ok(Stores.OfficersDto()));
 
         // The three galaxy-wide refresh cycles, and nothing else. Same figures `/galaxy` reports, off the same
         // `Clock` calls — one owner, so a change to how a cycle is read reaches both — but without the galaxy
@@ -606,14 +577,9 @@ namespace Hypercom
         // Recruitable officers at the docked station's Personnel Center (+ hire cost). Docked-only.
         internal static Result Recruits() => MainThread.Run(() =>
         {
-            var releaseCrew = !CrewSupported() && Crew.Supported(GamePlayer.current);
-            if (!CrewSupported() && !releaseCrew)
-                return Result.Err(400, "crew not supported by this game version");
             if (!Docked)
                 return Result.Err(403, "not docked");
-            // The release recruits from the station BAR rather than a personnel center (Crew.cs), so the venue
-            // differs while the answer — who can I hire here, and for how much — does not.
-            return Result.Ok(releaseCrew ? Crew.RecruitsDto() : Stores.RecruitsDto());
+            return Result.Ok(Stores.RecruitsDto());
         });
 
         // Equipment TEMPLATE catalog — the EquipmentBuilder recipes (stat bands + level/rarity scaling)
@@ -649,7 +615,7 @@ namespace Hypercom
         });
 
         // Render a ship's sprite to PNG bytes (null → 404), from the game itself so it always matches the
-        // actual (incl. new/beta) ship. The body sprite is `surfaceSprite` on the live unit — often null
+        // actual ship. The body sprite is `surfaceSprite` on the live unit — often null
         // while docked — so fall back to the class prefab's first SpriteRenderer. Experimental.
         // `cacheKey` is the client's opaque key (game build + ship class). The sprite comes from the ship
         // CLASS, so it's identical for every ship of that class and only changes with the game build —
@@ -672,21 +638,17 @@ namespace Hypercom
         // Cached like item icons (see CachedRender) — a portrait never changes for a given guid/icon.
         internal static byte[] OfficerPortrait(string guid, string icon) => CachedRender(
             "officer:" + (string.IsNullOrEmpty(guid) ? icon : guid),
-            () => MainThread.Run(() => CrewSupported() ? PortraitImpl(guid, icon) : null)); // gate before PortraitImpl so OfficerData never JITs off-version
+            () => MainThread.Run(() =>
+            {
+                Sprite sprite = null;
+                if (!string.IsNullOrEmpty(guid))
+                    sprite = GamePlayer.current?.GetOfficer(guid)?.icon?.sprite;
+                if (sprite == null && !string.IsNullOrEmpty(icon))
+                    sprite = OfficerIcons.Get(icon)?.sprite;
+                return RenderSprite(sprite);
+            }));
 
-        // Isolated so its OfficerData typeref only resolves on crew-capable versions (see CrewSupported).
-        private static byte[] PortraitImpl(string guid, string icon)
-        {
-            Sprite sprite = null;
-            if (!string.IsNullOrEmpty(guid))
-                sprite = GamePlayer.current?.GetOfficer(guid)?.icon?.sprite;
-            if (sprite == null && !string.IsNullOrEmpty(icon))
-                sprite = OfficerIcons.Get(icon)?.sprite;
-            return RenderSprite(sprite);
-        }
-
-        // Owned-crew guids per ship slot. Isolated (touches SpaceShipData.officers/OfficerData) — only
-        // called behind CrewSupported so it never JITs on a version without the Personnel crew API.
+        // Owned-crew guids per ship slot.
         private static List<string> CollectOfficers(SpaceShipData ship)
         {
             var list = new List<string>();
@@ -785,8 +747,8 @@ namespace Hypercom
         private const int IconCacheMax = 512;
 
         // Escape hatch for the web UI's "purge images" action: drop every memoized PNG so the next request
-        // re-renders from the game. Needed when art changes WITHOUT the game version changing (a beta
-        // hotfix), since the version is what normally invalidates the client's cache key.
+        // re-renders from the game. Needed when art changes WITHOUT the game version changing (a hotfix),
+        // since the version is what normally invalidates the client's cache key.
         internal static Result PurgeImages()
         {
             int n;
@@ -1662,7 +1624,6 @@ namespace Hypercom
             var hasDirect = HasDirectSlots(body); // exact-handle gear slots (store+key)
             if (gear.slots.Count == 0 && officers.Count == 0 && !hasDirect)
                 return Result.Err(400, "nothing to apply (no slots or officers)");
-            var crew = CrewSupported();
 
             // Apply only while docked (armory readable + a sane place to refit). No queueing.
             if (!Docked) return Result.Err(403, "dock to apply");
@@ -1676,7 +1637,7 @@ namespace Hypercom
             var ship = GamePlayer.current?.currentSpaceShip;
             if (ship == null) return Result.Err(400, "no current ship");
 
-            var t = LoadoutCore.ApplyTransient(ship, gear, officers, crew, out var changed);
+            var t = LoadoutCore.ApplyTransient(ship, gear, officers, out var changed);
             // Direct gear: resolve + validate each handle against what the client saw (skip moved items).
             var (direct, stale) = ParseDirect(body);
             if (direct.Count > 0)
@@ -1755,7 +1716,7 @@ namespace Hypercom
             if (ship == null) return Result.Err(400, "no current ship");
 
             var gear = LoadoutCore.Snapshot(ship, name);
-            var officers = CrewSupported() ? CollectOfficers(ship) : new List<string>(); // gated: CollectOfficers touches OfficerData
+            var officers = CollectOfficers(ship);
             var settings = Str(body, "settings"); // opaque UI-settings blob, stored verbatim
             Presets.Put(CurrentPlaythrough(), ship.guid, name, new Presets.Preset { Ship = ship.shipClass?.displayName ?? name, ShipGuid = ship.guid, Gear = gear, Officers = officers, Settings = settings });
             return Result.Ok(new Dictionary<string, object>
@@ -1777,11 +1738,11 @@ namespace Hypercom
             if (p == null) return Result.Err(404, "no such preset");
 
             var officers = new List<OfficerAssign>();
-            if (CrewSupported() && p.Officers != null)
+            if (p.Officers != null)
                 for (var i = 0; i < p.Officers.Count; i++)
                     if (!string.IsNullOrEmpty(p.Officers[i])) officers.Add(new OfficerAssign { slot = i, guid = p.Officers[i] });
 
-            var t = LoadoutCore.ApplyTransient(ship, p.Gear, officers, CrewSupported(), out var changed);
+            var t = LoadoutCore.ApplyTransient(ship, p.Gear, officers, out var changed);
             _lastApplied = t;
             return Result.Ok(new Dictionary<string, object>
             {

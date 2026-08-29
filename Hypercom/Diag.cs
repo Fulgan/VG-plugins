@@ -65,7 +65,7 @@ namespace Hypercom
             var p = GamePlayer.current;
             yield return new KeyValuePair<string, Inventory>("cargo", p?.currentSpaceShip?.cargo);
             yield return new KeyValuePair<string, Inventory>("armory", p?.globalInventory);
-            // `dataInventory` is beta-only (absent on 0.8.0.15) ∴ by name, or this method fails to JIT there.
+            // `dataInventory` by name: a build without it costs this one store, ⊥ the whole method's JIT.
             yield return new KeyValuePair<string, Inventory>("data", VG.Game.GameMembers.Get(p, "dataInventory") as Inventory);
             yield return new KeyValuePair<string, Inventory>("material", SpaceStation.current?.materialStorage);
             yield return new KeyValuePair<string, Inventory>("shop", SpaceStation.current?.shopInventory);

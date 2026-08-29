@@ -21,16 +21,24 @@ export interface GoalOrderProps {
  * and only one of them is a verdict.
    */
   unread?: readonly GoalKey[];
+  /**
+   * The keys this hull can be ranked on (`goalKeysFor`). A key nothing can read orders nothing, so offering it
+   * would invite a goal the app then ignores — V48's shape. Absent ⇒ every key, which is what a caller with no
+   * hull in hand should show.
+   */
+  offer?: readonly GoalKey[];
 }
 
-export default function GoalOrder({ order, setOrder, unread = [] }: GoalOrderProps) {
+export default function GoalOrder({ order, setOrder, unread = [], offer = GOAL_KEYS }: GoalOrderProps) {
   const [open, setOpen] = useState(false);
   // The key being dragged. Held here rather than read off the drag event because Safari does not expose
   // `dataTransfer` payloads during `dragover`, and the insertion marker has to follow the pointer.
   const [held, setHeld] = useState<GoalKey | null>(null);
   const [over, setOver] = useState<GoalKey | null>(null);
 
-  const rest = GOAL_KEYS.filter((k) => !order.includes(k));
+  // An order the player already stated is never hidden, even if this hull cannot read it: silently dropping a
+   // stated goal is worse than showing one that reports itself unread.
+  const rest = offer.filter((k) => !order.includes(k));
 
   // Landing on a position rather than swapping with it: dropping "armor" onto row 1 means "armor is now first",
   // which is what the gesture looks like. A swap would move a key the player never touched.

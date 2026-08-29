@@ -61,13 +61,12 @@ export interface ApplyApi {
 }
 
 export function useApply({
-  officer, boosters, gear, conn, crewSupported, docked, hasHangar, currentShipGuid, playthrough, onChanged,
+  officer, boosters, gear, conn, docked, hasHangar, currentShipGuid, playthrough, onChanged,
 }: {
   officer: OfficerBuilder;
   boosters: BoosterBuilder;
   gear: GearBuilder;
   conn: Conn;
-  crewSupported: boolean;
   docked: boolean;
   hasHangar: boolean;
   currentShipGuid: string | null;
@@ -96,10 +95,10 @@ export function useApply({
 
   // Officers apply to the ship they were crewed for, and only when that is the one being flown.
   const oShip = officer.ship;
-  const officerOnCurrent = crewSupported && !!oShip && oShip.guid === currentShipGuid;
+  const officerOnCurrent = !!oShip && oShip.guid === currentShipGuid;
   const officerPayload = useMemo(
-    () => (crewSupported ? (officer.result?.chosen ?? []).map((o, i) => ({ slot: i, guid: o.guid })) : []),
-    [crewSupported, officer.result]);
+    () => (officer.result?.chosen ?? []).map((o, i) => ({ slot: i, guid: o.guid })),
+    [officer.result]);
   const boosterPayload = boosters.applyPayload;
   const gearPayload = gear.payload;
 

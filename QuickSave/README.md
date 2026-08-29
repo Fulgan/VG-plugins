@@ -1,11 +1,6 @@
 # Quick Save
 
-A mod for **Vanguard Galaxy** that saves and loads on a keypress. One key writes your game to a
-`quicksave` slot; another loads it back.
-
-Its own mod on purpose: it shares nothing with the other Vanguard Galaxy mods, so you don't have to
-install a station automation mod or a web server to get two hotkeys. It will be retired if the feature
-is implemented in the game.
+A mod for **Vanguard Galaxy** that saves and loads a game on a keypress.
 
 [What changed in the latest release](../RELEASE-NOTES.md).
 
@@ -40,10 +35,8 @@ Press **F7** for the shared mod settings window and set them on the **Hotkeys** 
   separate `quicksave-undo` slot. If you press load by mistake, that slot is in the game's own load
   menu, holding everything you were about to lose. It covers **one** press: the next quick load
   overwrites it, so recover before you load again.
-- **A second press is ignored** while a save or load is still going, rather than running twice. The key
-  comes back as soon as the game reports you back in control: it's the load that holds it, not a timer.
-- **Updates are checked on request.** The **Updates** tab has a button that looks for newer versions and
-  links to the release page. Nothing is downloaded or installed.
+- **Update checks.** The **Updates** tab has a button that looks for newer versions and
+  links to the release page.
 
 ## Help
 

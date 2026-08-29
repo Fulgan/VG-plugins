@@ -169,7 +169,10 @@ namespace Hypercom
                 try { job(); }
                 catch (Exception ex) { Plugin.Log.LogError($"main-thread job threw: {ex}"); }
                 var ms = (Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency;
-                if (ms >= StallMs) Plugin.Log.LogWarning($"main-thread job held the frame for {ms:F0}ms ({Label})");
+                // A MEASUREMENT, not a fault ∴ behind the same flag as the frame-gap line. A job's duration grows
+                // with the save, so on a large armory this fires on ordinary polling and says nothing its reader
+                // can act on.
+                if (WatchFrames && ms >= StallMs) Plugin.Log.LogWarning($"main-thread job held the frame for {ms:F0}ms ({Label})");
             }
         }
 

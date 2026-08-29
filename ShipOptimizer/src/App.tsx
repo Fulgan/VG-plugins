@@ -475,20 +475,15 @@ export default function App() {
         setLog((await api.log(conn)).entries); // global; always available
       } catch { /* optional */ }
 
-      // Officers + all-ships are available undocked (no dock gate); officers gate on crewSupported.
+      // Officers + all-ships are available undocked (no dock gate).
       try {
         setShipsAll((await api.ships(conn)).ships);
         try { setCatTypes(await api.catalogTypes(conn)); } catch { /* optional */ }
       } catch { /* optional */ }
-      if (s.crewSupported) {
-        try { setOfficers(await api.officers(conn)); } catch { /* optional */ }
-        // Recruits are docked-only (station Personnel Center). Clear when undocked.
-        if (s.docked) { try { setRecruits(await api.recruits(conn)); } catch { /* optional */ } }
-        else setRecruits(null);
-      } else {
-        setOfficers(null);
-        setRecruits(null);
-      }
+      try { setOfficers(await api.officers(conn)); } catch { /* optional */ }
+      // Recruits are docked-only (station Personnel Center). Clear when undocked.
+      if (s.docked) { try { setRecruits(await api.recruits(conn)); } catch { /* optional */ } }
+      else setRecruits(null);
 
       // Undocked: cargo is still live (loot/jettison/ammo), but armory/material/shop/loadout aren't.
       // Refresh the cargo store live, keep the rest from the last docked snapshot, mark stale.
@@ -956,9 +951,6 @@ export default function App() {
   }, [officers, shipsAll, status?.shipGuid]);
   const builder = useOfficerBuilder(officers?.officers ?? [], shipList, status?.shipGuid ?? null);
   const portraitUrl = useCallback((guid: string | null) => api.portraitUrl(conn, guid), [conn]);
-  const crewSupported = !!status?.crewSupported;
-  // #/officers is dead on the release game (no crew) — bounce it back to inventory.
-  useEffect(() => { if (tab === "officers" && status && !crewSupported) setTab("inventory"); }, [tab, crewSupported, status, setTab]);
 
   // Count of station recruits that would out-rank an assigned officer → Officers-tab badge.
   // Station recruits that out-rank an assigned officer — surfaced on the inventory tab's opportunity rail.
@@ -968,7 +960,7 @@ export default function App() {
   // Each screen renders the same truth and only picks which SECTION it applies.
   const applyApi = useApply({
     officer: builder, boosters: boosterBuilder, gear: gearBuilder, conn,
-    crewSupported, docked: !!status?.docked, hasHangar: status?.hasPersonalHangar ?? true,
+    docked: !!status?.docked, hasHangar: status?.hasPersonalHangar ?? true,
     currentShipGuid: status?.shipGuid ?? null, playthrough: status?.playthrough ?? null, onChanged: refresh,
   });
 
@@ -1105,13 +1097,11 @@ export default function App() {
           <TabBadge kind="inv" count={invOpps.length} label="inv" title="Inventory items that beat something equipped" />
           <TabBadge kind="shop" count={shopRail.length} label="shop" title={shopTip} />
         </button>
-        {crewSupported && (
-          <button className={tab === "officers" ? "on" : ""} onClick={() => setTab("officers")}>
-            Officers
-            <TabBadge kind="pending" count={applyApi.counts.officers} label="new" title="Proposed crew changes for this ship" />
-            <TabBadge kind="hire" count={officerOppCount} label="hire" title={hireTip} />
-          </button>
-        )}
+        <button className={tab === "officers" ? "on" : ""} onClick={() => setTab("officers")}>
+          Officers
+          <TabBadge kind="pending" count={applyApi.counts.officers} label="new" title="Proposed crew changes for this ship" />
+          <TabBadge kind="hire" count={officerOppCount} label="hire" title={hireTip} />
+        </button>
         {/* Per-tab counts of what is PROPOSED there, so the pending work is visible without opening each tab. The
             Summary badge is their total plus officers, which is why these three can disagree with it by design. */}
         <button className={tab === "boosters" ? "on" : ""} onClick={() => setTab("boosters")}>Boosters
@@ -1133,7 +1123,7 @@ export default function App() {
       {tab === "map" && <MapTab conn={conn} docked={!!status?.docked} standingBump={standingBump} />}
       {tab === "summary" && (
         <SummaryTab officer={builder} boosters={boosterBuilder} gear={gearBuilder} portraitUrl={portraitUrl} conn={conn}
-          crewSupported={crewSupported} docked={!!status?.docked} hasHangar={status?.hasPersonalHangar ?? true} currentShipGuid={status?.shipGuid ?? null} playthrough={status?.playthrough ?? null} playthroughName={status?.playthroughName ?? null} reloadNonce={presetsNonce} onChanged={refresh} apply={applyApi} />
+          docked={!!status?.docked} hasHangar={status?.hasPersonalHangar ?? true} currentShipGuid={status?.shipGuid ?? null} playthrough={status?.playthrough ?? null} playthroughName={status?.playthroughName ?? null} reloadNonce={presetsNonce} onChanged={refresh} apply={applyApi} />
       )}
 
       {tab === "inventory" && (<>
@@ -1273,24 +1263,22 @@ export default function App() {
             )}
           </div>
 
-          {crewSupported && (
-            <div className="opp-panel officer-opps">
-              {/* Which ship the hires are ranked against goes in the tooltip: the Officers tab already shows the
-                  selected ship, so naming it here was the third place it appeared. */}
-              <div className="opp-head"><h2 title={builder.ship ? `Ranked against ${builder.ship.name}` : undefined}>Officer hires</h2></div>
-              {officerOpps.length ? (
-                <div className="opp-list">
-                  {officerOpps.map((o, i) => (
-                    <div key={i} className="opp-row" title={`Lv ${o.level} · ${o.profession}`}>
-                      <span className={`opp-name r-${o.rarity}`}>{o.name}</span>
-                      <span className="opp-d up">↑ {o.replaces}</span>
-                      <span className="opp-cost dim">¢{o.hireCost.toLocaleString()}</span>
-                    </div>
-                  ))}
-                </div>
-              ) : <p className="hint" title={recruits?.hasPersonnelCenter ? undefined : "Needs a station with a Personnel Center"}>{recruits?.hasPersonnelCenter ? "none better" : "dock to see hires"}</p>}
-            </div>
-          )}
+          <div className="opp-panel officer-opps">
+            {/* Which ship the hires are ranked against goes in the tooltip: the Officers tab already shows the
+                selected ship, so naming it here was the third place it appeared. */}
+            <div className="opp-head"><h2 title={builder.ship ? `Ranked against ${builder.ship.name}` : undefined}>Officer hires</h2></div>
+            {officerOpps.length ? (
+              <div className="opp-list">
+                {officerOpps.map((o, i) => (
+                  <div key={i} className="opp-row" title={`Lv ${o.level} · ${o.profession}`}>
+                    <span className={`opp-name r-${o.rarity}`}>{o.name}</span>
+                    <span className="opp-d up">↑ {o.replaces}</span>
+                    <span className="opp-cost dim">¢{o.hireCost.toLocaleString()}</span>
+                  </div>
+                ))}
+              </div>
+            ) : <p className="hint" title={recruits?.hasPersonnelCenter ? undefined : "Needs a station with a Personnel Center"}>{recruits?.hasPersonnelCenter ? "none better" : "dock to see hires"}</p>}
+          </div>
         </aside>
       </div>
       </>)}

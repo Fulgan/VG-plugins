@@ -46,7 +46,7 @@ namespace CicWatch
         // window still live in the internal notes, where knowing them costs no screen space.
     }
 
-    // Reads a contact's live state. Everything beta-only goes through GameMembers BY NAME, and the capture GATE is
+    // Reads a contact's live state. Every game member goes through GameMembers BY NAME, and the capture GATE is
     // REFLECTED rather than re-derived: it is six clauses on the game's side, and a transcribed copy compiles,
     // runs, and disagrees the first patch that moves one of them.
     internal static class Prospects

@@ -13,7 +13,7 @@ namespace Hypercom
     //
     // The notification call is discovered by reflection rather than bound directly. LogHooks already
     // patches this type, so the binding exists — but that hook is a read-only postfix, and a UI method's
-    // shape (static vs singleton instance) is exactly the kind of thing that shifts between betas. Failing
+    // shape (static vs singleton instance) is exactly the kind of thing a game update moves. Failing
     // to toast must never fail the transaction that already succeeded.
     internal static class Notify
     {

@@ -817,7 +817,8 @@ namespace Hypercom
         }
 
         // A response big enough to be worth reporting: serialising it costs real time, and the size grows with
-        // the playthrough rather than with anything a fresh save would show.
+        // the playthrough rather than with anything a fresh save would show — which is why reporting it is behind
+        // the frame-watch flag: on a hoard it describes every poll, and a size is a measurement, not a fault.
         private const int BigBodyBytes = 1 << 20; // 1 MiB
 
         private static void WriteResponse(NetworkStream stream, int status, object body, string allowOrigin)
@@ -829,7 +830,7 @@ namespace Hypercom
             var serMs = (Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency;
             WarnOnKeyLeaks(text);
             var json = Encoding.UTF8.GetBytes(text);
-            if (json.Length >= BigBodyBytes)
+            if (MainThread.WatchFrames && json.Length >= BigBodyBytes)
                 Plugin.Log.LogWarning($"{MainThread.Route ?? "?"} served {json.Length / 1024 / 1024.0:F1} MB, " +
                                       $"serialised off-thread in {serMs:F0}ms");
             var reason = Reasons.TryGetValue(status, out var r) ? r : "Status";

@@ -6,14 +6,14 @@ namespace CicWatch
     // Whether this build of the game can answer the two questions this mod exists to answer. Checked ONCE, at
     // startup, by name.
     //
-    // The release branch does not carry a reduced version of these features, it carries none of them: no hull
-    // rarity, no upgrade points, no boarding of any kind, and not even the hook that says a hull arrived. A panel
-    // there could only list rank and size, which is not worth a mod, so the mod switches itself off and says so
-    // once in the log instead of shipping an empty window.
+    // A build older than 0.8.2 does not carry a reduced version of these features, it carries none of them: no
+    // hull rarity, no upgrade points, no boarding of any kind, and not even the hook that says a hull arrived. A
+    // panel there could only list rank and size, which is not worth a mod, so the mod switches itself off and says
+    // so once in the log instead of shipping an empty window.
     //
     // ONE switch for the whole mod, on purpose. Some of what a readout could show (asteroid ore, wreck contents)
-    // does exist on both branches, so a per-feature gate is buildable and is deliberately not built: a mod that
-    // half-works on a branch turns into "why is my panel empty?" every time, and the hull readout is the reason
+    // does exist on every build, so a per-feature gate is buildable and is deliberately not built: a mod that
+    // half-works on a build turns into "why is my panel empty?" every time, and the hull readout is the reason
     // to install this. Adding a feature that survives the gate does not make splitting it correct.
     //
     // Every probe is a NAME. A missing member must read as "this build cannot", never as a throw inside game code

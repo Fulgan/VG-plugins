@@ -605,7 +605,7 @@
 .li-main { flex: 0 0 auto; color: #86efac; font-size: 11px; }
 .li-lvl { flex: 0 0 auto; font-size: 10.5px; }
 
-.git { position: fixed; width: 264px; background: #0d0f14f2; border: 1px solid #2a2d36; border-radius: 8px; padding: 10px; z-index: 200; font-size: 12px; box-shadow: 0 6px 24px #000a; pointer-events: none; }
+.git { position: fixed; width: 264px; background: #0d0f14; border: 1px solid #2a2d36; border-radius: 8px; padding: 10px; z-index: 200; font-size: 12px; box-shadow: 0 6px 24px #000a; pointer-events: none; }
 .git-top { display: flex; justify-content: space-between; gap: 8px; }
 .git-cls { font-size: 10px; color: #7d7d86; text-transform: uppercase; letter-spacing: .05em; }
 .git-name { font-weight: 700; font-size: 14px; }
@@ -646,12 +646,13 @@
 /* WHAT EACH PANEL IS, on a strip of its own. The panel the hovered item would displace and the panels for
    slots it merely also fits are all equipped, so the word "equipped" separated nothing; and the border is
    already spoken for by `better`, which can land on any of them. Coral marks the one going away, faint grey
-   the ones that are only context, and the context panels sit back so the pair being compared reads first. */
+   the ones that are only context. Context panels sit back with a dimmer border, never element opacity: the
+   card floats over a dense table and any transparency lets rows read through its text. */
 .git-role { display: block; margin-bottom: 6px; padding: 2px 6px; border-radius: 4px; font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; }
 .git-role-hovered { background: #4aa3ff1f; color: #7cc0ff; box-shadow: inset 0 0 0 1px #4aa3ff4d; }
 .git-role-target { background: #f8717124; color: #fca5a5; box-shadow: inset 0 0 0 1px #f871714d; }
 .git-role-alt { background: #ffffff0a; color: #7d7d86; box-shadow: inset 0 0 0 1px #ffffff14; }
-.git.git-alt { opacity: .74; }
+.git.git-alt { border-color: #23252c; }
 
 /* persistent action log */
 .sum-log { margin-top: 14px; padding: 10px 12px; border: 1px solid #23252c; border-radius: 8px; background: #101216; }

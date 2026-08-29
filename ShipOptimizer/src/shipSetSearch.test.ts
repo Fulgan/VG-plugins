@@ -9,7 +9,8 @@
 import { describe, it, expect } from "vitest";
 import {
   background, goalReadingOf, goalRefuses, moduleBetter, optimizeGearSet, optimizeModuleSet, optimizeShipSet,
-  optimizeTurretSet, poolsWithModules, rankSub, setRank, rankGt, type Rank, type ShipPools,
+  optimizeTurretSet, poolsWithModules, powerReadingOf, rankSub, setRank, rankGt,
+  type Rank, type ShipPools,
 } from "./fleetDps";
 import type { Item } from "./types";
 
@@ -181,20 +182,26 @@ describe("optimizeShipSet", () => {
       expect(rankSub(swapped, now)).toBeGreaterThanOrEqual(0);
     });
 
-    it("accepts the plan on a modules-only reading and refuses it once the guns are folded in", () => {
-      const fitted = goalReadingOf(salvagePools());
+    it("reads the swap on the layer that actually moved, and stays silent on the one that did not", () => {
+      // The activity keys are LAYER throughput off the candidate battery rather than a projected pool,
+      // which is what makes this plan legible: it spends SURFACE power, and the surface key is the one that moves.
       const withKit = poolsWithModules(salvagePools(), [plainKit], [hullKit]);
-      const modulesOnly = goalReadingOf(withKit);
-      const bothHalves = goalReadingOf(
-        poolsWithModules(withKit, [strongCutter, coreCutter], [weakCutter, coreCutter]));
+      const bg = background(withKit, fittedBattery);
+      const fitted = goalReadingOf(salvagePools(), undefined, undefined,
+                                   powerReadingOf(fittedBattery, background(salvagePools(), fittedBattery)));
+      const swapped = goalReadingOf(withKit, undefined, undefined,
+                                    powerReadingOf([weakCutter, coreCutter], bg));
 
-      // The kit's `Power 2,265` is the whole of the modules-only move, and it points UP.
-      expect(modulesOnly.salvage).toBeCloseTo(233_830, 6);
-      expect(goalRefuses(["salvage"], fitted, modulesOnly)).toBeNull();
+      // Surface is what the swap gives up, and an order naming it refuses.
+      expect(swapped.salvageSurface!).toBeLessThan(fitted.salvageSurface!);
+      expect(goalRefuses(["salvageSurface"], fitted, swapped)).toBe("salvageSurface");
 
-      // With the hardpoints folded in, the same plan spends 6,188 of the key to buy 2,265 of it.
-      expect(bothHalves.salvage).toBeCloseTo(227_642, 6);
-      expect(goalRefuses(["salvage"], fitted, bothHalves)).toBe("salvage");
+      // Balanced is `min(surface, core)` and the CORE cutter is the bottleneck, so the surface loss does not
+      // reach it — the kit's `Power 2,265` does, and it points UP. ∴ the two keys disagree about this plan by
+      // design: surface refuses it, balanced accepts it, and which of them the player put first is the answer.
+      // That is the whole reason the split exists rather than one `mining`/`salvage` key.
+      expect(swapped.salvageBalanced!).toBeGreaterThan(fitted.salvageBalanced!);
+      expect(goalRefuses(["salvageBalanced"], fitted, swapped)).toBeNull();
     });
 
     it("keeps the fitted cutter and takes the kit alone", () => {
@@ -207,7 +214,13 @@ describe("optimizeShipSet", () => {
         ],
         moduleSlots: [{ key: "m:Hull", current: plainKit, candidates: [plainKit, hullKit] }],
         pools: salvagePools(), fittedTurrets: fittedBattery, ctx: { role: "Salvaging" }, act: "Salvage",
-        goal: { order: ["salvage"], fitted: goalReadingOf(salvagePools()) },
+        goal: {
+          order: ["salvageSurface"],
+          // The fitted side carries the same reading shape as a candidate's, or the key is absent on one side and
+          // orders nothing (`goalUnread`).
+          fitted: goalReadingOf(salvagePools(), undefined, undefined,
+                                powerReadingOf(fittedBattery, background(salvagePools(), fittedBattery))),
+        },
       });
       expect(chosen.get("m:Hull")).toBe(hullKit);
       expect(chosen.get("t:0")).toBe(strongCutter);

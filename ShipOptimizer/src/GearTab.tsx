@@ -4,7 +4,7 @@ import type { CatalogTypes, Inventories, Item, ShipHardpoint, ShipLayout, Vitals
 import { num, mainVal, effectiveMainVal } from "./format";
 import { aspectDamageFraction, damageAspects } from "./aspect";
 import { turretScore, scoreReasons, BASE_CRIT, type CritContext } from "./turretScore";
-import { activityOf, capacityWith, optimizeTurretSet, optimizeModuleSet, optimizeShipSet, poolsWithModules, optimizeTurretSetLayered, coversLayer, sameScale, background, setRank, rankGt, rankSub, worthSwitching, isCombat, moduleBetter, moduleGain, shortlist, MIN_GAIN, OBJECTIVE_TIE, type LayerRole, type LayerTarget, type ModuleCtx, type PowerActivity, defaultGoalOrder, goalReadingOf, goalRefuses, goalDrops, goalAccepts, goalUnread, allowanceBreach, DEFAULT_ALLOWANCE, type Breach, GOAL_KEYS, GOAL_LABEL, liveVeto, projectLayer, DEFAULT_LAYER_CAP, frontier, FRONTIER_STEPS, type FrontierPoint, type LayerReading,
+import { powerReadingOf, goalKeysFor, type PowerReading, activityOf, capacityWith, optimizeTurretSet, optimizeModuleSet, optimizeShipSet, poolsWithModules, optimizeTurretSetLayered, coversLayer, sameScale, background, setRank, rankGt, rankSub, worthSwitching, isCombat, moduleBetter, moduleGain, shortlist, MIN_GAIN, OBJECTIVE_TIE, type LayerRole, type LayerTarget, type ModuleCtx, type PowerActivity, defaultGoalOrder, goalReadingOf, goalRefuses, goalDrops, goalAccepts, goalUnread, allowanceBreach, DEFAULT_ALLOWANCE, type Breach, GOAL_KEYS, GOAL_LABEL, liveVeto, projectLayer, DEFAULT_LAYER_CAP, frontier, FRONTIER_STEPS, type FrontierPoint, type LayerReading,
   type GoalKey, type GoalReading, type Rank, type ReactorBudget, type ShipPools, type SlotChoice } from "./fleetDps";
 import { AspectMarks } from "./AspectMark";
 import { load, save, LAYER_CAP_KEY, ALLOWANCE_KEY, GOAL_ORDER_KEY } from "./storage";
@@ -155,11 +155,19 @@ const saveGO = (m: OrderByShip) => save(GOAL_ORDER_KEY, m);
 // A stored order is only as good as the build that wrote it: a key this build does not have is dropped rather than
 // carried into the comparator, where it would read as a stat nothing can measure. Duplicates go too — a key twice
 // in a lexicographic scan makes the second copy unreachable, which is a silent way for an order to lie.
-const cleanOrder = (v: unknown): GoalKey[] => {
+// A stored order written before the layer split named one key per activity, and that key read a POOL. MAPPED
+// rather than dropped: dropping it would silently un-state a goal the player set, and leaving it would name a key
+// that no longer exists. `balanced` is the honest translation — it is what the derived target already was for a
+// hull whose slots are mixed, and it is the figure the panel prints under the same word.
+const RETIRED_GOALS: Record<string, GoalKey> = { mining: "miningBalanced", salvage: "salvageBalanced" };
+
+export const cleanOrder = (v: unknown): GoalKey[] => {
   if (!Array.isArray(v)) return [];
   const seen = new Set<string>();
-  return v.filter((k): k is GoalKey =>
-    typeof k === "string" && (GOAL_KEYS as readonly string[]).includes(k) && !seen.has(k) && !!seen.add(k));
+  return v
+    .map((k) => (typeof k === "string" && RETIRED_GOALS[k] ? RETIRED_GOALS[k] : k))
+    .filter((k): k is GoalKey =>
+      typeof k === "string" && (GOAL_KEYS as readonly string[]).includes(k) && !seen.has(k) && !!seen.add(k));
 };
 // Slots LOCKED to whatever is fitted, per ship. Distinct from `manual`, which pins a slot to an item the player
 // PICKED: this says "leave this slot alone" and survives reloads and re-optimisation. It exists because not every
@@ -383,6 +391,8 @@ export interface GearBuilder {
   setGoalOrder: (next: GoalKey[]) => void;
   /** Ranked keys the plan on screen cannot be judged on, so the control can say so instead of implying a tie. */
   goalUnreadKeys: GoalKey[];
+  /** The keys worth offering on THIS hull — see `goalKeysFor`. */
+  goalKeysOffered: GoalKey[];
   // THE ALLOWANCE SWEPT, as real builds. Null until asked for: each point is a whole-ship search.
   tankLayer: "armor" | "shield" | null;
   frontierPts: FrontierPoint[] | null;
@@ -698,13 +708,25 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
       act, fitted, gear,
       hps.map((hp) => ({ size: hp.size, filter: filters[hp.index] ?? ({ mode: "all" } as Filter) })), cats);
     if (canS === canC) return { act, degradeTo: null, note: null };
+    // WHICH CAUSE, because the two have different fixes and the note is useless without saying which. Reach is
+    // measured a second time with every filter opened: if the layer comes back within reach, no gun is missing —
+    // the slot FILTERS closed it, and the answer is to change one rather than to go shopping.
+    const open = reachableLayers(act, fitted, gear,
+      hps.map((hp) => ({ size: hp.size, filter: { mode: "all" } as Filter })), cats);
+    const missing = canS ? "core" : "surface";
+    const byFilter = canS ? open.core : open.surface;
     return {
       act,
       degradeTo: (canS ? "surface" : "core") as LayerTarget,
-      note: `No ${canS ? "core" : "surface"} ${act.toLowerCase()} gun this ship can mount — `
-        + `this build is scored on ${canS ? "surface" : "core"} alone.`,
+      note: byFilter
+        ? `Every hardpoint's filter refuses the ${missing} ${act.toLowerCase()} guns you own — `
+          + `this build is scored on ${canS ? "surface" : "core"} alone. Open one slot's filter to score both.`
+        : `No ${missing} ${act.toLowerCase()} gun this ship can mount — `
+          + `this build is scored on ${canS ? "surface" : "core"} alone.`,
     };
-  }, [gear, hps]);
+    // `filters` and `cats` are READ here, so they belong in the deps: without them a filter change left the target
+    // and this note computed from the previous filters, which is the one input a player changes by hand.
+  }, [gear, hps, filters, cats]);
 
   // THE PLAYER'S ORDER over the stats, and the key that last refused a plan because of it. The order defaults to
   // the hull's own role and nothing more (`defaultGoalOrder`) — a longer default would be an ordering nobody
@@ -716,8 +738,8 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
   // falls back to the hull's role.
   const goalOrder = useMemo(() => {
     const stated = shipGuid ? orderByShip[shipGuid] : undefined;
-    return stated ? cleanOrder(stated) : defaultGoalOrder(role ?? null);
-  }, [orderByShip, shipGuid, role]);
+    return stated ? cleanOrder(stated) : defaultGoalOrder(role ?? null, hps.length);
+  }, [orderByShip, shipGuid, role, hps.length]);
   const setGoalOrder = useCallback((next: GoalKey[]) => {
     if (!shipGuid) return;
     setOrderByShip((m) => { const n = { ...m, [shipGuid]: cleanOrder(next) }; saveGO(n); return n; });
@@ -806,9 +828,9 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
    * rather than being compacted (`filter(Boolean)` on one side pairs each item with the wrong slot).
    */
   const planReading = useCallback((rank: Rank, cur: (Item | null)[], next: (Item | null)[],
-                                   layers?: LayerReading): GoalReading => {
+                                   layers?: LayerReading, power?: PowerReading): GoalReading => {
     if (!pools) return {};
-    return goalReadingOf(poolsWithModules(pools, cur, next), rank, layers);
+    return goalReadingOf(poolsWithModules(pools, cur, next), rank, layers, power);
   }, [pools]);
 
   /** Every slot's item, in slot order and keeping the empties, for `planReading`'s positional pairing. */
@@ -848,9 +870,10 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
     const rankNext = setRank(nextT, background(projected, curT));
     const was = slotItems(null), plan = slotItems(assign);
     return goalDrops(
-      goalReadingOf(pools, rankNow, layersNow()),
+      goalReadingOf(pools, rankNow, layersNow(), powerReadingOf(curT, background(pools, curT))),
       planReading(rankNext, [...was.turrets, ...was.modules], [...plan.turrets, ...plan.modules],
-                  layersOf([...curT, ...curM], [...nextT, ...nextM])),
+                  layersOf([...curT, ...curM], [...nextT, ...nextM]),
+                  powerReadingOf(nextT, background(projected, curT))),
       layerCap,
       // The other layer is whatever the guns happen to roll, and warning on a percentage of almost nothing is how
       // a warning gets trained out of a player. Null (no defensive slot at all) watches both.
@@ -865,6 +888,24 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
    * With no pools the objective can read nothing at all, so every ranked key is unread; that is the same state the
    * whole expanded ranking degrades to, and it should read the same way here.
    */
+  // Which activities this hull's hardpoints can actually serve, read off what they hold and what their filters
+  // admit rather than off the ship's role: a Mining hull with a salvage gun fitted can be ranked on salvage, and a
+  // role is a label on the hull, not a statement about its battery.
+  const goalKeysOffered = useMemo(() => {
+    const acts = new Set<PowerActivity>();
+    const add = (a: string | null | undefined) => { if (a === "Mining" || a === "Salvage") acts.add(a); };
+    // A slot FILTER naming an activity is an instruction, so it counts even with nothing of that kind fitted yet,
+    // and the fitted guns count because that is what the ship is doing now. Same precedence `turretPlan` uses,
+    // minus the role: a role is a label on the hull, and offering a key on it alone would offer mining to a
+    // combat hull that has never held a drill.
+    for (const hp of hps) {
+      const f = filters[hp.index] ?? ({ mode: "all" } as Filter);
+      if (f.mode === "activity") add(parseActivity(f.value).act);
+      if (hp.equipped) add(activityOf([hp.equipped]));
+    }
+    return goalKeysFor(hps.length, [...acts]);
+  }, [hps, filters]);
+
   const goalUnreadKeys = useMemo(() => {
     if (!goalOrder.length) return [];
     if (!pools) return [...goalOrder];
@@ -876,10 +917,12 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
     const was = slotItems(null), plan = slotItems(assign);
     return goalUnread(
       goalOrder,
-      goalReadingOf(pools, setRank(curT, background(pools, curT)), layersNow()),
+      goalReadingOf(pools, setRank(curT, background(pools, curT)), layersNow(),
+                    powerReadingOf(curT, background(pools, curT))),
       planReading(setRank(nextT, background(projected, curT)),
                   [...was.turrets, ...was.modules], [...plan.turrets, ...plan.modules],
-                  layersOf([...curT, ...curM], [...nextT, ...nextM])),
+                  layersOf([...curT, ...curM], [...nextT, ...nextM]),
+                  powerReadingOf(nextT, background(projected, curT))),
     );
   }, [goalOrder, pools, hps, mslots, assign, layersNow, layersOf, planReading, slotItems]);
 
@@ -937,7 +980,8 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
         // under is always present and the neighbours read as looser or stricter than it rather than as options
         // out of nowhere.
         const steps = [...new Set([...FRONTIER_STEPS, allowance])].sort((x, y) => x - y);
-        const fitted = goalReadingOf(pools, fittedRank, layersNow());
+        const fitted = goalReadingOf(pools, fittedRank, layersNow(),
+                                     powerReadingOf(fittedTurrets, background(pools, fittedTurrets)));
         const pts = frontier(
           {
             turretSlots: tSlots, moduleSlots: mSlots, pools, fittedTurrets, fixedTurrets,
@@ -1029,7 +1073,8 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
         // a ranked key is a figure of; the background `bg` cannot serve — it has the battery stripped out of it.
         const turretGoal = goalOrder.length && pools
           ? {
-              order: goalOrder, pools, fitted: goalReadingOf(pools, now, layersNow()), allow: allowance,
+              order: goalOrder, pools, allow: allowance,
+              fitted: goalReadingOf(pools, now, layersNow(), powerReadingOf(fittedAll, bg)),
               // The PINNED hardpoints stay on both sides: `projectLayer` divides the whole multiplier product out
               // of the reported figure to recover the additive base, so a set missing the guns that are not moving
               // divides out a different product and the projection lands somewhere the game never would.
@@ -1064,7 +1109,7 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
         const planGuns = hps.map((hp) => (chosen.get(`t:${hp.index}`) ?? a[`t:${hp.index}`] ?? hp.equipped) ?? null);
         // The layers are read on BOTH sides or neither: a fitted reading with no armor against a planned reading
         // that has one is not a comparison, it is one key that can only ever look unchanged.
-        const nowRead = goalReadingOf(pools, now, layersNow());
+        const nowRead = goalReadingOf(pools, now, layersNow(), powerReadingOf(fittedAll, bg));
         const planRead = planReading(plan, wasGuns, planGuns,
                                      layersOf(wasGuns.filter((x): x is Item => !!x),
                                               planGuns.filter((x): x is Item => !!x)));
@@ -1134,7 +1179,8 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
         // ranked key is separated by the second, which is the whole point of stating one.
         const chosen = optimizeModuleSet(mSlots, pools, turrets, mctx, undefined, goalOrder.length ? {
           order: goalOrder,
-          fitted: goalReadingOf(pools, setRank(turrets, background(pools, turrets)), layersNow()),
+          fitted: goalReadingOf(pools, setRank(turrets, background(pools, turrets)), layersNow(),
+                                powerReadingOf(turrets, background(pools, turrets))),
           layers: (mods) => layersOf(
             [...turrets, ...open.map((m) => m.equipped).filter((x): x is Item => !!x)],
             [...turrets, ...mods.filter((x): x is Item => !!x)]),
@@ -1161,8 +1207,10 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
         // The LAYERS ride with the pools here, unlike the turret path: a module assignment is what moves hull,
         // armor and shield at all, so an order naming one of them can only be answered on this path.
         const keptM = (inn: (Item | null)[]) => [...turrets, ...inn.filter((x): x is Item => !!x)];
-        const nowReadM = goalReadingOf(pools, rankOf(outs), layersNow());
-        const planReadM = goalReadingOf(planPools, rankOf(plan), layersOf(keptM(outs), keptM(plan)));
+        const nowReadM = goalReadingOf(pools, rankOf(outs), layersNow(),
+                                       powerReadingOf(turrets, background(pools, turrets)));
+        const planReadM = goalReadingOf(planPools, rankOf(plan), layersOf(keptM(outs), keptM(plan)),
+                                        powerReadingOf(turrets, background(planPools, turrets)));
         const vetoM = goalRefuses(goalOrder, nowReadM, planReadM);
         if (vetoM) vetoed.current = { sig: sigRef.current, key: vetoM };
         const breachM = allowanceBreach(goalOrder, nowReadM, planReadM, allowance);
@@ -1259,7 +1307,8 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
         goal: goalOrder.length ? {
           order: goalOrder,
           fitted: goalReadingOf(pools, setRank(fittedTurrets, background(pools, fittedTurrets), target,
-                                               layerAct ?? undefined), layersNow()),
+                                               layerAct ?? undefined), layersNow(),
+                                powerReadingOf(fittedTurrets, background(pools, fittedTurrets))),
           // The candidate BATTERY, not the fitted one: this search moves both halves, and the pinned hardpoints
           // ride along on the planned side because `guns` covers only the slots being chosen.
           layers: (mods, guns) => layersOf(
@@ -1292,10 +1341,16 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
       // with a hardpoint's own power reads as a gain on the key the player ranked (`planReading`).
       const wasGunsJ = hps.map((hp) => hp.equipped ?? null);
       const planGunsJ = hps.map((hp) => (chosen.get(`t:${hp.index}`) ?? hp.equipped) ?? null);
-      const nowReadJ = goalReadingOf(pools, rankOf(outs, nowGuns), layersNow());
+      // The battery's layer figures are read against the SAME background the rank beside them was taken against,
+      // module half folded in on each side: read against the other side's pools they would price one battery's
+      // throughput under another's reactor bracket.
+      const bgJ = (mods: (Item | null)[]) => background(poolsWithModules(pools, outs, mods), fittedTurrets);
+      const nowReadJ = goalReadingOf(pools, rankOf(outs, nowGuns), layersNow(),
+                                     powerReadingOf(nowGuns, bgJ(outs)));
       const planReadJ = planReading(rankOf(planMods, planGuns),
                                     [...wasGunsJ, ...outs], [...planGunsJ, ...planMods],
-                                    layersOf(keptJ(outs, nowGuns), keptJ(planMods, planGuns)));
+                                    layersOf(keptJ(outs, nowGuns), keptJ(planMods, planGuns)),
+                                    powerReadingOf(planGuns, bgJ(planMods)));
       const vetoJ = goalRefuses(goalOrder, nowReadJ, planReadJ);
       if (vetoJ) vetoed.current = { sig: sigRef.current, key: vetoJ };
       const breachJ = allowanceBreach(goalOrder, nowReadJ, planReadJ, allowance);
@@ -1420,6 +1475,7 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
     goalOrder,
     setGoalOrder,
     goalUnreadKeys,
+    goalKeysOffered,
     scope,
     setScope: setSharedScope,
     tankLayer,
@@ -2081,7 +2137,8 @@ export default function GearTab({
           {/* ITS OWN ROW, beneath the buttons rather than inside them: the cap is one number and belongs on a
               button bar, the order is a LIST and never did. Collapsed it is the sentence a plan should be read
               beside; open it needs the full width the bar could not give it. */}
-          <GoalOrder order={builder.goalOrder} setOrder={builder.setGoalOrder} unread={builder.goalUnreadKeys} />
+          <GoalOrder order={builder.goalOrder} setOrder={builder.setGoalOrder} unread={builder.goalUnreadKeys}
+                     offer={builder.goalKeysOffered} />
           {/* Directly under the order it sweeps: the ORDER says which stat wins, the `allow` box says how much of
               the others a plan may spend, and this shows what the other settings of that box actually return. One
               mechanism, read top to bottom, with no third idea between them. */}

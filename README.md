@@ -8,7 +8,7 @@ Community mods for [**Vanguard Galaxy**](https://store.steampowered.com/app/3471
 | **[Hypercom](Hypercom/)** | HTTP server that runs inside the game and provides both a location to serve the ship optimizer from and a bridge so it can reach into the game. |
 | **[Ship Optimizer](ShipOptimizer/)** | All-round tool for ship management displayed as a web UI. |
 | **[Quick Save](QuickSave/)** | Quick save and quick load on a keypress, with an undo slot. |
-| **[CIC Watch](CicWatch/)** | A combat information centre with a display of notable sensor contacts (Beta branch only). |
+| **[CIC Watch](CicWatch/)** | A combat information centre with a display of notable sensor contacts. |
 
 Each mod's own page has the details on what it does and how to use it, but you can access everything from the settings panel, invoked by pressing `F7` (by default).
 
@@ -35,24 +35,26 @@ mod without the others.
 
 Ship Optimizer ships inside it: one download for both.
 
-**[Download Hypercom 0.4.0](https://github.com/Fulgan/VG-plugins/releases/download/Hypercom-v0.4.0/Hypercom-v0.4.0.zip)**
+Needs game 0.8.2 or newer. On an older game, take Hypercom 0.4.0 from the all-releases link.
+
+**[Download Hypercom 0.5.0](https://github.com/Fulgan/VG-plugins/releases/download/Hypercom-v0.5.0/Hypercom-v0.5.0.zip)**
 ([all Hypercom releases](https://github.com/Fulgan/VG-plugins/releases?q=Hypercom))
 
 ### Station Assistant
 
-**[Download Station Assistant 1.1.6](https://github.com/Fulgan/VG-plugins/releases/download/StationAssistant-v1.1.6/StationAssistant-v1.1.6.zip)**
+**[Download Station Assistant 1.1.7](https://github.com/Fulgan/VG-plugins/releases/download/StationAssistant-v1.1.7/StationAssistant-v1.1.7.zip)**
 ([all Station Assistant releases](https://github.com/Fulgan/VG-plugins/releases?q=Station+Assistant))
 
 ### Quick Save
 
-**[Download Quick Save 1.0.1](https://github.com/Fulgan/VG-plugins/releases/download/QuickSave-v1.0.1/QuickSave-v1.0.1.zip)**
+**[Download Quick Save 1.0.2](https://github.com/Fulgan/VG-plugins/releases/download/QuickSave-v1.0.2/QuickSave-v1.0.2.zip)**
 ([all Quick Save releases](https://github.com/Fulgan/VG-plugins/releases?q=Quick+Save))
 
 ### CIC Watch
 
-Beta branch only: on the public release branch it switches itself off.
+Needs game 0.8.2 or newer, the build that brought hull refits and boarding. On an older game it switches itself off.
 
-**[Download CIC Watch 0.1.0](https://github.com/Fulgan/VG-plugins/releases/download/CicWatch-v0.1.0/CicWatch-v0.1.0.zip)**
+**[Download CIC Watch 0.2.0](https://github.com/Fulgan/VG-plugins/releases/download/CicWatch-v0.2.0/CicWatch-v0.2.0.zip)**
 ([all CIC Watch releases](https://github.com/Fulgan/VG-plugins/releases?q=CIC+Watch))
 
 <!-- DOWNLOADS:END -->
@@ -65,7 +67,7 @@ Questions, bug reports, or just want to chat? Join the **[Discord](https://disco
 ## Credits
 
 - **Vanguard Galaxy** is made by **Bat Roost Games**:
-  [buy it on Steam](https://store.steampowered.com/app/3471800/Vanguard_Galaxy/).
+  [Steam page](https://store.steampowered.com/app/3471800/Vanguard_Galaxy/).
 - Some game info and images come from the community wiki
   (<https://wiki.vanguardgalaxy.com>), thanks to its maintainers.
 

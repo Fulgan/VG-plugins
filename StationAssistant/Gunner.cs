@@ -113,8 +113,8 @@ namespace StationAssistant
         // a gun firing more than one round per shot (autocannons) so it runs dry before the configured minutes.
         //
         // A bay's draw is one torpedo per launch cycle. `fireRate` is a PERIOD in seconds, not a rate, and both
-        // it and `reloadSpeed` are private ∴ read by name: the properties over them are beta-only, and a hard
-        // reference would throw on the release branch the first time this method was JITted.
+        // it and `reloadSpeed` are private ∴ read by name: the properties over them are absent before game 0.8.2,
+        // and a hard reference would throw on such a build the first time this method was JITted.
         private static double DrainPerSecond(SpaceShipData ship, InventoryItemType ammo)
         {
             double total = 0;
