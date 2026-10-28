@@ -26,7 +26,7 @@ namespace StationAssistant
 {
     internal enum SellTrigger { Manual, OnDock, OnUndock }
 
-    [BepInPlugin(Guid, "Station Assistant", "1.1.8")]
+    [BepInPlugin(Guid, "Station Assistant", "1.2.0")]
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "fulgan.vanguardgalaxy.stationassistant";
@@ -574,7 +574,7 @@ namespace StationAssistant
 
             var transponder = entry.item.GetComponent<UmbralTransponderItem>();
             // OnUse returns true when a charge is consumed.
-            if (transponder != null && transponder.OnUse())
+            if (transponder != null && transponder.OnUse(entry.item))
             {
                 // The charge is already spent, so a refused removal cannot be undone — it is REPORTED instead,
                 // because a transponder that stays in cargo after being used reads as the mod doing nothing.

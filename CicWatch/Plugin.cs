@@ -16,7 +16,7 @@ namespace CicWatch
     // NEEDS GAME 0.8.2 OR NEWER, and it says so once rather than pretending. Hull rarity, upgrade points,
     // boarding and even the hook that reports a hull arriving are all absent on an older build, so there is no
     // reduced version of this mod to run there (see Gate).
-    [BepInPlugin(Guid, "CIC Watch", "0.3.0")]
+    [BepInPlugin(Guid, "CIC Watch", "0.4.0")]
     public sealed class Plugin : BaseUnityPlugin
     {
         internal const string Guid = "fulgan.vanguardgalaxy.cicwatch";

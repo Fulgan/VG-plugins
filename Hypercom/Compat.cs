@@ -202,6 +202,20 @@ namespace Hypercom
             return ty != null && c != null ? c.GetComponent(ty) : null;
         }
 
+        // The same for an item, which is not a Component: its generic `GetComponent<T>` answers an equipment part
+        // from the item's own rolled instance and every other part from the shared definition, so it is called
+        // rather than reimplemented.
+        internal static object GetComponent(Behaviour.Item.InventoryItemType item, string typeFullName)
+        {
+            var ty = FindType(typeFullName);
+            if (ty == null || item == null) return null;
+            _itemGetComponent = _itemGetComponent ?? typeof(Behaviour.Item.InventoryItemType).GetMethod("GetComponent", Type.EmptyTypes);
+            try { return _itemGetComponent?.MakeGenericMethod(ty).Invoke(item, null); }
+            catch { return null; }
+        }
+
+        private static System.Reflection.MethodInfo _itemGetComponent;
+
         // Enum value by name (e.g. EquipmentSlot.HangarBay), or null if that member doesn't exist.
         internal static object EnumValue(string enumFullName, string valueName)
         {

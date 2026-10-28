@@ -50,12 +50,9 @@ namespace StationAssistant
                 Match = t => t != null && t.GetComponent<UmbralTrackingBeacon>() != null },
         };
 
-        // Ion and Plasma cells share the WarpFuelItem component; the cell tier comes from GetWarpFuelType().
+        // Ion and Plasma cells share the WarpFuelItem component; the cell tier is per item, read off its WarpFuelState.
         private static bool IsFuel(InventoryItemType t, WarpFuelItem.WarpFuelType want)
-        {
-            var w = t == null ? null : t.GetComponent<WarpFuelItem>();
-            return w != null && w.GetWarpFuelType() == want;
-        }
+            => t != null && t.TryGetState<WarpFuelState>(out var s) && s.GetWarpFuelType() == want;
 
         internal struct QmResult
         {

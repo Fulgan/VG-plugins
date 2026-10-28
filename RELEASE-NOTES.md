@@ -7,6 +7,30 @@ Each mod versions on its own, so a date can carry one mod or all of them. Every 
 
 ---
 
+## 2026-10-28 (beta): Hypercom 0.6.0 | CIC Watch 0.4.0 | Station Assistant 1.2.0 | Quick Save 1.1.0
+
+Game 0.8.3.3, open-beta branch only. Normal branch: use the release builds below.
+
+### Hypercom 0.6.0
+
+- Same as Hypercom 0.5.1, built for game 0.8.3.
+- Fixed: ship list, recruits, buying and selling failing on game 0.8.3 ("Method not found").
+
+### CIC Watch 0.4.0
+
+- Same as CIC Watch 0.3.0, built for game 0.8.3.
+
+### Station Assistant 1.2.0
+
+- Same as Station Assistant 1.1.8, built for game 0.8.3.
+- Fixed: auto-sell, decoys, ammo and fuel restock failing on game 0.8.3.
+
+### Quick Save 1.1.0
+
+- Same as Quick Save 1.0.3, built for game 0.8.3.
+
+---
+
 ## 2026-10-28: Hypercom 0.5.1 | CIC Watch 0.3.0 | Station Assistant 1.1.8 | Quick Save 1.0.3
 
 Manageable sell list, optimizer ignore list, destination-aware decoys, CIC Watch chimes. Game 0.8.2.5,

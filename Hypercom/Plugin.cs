@@ -21,7 +21,7 @@ namespace Hypercom
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "fulgan.vanguardgalaxy.hypercom";
-        public const string Version = "0.5.1";
+        public const string Version = "0.6.0";
 
         internal static ManualLogSource Log;
 

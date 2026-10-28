@@ -4,7 +4,7 @@
     <TargetFramework>netstandard2.1</TargetFramework>
     <AssemblyName>CicWatch</AssemblyName>
     <Product>CicWatch</Product>
-    <Version>0.3.0</Version>
+    <Version>0.4.0</Version>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>

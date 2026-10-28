@@ -14,7 +14,7 @@ namespace QuickSave
     // No Harmony patch: the keys are registered with the shared settings host, which owns the polling and the
     // rebinding UI (Shared/ModHost.cs). The one thing this plugin ticks per frame is the update notice, which
     // hands over a finished version check on the main thread and does nothing else.
-    [BepInPlugin(Guid, "Quick Save", "1.0.3")]
+    [BepInPlugin(Guid, "Quick Save", "1.1.0")]
     public sealed class Plugin : BaseUnityPlugin
     {
         internal const string Guid = "fulgan.vanguardgalaxy.quicksave";
