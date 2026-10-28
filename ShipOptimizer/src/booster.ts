@@ -6,6 +6,7 @@ import type { Item, Resonance } from "./types";
 import type { Scope } from "./scope";
 import { unitReachable, type ActivityProfile } from "./activityPresets";
 import { isRoleStat, statApplies, type ShipFit } from "./roleStats";
+import { poolTotalFor, type ShipPools } from "./fleetDps";
 import { statTotals } from "./format";
 
 // The booster's type = its main stat name. Falls back to the readable equipment type, else "Other".
@@ -126,6 +127,11 @@ export interface BoosterCtx {
    * combat booster, last on a mining one" — ranking the stat once answers for every type that carries it.
    */
   order?: ResonanceOrder;
+  /**
+   * Base pools by bonus stat, the fitted boosters' own resonance already divided out (`resonanceBases`). Present
+   * only where the ship's pools are known; without it every bonus falls back to the weight.
+   */
+  pools?: Readonly<Record<string, number>>;
 }
 
 /**
@@ -143,6 +149,59 @@ export interface BoosterCtx {
  * a stat nobody priced; set it to zero and this whole reading disappears.
  */
 export const RESONANCE_WEIGHT = 0.2;
+
+/**
+ * The pool for `stat` with every FITTED resonance on that stat divided back out.
+ *
+ * A reported pool already contains the multipliers the fitted boosters are paying, so crediting a candidate
+ * against the raw total would price it on a contribution it is not making — and would rate a newcomer above the
+ * very booster it would replace, whose own multiplier is inflating the figure being handed to both. One base per
+ * stat, shared by every candidate for it, is what keeps the comparison fair.
+ */
+export function resonanceBase(total: number, fitted: readonly Item[], stat: string): number {
+  let own = 1;
+  for (const b of fitted) {
+    const r = b.resonance;
+    if (!r || r.bonusStat !== stat) continue;
+    const mult = r.bonusMultiplier ?? 1;
+    if (mult > 1) own *= 1 + (mult - 1) * resonanceLive(r);
+  }
+  return own > 0 ? total / own : total;
+}
+
+/**
+ * Base pools by stat name, for every stat a fitted or candidate booster bonuses. Built once per reading and
+ * carried on the ctx so `resonanceCredit` stays a function of one item and one reading.
+ */
+export function resonanceBases(pools: ShipPools | null | undefined, fitted: readonly Item[], pool: readonly Item[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const b of [...fitted, ...pool]) {
+    const stat = b.resonance?.bonusStat;
+    if (!stat || stat in out) continue;
+    const total = poolTotalFor(pools, stat);
+    if (total != null && total > 0) out[stat] = resonanceBase(total, fitted, stat);
+  }
+  return out;
+}
+
+/**
+ * May this bonus be PRICED rather than weighted?
+ *
+ * Four unit conditions, none of them caution. The credit is a fraction of the booster's OWN value, so the bonus
+ * has to be the same quantity as the headline or the ratio divides one stat by another; the bonus has to arrive
+ * as a multiplier, since a flat amount states no share of a pool; a percent main stat is parsed as `2.22` while
+ * its pool is stored as `0.0182`, so the two are two orders of magnitude apart; and a pool this app holds no
+ * total for cannot be measured at all.
+ */
+function exactBase(it: Item, ctx: BoosterCtx): number | null {
+  const r = it.resonance;
+  const stat = r?.bonusStat;
+  if (!r || !stat || stat !== boosterType(it)) return null;
+  if ((r.bonusMultiplier ?? 1) <= 1) return null;
+  if ((it.mainStat?.amount ?? "").includes("%")) return null;
+  const base = ctx.pools?.[stat];
+  return base != null && base > 0 ? base : null;
+}
 
 export interface ResonanceCredit {
   /** The multiplier applied to the booster's value: `value * (1 + credit)`. */
@@ -174,8 +233,14 @@ export function resonanceCredit(it: Item, ctx: BoosterCtx): ResonanceCredit {
 
   // Weight what the bonus is FOR: a role stat is what this ship is for, anything else still applies but matters
   // less. Deliberately coarse — see RESONANCE_WEIGHT on why this is a weight and not an exchange rate.
-  const useful = isRoleStat(ctx.fit?.role, stat) ? 1 : 0.5;
-  const credit = RESONANCE_WEIGHT * useful * paying;
+  // A bonus that scales a pool this app holds a total for is arithmetic rather than a preference: the credit is
+  // what the multiplier is worth against the booster's own value, in one unit. `useful` softens a fudge and has
+  // no place on a measurement, where halving the figure only makes it a different wrong one.
+  const base = exactBase(it, ctx);
+  const value = boosterValue(it);
+  const credit = base != null && value > 0
+    ? ((it.resonance?.bonusMultiplier ?? 1) - 1) * paying * base / value
+    : RESONANCE_WEIGHT * (isRoleStat(ctx.fit?.role, stat) ? 1 : 0.5) * paying;
 
   const why = paying === 0
     ? (r.unit && !reachable ? `no ${r.unit} on this ship` : "not started")
@@ -216,6 +281,79 @@ export function resonanceRank(it: Item, ctx?: BoosterCtx | null): number {
   if (!stat || ctx?.blacklist?.has(stat)) return order.length;
   const i = order.indexOf(stat);
   return i >= 0 ? i : order.length;
+}
+
+/**
+ * Does `a` beat `z` under ONE reading, by the precedence a slot is filled on: the player's order first, then
+ * the score. The optimizer, the opportunity rail and the card's swap note all ask this, so it has one owner and
+ * they cannot disagree about what "better" means.
+ */
+export function beatsAt(a: Item, z: Item, ctx: BoosterCtx, scope: Scope): boolean {
+  const at = { ...ctx, scope };
+  const ra = resonanceRank(a, at), rz = resonanceRank(z, at);
+  if (ra !== rz) return ra < rz;
+  return boosterScore(a, at) > boosterScore(z, at);
+}
+
+/**
+ * Has this booster earned progress a swap would destroy? Resonance accrues only while the booster is fitted and
+ * unfitting it banks nothing, so a part-progressed incumbent has something to lose that no candidate carries over.
+ */
+export const resonanceAtRisk = (it: Item | null | undefined): boolean =>
+  !!it && resonanceLive(it.resonance) > 0;
+
+/**
+ * May `cand` displace `inc`?
+ *
+ * Two boosters of one type reach the SAME ceiling ∴ at full potential their resonance credit is identical, it
+ * cancels out of the comparison, and the ranking falls through to the raw main stat. A candidate a few points
+ * larger then displaces an incumbent that has already earned its whole bonus, and the earned progress counts for
+ * nothing. So where the incumbent has progress to lose, a candidate has to win under BOTH readings rather than
+ * only the one on screen.
+ *
+ * An incumbent with no progress has nothing to destroy ∴ the test does not apply there, and the full-potential
+ * reading goes on crediting an unstarted candidate in full, which is the reason that reading is offered at all.
+ */
+export function dominates(cand: Item, inc: Item | null | undefined, ctx?: BoosterCtx | null): boolean {
+  if (!ctx || !inc || cand === inc) return true;
+  if (!resonanceAtRisk(inc)) return true;
+  return beatsAt(cand, inc, ctx, "current") && beatsAt(cand, inc, ctx, "potential");
+}
+
+/**
+ * How long `cand` flies at a loss before it is worth what `inc` is worth TODAY, in the unit `cand`'s own
+ * resonance counts (kills, scrap, credits earned).
+ *
+ * Both boosters converge on the same multiplier, so a swap's only real cost is the wait. `w` is taken back off
+ * `resonanceCredit` at full progress rather than read from the weight directly: a bonus this hull cannot use, or
+ * one the player told this ship not to chase, is credited nothing and yields no figure here either.
+ *
+ * null where there is nothing to wait for: no bonus in play, or the candidate is already worth more.
+ */
+export function swapPayback(cand: Item, inc: Item, ctx: BoosterCtx): { amount: number; unit: string } | null {
+  const r = cand.resonance;
+  if (!r?.threshold) return null;
+  const w = resonanceCredit(cand, { ...ctx, scope: "potential" }).credit;
+  const vC = boosterValue(cand);
+  if (w <= 0 || vC <= 0) return null;
+  const vI = boosterValue(inc) * (1 + w * resonanceLive(inc.resonance));
+  const amount = r.threshold * (vI - vC) / (vC * w);
+  return amount > 0 ? { amount, unit: r.unit ?? "" } : null;
+}
+
+/**
+ * What the card says about a swap the optimizer has refused: it wins once flown, it loses today, and this is the
+ * wait. Stated rather than silently dropped, so a candidate missing from the plan is a decision the player can
+ * see and overrule with the pick control.
+ *
+ * null unless BOTH readings disagree about this pair, which is the only case the note describes: a candidate
+ * losing under both is simply worse and needs no explanation.
+ */
+export function swapVerdict(cand: Item, inc: Item | null | undefined, ctx?: BoosterCtx | null):
+  { payback: { amount: number; unit: string } | null } | null {
+  if (!ctx || !inc || cand === inc || !resonanceAtRisk(inc)) return null;
+  if (!beatsAt(cand, inc, ctx, "potential") || beatsAt(cand, inc, ctx, "current")) return null;
+  return { payback: swapPayback(cand, inc, ctx) };
 }
 
 // Is this item a booster? (category Booster, or a type/name ending in "booster")
@@ -374,8 +512,17 @@ export function optimizeBoosters(
   const openPicks = picks.filter((p) => !p.chosen && p.type && !p.forced && !lockedSlots.has(p.slot) && !p.pinUnresolved);
   for (const t of new Set(openPicks.map((p) => p.type))) {
     const slotsOfType = openPicks.filter((p) => p.type === t);
+    // WHICH INCUMBENT A NEWCOMER WOULD PUSH OUT, so the swap can be judged against it. Only the weakest fitted
+    // booster of the type is at risk, and only once every slot of that type already holds one: while a slot is
+    // free a newcomer displaces nobody and has nothing to justify.
+    const fittedOfType = pool
+      .filter((b) => !used.has(b) && boosterType(b) === t && b.location === "equipped")
+      .sort(better);
+    const atRisk = fittedOfType.length >= slotsOfType.length ? fittedOfType[fittedOfType.length - 1] ?? null : null;
     const winners = pool
       .filter((b) => !used.has(b) && boosterType(b) === t)
+      // A booster already fitted is not displacing anything by staying where it is.
+      .filter((b) => b.location === "equipped" || dominates(b, atRisk, ctx))
       // The player's resonance order first, then value, then the equipped holder on a tie, then a stable id —
       // one comparator (`better`), shared with the forced pass so the two cannot disagree about "best".
       .sort(better)

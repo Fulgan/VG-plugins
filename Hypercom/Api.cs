@@ -234,13 +234,13 @@ namespace Hypercom
                 // Mining and salvage guns feed pools of their own. A battery of them contributes nothing to
                 // CombatPower, so without these there is no number to compare two mining lasers by. All three
                 // pools are `reactorAffectedStats`, so each carries the same bracket.
-                ["poolMiningPower"] = ShipStat(p, EquipStat.MiningPower, null),
-                ["poolSalvagePower"] = ShipStat(p, EquipStat.SalvagePower, null),
+                ["poolMiningPower"] = PooledStat(p, EquipStat.MiningPower),
+                ["poolSalvagePower"] = PooledStat(p, EquipStat.SalvagePower),
                 // Same reason as the combat pool: each of these is a product, and a client subtracting an
                 // equipped gun's own power out of one — or adding a candidate's in — needs the factor to do it
                 // in the space the contributions actually live in.
-                ["poolMiningPowerMult"] = ShipStatMultiplier(p, EquipStat.MiningPower),
-                ["poolSalvagePowerMult"] = ShipStatMultiplier(p, EquipStat.SalvagePower),
+                ["poolMiningPowerMult"] = PooledStatMultiplier(p, EquipStat.MiningPower),
+                ["poolSalvagePowerMult"] = PooledStatMultiplier(p, EquipStat.SalvagePower),
                 // `GetEquivalentTurretsCount(CombatPower)` — the divisor that shares the power pool out, so
                 // adding a gun lowers every gun's per-shot damage. It is asked PER STAT: the count for
                 // MiningPower excludes the cannons, so a mixed battery does not dilute one pool with the other's
@@ -296,6 +296,32 @@ namespace Hypercom
         /// "no bay" and "a bay with nowhere to launch from" are different builds, and 0 would read as the
         /// second.
         /// </summary>
+        /// <summary>
+        /// A power pool, or null where the game has not calculated one.
+        ///
+        /// MEASURED, one ship, two states: DOCKED the salvage pool reads `GetStat` 0 with `GetStatMultiplier` 0
+        /// while `GetEquivalentTurretsCount` still reports its 7 guns; UNDOCKED the same ship reads 128,665.35
+        /// with a multiplier of 1.93094 over 27 contributing sources. The combat pool stays populated in both,
+        /// which is what makes the gap look like a property of the STAT rather than of the moment.
+        ///
+        /// A multiplier of exactly 0 is therefore the tell. It cannot be a real reading: `CalculatePooledPower`
+        /// multiplies the whole pooled term by it, so a true 0 would mean every gun on that pool does no damage.
+        /// Serving the 0 through asserts "this ship has no salvage power", which a client then models — and the
+        /// same client is right to. Null says the one true thing: there is no reading yet.
+        ///
+        /// This is the rule <see cref="ShipStatMultiplier"/> already follows for its own value, applied to the
+        /// pair: a pool and its factor are one reading, and half of it is worse than none.
+        /// </summary>
+        private static float? PooledStat(GamePlayer p, EquipStat stat) =>
+            PooledStatMultiplier(p, stat) == null ? null : ShipStat(p, stat, null);
+
+        /// <summary>The factor for a pooled stat, or null when the game reports 0 — see <see cref="PooledStat"/>.</summary>
+        private static float? PooledStatMultiplier(GamePlayer p, EquipStat stat)
+        {
+            var m = ShipStatMultiplier(p, stat);
+            return m == null || m.Value == 0f ? null : m;
+        }
+
         /// <summary>
         /// One private number off the FITTED torpedo bay, or null when no bay is fitted. Same by-name read as
         /// <see cref="TorpedoLatchCount"/> and for the same two reasons: the field is private, and the property

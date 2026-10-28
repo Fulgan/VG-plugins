@@ -4,7 +4,7 @@
     <TargetFramework>netstandard2.1</TargetFramework>
     <AssemblyName>CicWatch</AssemblyName>
     <Product>CicWatch</Product>
-    <Version>0.2.0</Version>
+    <Version>0.3.0</Version>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
@@ -56,6 +56,12 @@
       <HintPath>$(ManagedDir)\UnityEngine.IMGUIModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- The call tone. AudioSource and AudioClip live here, not in CoreModule. An ENGINE assembly, so it
+         sits outside the branch check like the uGUI ones above. -->
+    <Reference Include="UnityEngine.AudioModule">
+      <HintPath>$(ManagedDir)\UnityEngine.AudioModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="UnityEngine.InputLegacyModule">
       <HintPath>$(ManagedDir)\UnityEngine.InputLegacyModule.dll</HintPath>
       <Private>false</Private>
@@ -68,6 +74,7 @@
        shipped, so it could only ever report "no version published" while costing a thread and a request. -->
   <ItemGroup>
     <Compile Include="..\Shared\ModHost.cs" Link="ModHost.cs" />
+    <Compile Include="..\Shared\GameTarget.cs" Link="GameTarget.cs" />
     <Compile Include="..\Shared\GameMembers.cs" Link="GameMembers.cs" />
     <Compile Include="..\Shared\GameState.cs" Link="GameState.cs" />
     <Compile Include="..\Shared\GameToast.cs" Link="GameToast.cs" />

@@ -64,6 +64,15 @@ export default function SellList(p: SellListProps) {
   const [splitQ, setSplitQ] = useState("");
   const [reviewQ, setReviewQ] = useState("");
   const [listName, setListName] = useState("");
+  const [loaded, setLoaded] = useState<string | null>(null);
+  const [listsOpen, setListsOpen] = useState(false);
+  // The rules being edited. Every change to a rule or to the default lands HERE and nowhere else until it is
+  // saved: the preview and the review list read this copy, the active set the app persists does not move, and
+  // a sale is refused while the two differ, so money only ever moves on rules the player committed.
+  const [work, setWork] = useState<{ defaultKind: Kind; rules: Rule[] } | null>(null);
+  const rules = work?.rules ?? p.rules;
+  const defaultKind = work?.defaultKind ?? p.defaultKind;
+  const pending = !!work && JSON.stringify(work) !== JSON.stringify({ defaultKind: p.defaultKind, rules: p.rules });
   // Items the player struck off this sale by hand. Keyed by SLOT within its store, so a de-selection cannot
   // wander onto a different item; kept for the session only, because it answers "not this one, now".
   const [held, setHeld] = useState<Set<string>>(new Set());
@@ -84,14 +93,14 @@ export default function SellList(p: SellListProps) {
   useEffect(() => { if (!draft) setOpenPop(null); }, [draft]);
 
   const ctx: FieldCtx = useMemo(() => ({ cats: p.cats, myLevel: p.myLevel }), [p.cats, p.myLevel]);
-  const other = otherKind(p.defaultKind);
-  const seq = () => "r" + (p.rules.reduce((n, r) => Math.max(n, Number(r.id.slice(1)) || 0), 0) + 1);
+  const other = otherKind(defaultKind);
+  const seq = () => "r" + (rules.reduce((n, r) => Math.max(n, Number(r.id.slice(1)) || 0), 0) + 1);
 
   // The RuleSet is built INSIDE the memo: a fresh object per render would defeat it, and listing the object
   // as a dep while reading its parts is how a memo silently stops memoising.
   const verdicts = useMemo(
-    () => evaluate(p.items, { defaultKind: p.defaultKind, rules: p.rules, cats: p.cats, myLevel: p.myLevel }),
-    [p.items, p.defaultKind, p.rules, p.cats, p.myLevel]);
+    () => evaluate(p.items, { defaultKind: defaultKind, rules: rules, cats: p.cats, myLevel: p.myLevel }),
+    [p.items, defaultKind, rules, p.cats, p.myLevel]);
   // What the rules propose, and what survives the review below. A rule set says what KIND of thing to sell;
   // the last word on a specific item is the player's, so the sale acts on `rows`, never on the verdicts.
   const proposed = useMemo(() => p.items.filter((_, i) => verdicts[i] === "sell"), [p.items, verdicts]);
@@ -140,7 +149,21 @@ export default function SellList(p: SellListProps) {
     </td>
   );
 
-  const commit = (rules: Rule[], defaultKind: Kind = p.defaultKind) => p.onChange({ defaultKind, rules });
+  const commit = (next: Rule[], dk: Kind = defaultKind) => setWork({ defaultKind: dk, rules: next });
+  // Loading a list or starting an empty one replaces the whole set on purpose, so it is applied at once and
+  // takes any pending edits with it; the callers ask first when that loses work.
+  const replaceAll = (next: Rule[], dk: Kind) => { setWork(null); p.onChange({ defaultKind: dk, rules: next }); };
+
+  const deleteRule = async (rule: Rule, kind: Kind) => {
+    const n = runRule(rule, p.items, ctx).size;
+    if (!(await ask({
+      title: "Delete this rule?",
+      detail: `It ${kind === "keep" ? "keeps" : "sells"} ${fmt(n)} item${n === 1 ? "" : "s"} today. A saved list keeps its own copy until you save over it.`,
+      confirmLabel: "Delete", danger: true,
+    }))) return;
+    commit(rules.filter((r) => r.id !== rule.id));
+    if (draft?.id === rule.id) setDraft(null);
+  };
 
   // ONE owner for "the draft becomes a rule": the editor offers it at the head and at the foot, since the split
   // preview between them can be thousands of rows tall.
@@ -148,58 +171,105 @@ export default function SellList(p: SellListProps) {
     if (!draft) return;
     // An edit REPLACES the rule it came from, in place: appending would leave the old version beside the new
     // one, and two rules of the same kind both match, so the sale would obey the version being replaced.
-    const at = p.rules.findIndex((r) => r.id === draft.id);
-    commit(at < 0 ? [...p.rules, draft] : p.rules.map((r) => (r.id === draft.id ? draft : r)));
+    const at = rules.findIndex((r) => r.id === draft.id);
+    commit(at < 0 ? [...rules, draft] : rules.map((r) => (r.id === draft.id ? draft : r)));
     setDraft(null);
   };
 
   // ---- saved lists ----------------------------------------------------------------------------
+  // `loaded` is the saved list the rules on screen came from, or were last saved as; the name box is only what
+  // the next save will be called. Keeping them apart is what lets the save button say whether it updates the
+  // list on screen, overwrites a different one, or creates a new one.
+  const listNames = Object.keys(p.lists).sort();
+  const loadedFile = loaded ? p.lists[loaded] : undefined;
+  const dirty = !!loadedFile && JSON.stringify(exportList(loaded!, defaultKind, rules, p.cats)) !== JSON.stringify(loadedFile);
+  // Rules that exist nowhere else: clearing or replacing them loses work, so only these are worth a question.
+  const unsaved = pending || (rules.length > 0 && (!loadedFile || dirty));
+  const saveAs = listName.trim();
+  const saveMode = !saveAs ? "none" : saveAs === loaded && loadedFile ? "update" : p.lists[saveAs] ? "overwrite" : "new";
+
   // Applying a list REPORTS what it could not resolve here. A category this browser does not define and a
   // type this inventory has never seen both match nothing in silence, so an unreported import would look
   // like a list that simply found no scrap today.
   const applyList = async (file: SellListFile, how: string) => {
-    const names = Object.keys(p.lists);
-    if (p.rules.length && !(await ask({
-      title: `Replace the current ${p.rules.length} rule${p.rules.length === 1 ? "" : "s"}?`,
+    if (unsaved && !(await ask({
+      title: `Replace the current ${rules.length} rule${rules.length === 1 ? "" : "s"}?`,
       detail: `“${file.name}” takes over the ${file.defaultKind === "keep" ? "keep" : "sell"} default and its ` +
-              `${file.rules.length} rule${file.rules.length === 1 ? "" : "s"}. The current set is not saved unless you saved it.`,
+              `${file.rules.length} rule${file.rules.length === 1 ? "" : "s"}. The current rules are not saved.`,
       confirmLabel: "Replace",
     }))) return;
     const merged = mergeCats(p.cats, file.cats);
     if (merged.added.length) p.onCats(merged.cats);
-    commit(file.rules, file.defaultKind);
+    replaceAll(file.rules, file.defaultKind);
     setListName(file.name);
+    setLoaded(p.lists[file.name] === file ? file.name : null);
     setDraft(null);
     const notes = [
       ...(merged.added.length ? [`added categor${merged.added.length === 1 ? "y" : "ies"} ${merged.added.join(", ")}`] : []),
       ...(merged.kept.length ? [`kept your own ${merged.kept.join(", ")}`] : []),
       ...listProblems(file.rules, merged.cats, p.items),
     ];
-    setMsg({ ok: !listProblems(file.rules, merged.cats, p.items).length, text: `${how} “${file.name}”${notes.length ? " — " + notes.join("; ") : ""}${names.length === 0 ? "" : ""}` });
+    setMsg({ ok: !listProblems(file.rules, merged.cats, p.items).length, text: `${how} “${file.name}”${notes.length ? " — " + notes.join("; ") : ""}` });
   };
 
-  const saveList = async () => {
-    const name = listName.trim();
-    if (!name) return;
-    if (p.lists[name] && !(await ask({
-      title: `Overwrite “${name}”?`, detail: "The saved copy is replaced by what is on screen.", confirmLabel: "Overwrite",
+  const saveList = async (name: string) => {
+    if (!name || !rules.length) return;
+    if (name !== loaded && p.lists[name] && !(await ask({
+      title: `Overwrite “${name}”?`, detail: "A different saved list already has this name; it is replaced by what is on screen.",
+      confirmLabel: "Overwrite", danger: true,
     }))) return;
-    p.onLists({ ...p.lists, [name]: exportList(name, p.defaultKind, p.rules, p.cats) });
-    setMsg({ ok: true, text: `Saved “${name}” — ${p.rules.length} rule${p.rules.length === 1 ? "" : "s"}.` });
+    p.onLists({ ...p.lists, [name]: exportList(name, defaultKind, rules, p.cats) });
+    if (work) { p.onChange(work); setWork(null); }
+    setLoaded(name);
+    setMsg({ ok: true, text: `Saved “${name}” — ${rules.length} rule${rules.length === 1 ? "" : "s"}.` });
+  };
+
+  // The bar's save: commits the pending edits, and writes them into the list on screen when there is one.
+  const saveChanges = async () => {
+    if (loadedFile) return saveList(loaded!);
+    if (work) p.onChange(work);
+    setWork(null);
+    setMsg({ ok: true, text: "Changes saved." });
+  };
+
+  const discardChanges = () => { setWork(null); setDraft(null); };
+
+  // Closing with edits pending would keep them only as long as this component stays mounted, which is not
+  // something the player can see; they are asked instead.
+  const close = async () => {
+    if (pending && !(await ask({
+      title: "Discard unsaved changes?", detail: "The rules go back to what was last saved.",
+      confirmLabel: "Discard", danger: true,
+    }))) return;
+    discardChanges();
+    p.onClose();
+  };
+
+  const newList = async () => {
+    if (unsaved && !(await ask({
+      title: `Clear the current ${rules.length} rule${rules.length === 1 ? "" : "s"}?`,
+      detail: "They are not saved under any name. Saved lists are untouched.", confirmLabel: "Clear", danger: true,
+    }))) return;
+    replaceAll([], defaultKind);
+    setListName("");
+    setLoaded(null);
+    setDraft(null);
+    setMsg(null);
   };
 
   const deleteList = async (name: string) => {
-    if (!(await ask({ title: `Delete “${name}”?`, detail: "The rules on screen are untouched.", confirmLabel: "Delete", danger: true }))) return;
+    if (!(await ask({ title: `Delete the saved list “${name}”?`, detail: "The rules on screen are untouched.", confirmLabel: "Delete", danger: true }))) return;
     const next = { ...p.lists };
     delete next[name];
     p.onLists(next);
+    if (name === loaded) setLoaded(null);
     setMsg({ ok: true, text: `Deleted “${name}”.` });
   };
 
   // A file, because the point of a saved list is to use it on a playthrough this browser has never seen.
   const download = () => {
     const name = listName.trim() || "sell-rules";
-    const file = exportList(name, p.defaultKind, p.rules, p.cats);
+    const file = exportList(name, defaultKind, rules, p.cats);
     const url = URL.createObjectURL(new Blob([JSON.stringify(file, null, 2)], { type: "application/json" }));
     const a = document.createElement("a");
     a.href = url;
@@ -219,7 +289,7 @@ export default function SellList(p: SellListProps) {
 
   const setStance = (k: Kind) => {
     // Every exception just changed kind, so the end of the ranking it reaches for changed with it.
-    const flipped = p.rules.map((r) => ({ ...r, order: { ...r.order, dir: defaultDir(otherKind(k), r.take?.mode ?? "except") } }));
+    const flipped = rules.map((r) => ({ ...r, order: { ...r.order, dir: defaultDir(otherKind(k), r.take?.mode ?? "except") } }));
     if (draft) setDraft({ ...draft, order: { ...draft.order, dir: defaultDir(otherKind(k), draft.take?.mode ?? "except") } });
     commit(flipped, k);
   };
@@ -240,9 +310,79 @@ export default function SellList(p: SellListProps) {
     } finally { setBusy(false); }
   };
 
+  // The list manager. Saved lists outlive the playthrough they were written on, which is the whole point of
+  // one; a file carries one to a browser that has never seen it.
+  const listsUi = (
+    <Modal open={p.open && listsOpen} onClose={() => setListsOpen(false)} label="Sell lists" className="lists-pop">
+      <div className="cfg-head">
+        <b>Sell lists</b>
+        <span className="spacer" />
+        <button className="popin-x" title="close (Esc)" onClick={() => setListsOpen(false)}>×</button>
+      </div>
+      <div className="sl-lm">
+        <h4>Saved lists</h4>
+        {listNames.length ? (
+          <table className="sl-lm-tab">
+            <tbody>
+              {listNames.map((name) => {
+                const f = p.lists[name];
+                return (
+                  <tr key={name} className={name === loaded ? "on" : ""}>
+                    <td className="nm">{name}{name === loaded && <span className="dim"> · on screen{dirty ? ", changed" : ""}</span>}</td>
+                    <td className="dim">{f.rules.length} rule{f.rules.length === 1 ? "" : "s"}, {f.defaultKind} the rest</td>
+                    <td className="act">
+                      <button className="mini" disabled={name === loaded && !dirty}
+                              onClick={async () => { await applyList(f, "Loaded"); setListsOpen(false); }}
+                              title={`replace the rules on screen with “${name}”`}>{name === loaded && dirty ? "revert" : "load"}</button>
+                      <button className="mini danger" onClick={() => deleteList(name)} aria-label={`delete ${name}`}
+                              title={`delete the saved list “${name}”; the rules on screen are untouched`}>delete</button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        ) : <div className="dim">No saved lists yet. Name the rules on screen below and save them.</div>}
+
+        <h4>Rules on screen</h4>
+        <div className="sl-lm-row dim">
+          {rules.length} rule{rules.length === 1 ? "" : "s"}, {defaultKind} the rest —{" "}
+          {loadedFile ? (dirty ? `“${loaded}”, changed` : `saved as “${loaded}”`) : rules.length ? "not saved" : "empty"}
+        </div>
+        <div className="sl-lm-row">
+          <input value={listName} placeholder="list name…" autoFocus={!loadedFile && rules.length > 0}
+                 onChange={(e) => setListName(e.target.value)}
+                 onKeyDown={(e) => { if (e.key === "Enter") void saveList(saveAs); }} />
+          <button className="mini" disabled={!rules.length || saveMode === "none" || (saveMode === "update" && !dirty)}
+                  onClick={() => saveList(saveAs)}
+                  title={!rules.length ? "no rules to save" : saveMode === "none" ? "type a name first"
+                    : saveMode === "update" ? `store the rules on screen in “${saveAs}”`
+                    : saveMode === "overwrite" ? `replace the different saved list “${saveAs}” with the rules on screen`
+                    : `save the rules on screen as a new list “${saveAs}”`}>
+            {saveMode === "update" ? (dirty ? "save changes" : "saved")
+              : saveMode === "overwrite" ? `overwrite “${saveAs}”` : "save as new list"}</button>
+          <span className="spacer" />
+          <button className="mini" disabled={!rules.length && !loaded} onClick={newList}
+                  title="clear the rules on screen and start a new list; saved lists are untouched">＋ new empty list</button>
+        </div>
+
+        <h4>Files</h4>
+        <div className="sl-lm-row">
+          <label className="mini sl-imp" title="load a list from a file">import from file…
+            <input type="file" accept=".json,application/json"
+                   onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; void upload(f).then(() => setListsOpen(false)); }} />
+          </label>
+          <button className="mini" disabled={!rules.length} onClick={download}
+                  title="save the rules on screen to a file you can carry to another playthrough">export to file…</button>
+        </div>
+      </div>
+    </Modal>
+  );
+
   return (
-    <Modal open={p.open} onClose={p.onClose} label="Sell list" className="sell-pop">
+    <Modal open={p.open} onClose={() => void close()} label="Sell list" className="sell-pop">
       <>
+        {listsUi}
         {confirmUi}
         <div className="cfg-head">
           <b>Sell list</b>
@@ -253,7 +393,7 @@ export default function SellList(p: SellListProps) {
             <span className="dim">· {fmt(counts.keep)} kept · {fmt(counts.cant)} can’t
               {counts.back > 0 && ` · ${fmt(counts.back)} struck off`}</span>
           </span>
-          <button className="popin-x" title="close (Esc)" onClick={p.onClose}>×</button>
+          <button className="popin-x" title="close (Esc)" onClick={() => void close()}>×</button>
         </div>
 
         {/* A sale is not a confirmation that stops being true — it is the record of money moving, and it must
@@ -263,35 +403,31 @@ export default function SellList(p: SellListProps) {
         {/* While a rule is being written the EDITOR is the work and the review list is not: it takes the room
             it needs and the body scrolls, rather than the editor scrolling inside a box of its own. */}
         <div className={"sl-body" + (draft ? " editing" : "")}>
-          {/* Saved lists. A list outlives the playthrough it was written on, which is the whole point of one. */}
+          {/* Which saved list is on screen. Everything else about lists lives in the manager, one click away. */}
           <div className="sl-lists">
-            <span className="dim">list</span>
-            <input value={listName} placeholder="name this list…" onChange={(e) => setListName(e.target.value)} />
-            <button className="mini" disabled={!listName.trim() || !p.rules.length} onClick={saveList}
-                    title={p.rules.length ? "save the rules on screen under this name" : "no rules to save"}>save</button>
-            {Object.keys(p.lists).sort().map((name) => (
-              <span key={name} className={"sl-tag" + (name === listName.trim() ? " on" : "")}>
-                <button className="tagname" title={`load “${name}” — ${p.lists[name].rules.length} rules`}
-                        onClick={() => applyList(p.lists[name], "Loaded")}>{name}</button>
-                <button title="delete" onClick={() => deleteList(name)}>×</button>
-              </span>
-            ))}
-            <span className="spacer" />
-            <button className="mini" disabled={!p.rules.length} onClick={download} title="save to a file you can carry to another playthrough">export</button>
-            <label className="mini sl-imp" title="load a list from a file">import
-              <input type="file" accept=".json,application/json" onChange={(e) => { void upload(e.target.files?.[0]); e.target.value = ""; }} />
-            </label>
+            <span className="sl-lists-h">List</span>
+            {loadedFile ? <b>{loaded}</b> : <span className={rules.length ? "sl-dirty" : "dim"}>{rules.length ? "not saved" : "empty"}</span>}
+            {(pending || dirty) && <span className="sl-dirty">unsaved changes</span>}
+            {/* With nothing pending and no list loaded, the only thing left to save is a name: that is typed in the manager. */}
+            <button className="mini" disabled={!pending && (!rules.length || (!!loadedFile && !dirty))}
+                    onClick={() => (pending || loadedFile ? saveChanges() : setListsOpen(true))}
+                    title={pending ? (loadedFile ? `apply these changes and store them in “${loaded}”` : "apply these changes")
+                      : !rules.length ? "no rules to save" : loadedFile ? (dirty ? `store the rules on screen in “${loaded}”` : "nothing changed")
+                      : "name these rules and save them as a list"}>
+              {pending || dirty ? "save" : loadedFile ? "saved" : "save…"}</button>
+            {pending && <button className="mini" onClick={discardChanges} title="go back to the rules as last saved">discard</button>}
+            <button className="mini" onClick={() => setListsOpen(true)} title="save, load, start or delete sell lists">manage lists…</button>
           </div>
 
           <div className="sl-sides">
             {(["keep", "sell"] as Kind[]).map((side) => (
               <div key={side} className={`card sl-side ${side}`}>
                 <div className="sl-side-h">{side === "keep" ? "Keep" : "Sell"}
-                  <span className="n">{p.defaultKind === side ? "default" : `${p.rules.length} rule${p.rules.length === 1 ? "" : "s"}`}</span>
+                  <span className="n">{defaultKind === side ? "default" : `${rules.length} rule${rules.length === 1 ? "" : "s"}`}</span>
                 </div>
-                {p.defaultKind === side ? (
+                {defaultKind === side ? (
                   <div className="sl-def">
-                    <select value={p.defaultKind} onChange={(e) => setStance(e.target.value as Kind)} className={"k-" + p.defaultKind}>
+                    <select value={defaultKind} onChange={(e) => setStance(e.target.value as Kind)} className={"k-" + defaultKind}>
                       <option value="keep">Keep</option>
                       <option value="sell">Sell</option>
                     </select>
@@ -299,8 +435,8 @@ export default function SellList(p: SellListProps) {
                   </div>
                 ) : (
                   <>
-                    {!p.rules.length && <div className="sl-empty">No exceptions yet.</div>}
-                    {p.rules.map((rule, idx) => (
+                    {!rules.length && <div className="sl-empty">No exceptions yet.</div>}
+                    {rules.map((rule, idx) => (
                       <div key={rule.id}>
                         {idx > 0 && <div className="sl-or">OR</div>}
                         <RuleRow
@@ -312,6 +448,7 @@ export default function SellList(p: SellListProps) {
                           // that state silently ignores a rule the player believes is theirs. `addDraft`
                           // replaces it by id when the edit is committed; `discard` leaves the original alone.
                           onEdit={() => setDraft(structuredClone(rule))}
+                          onDelete={() => deleteRule(rule, other)}
                         />
                       </div>
                     ))}
@@ -341,7 +478,7 @@ export default function SellList(p: SellListProps) {
               <Editor
                 draft={draft} setDraft={setDraft} kind={other} items={p.items} ctx={ctx}
                 openPop={openPop} setOpenPop={setOpenPop}
-                defaultKind={p.defaultKind}
+                defaultKind={defaultKind}
                 view={p.view} setView={p.onView}
                 openGroups={openGroups} setOpenGroups={setOpenGroups}
                 splitQ={splitQ} setSplitQ={setSplitQ}
@@ -409,8 +546,9 @@ export default function SellList(p: SellListProps) {
         <div className="cfg-actions">
           <span className="dim">{fmt(counts.sell)} selected · <b>{fmt(counts.cr)} cr</b></span>
           <span className="spacer" />
-          {!p.docked && <span className="dim">dock to sell</span>}
-          <button className="danger" disabled={busy || !counts.sell || !p.docked} onClick={sellNow}>
+          {!p.docked ? <span className="dim">dock to sell</span>
+            : pending && <span className="sl-dirty">save or discard your changes to sell</span>}
+          <button className="danger" disabled={busy || !counts.sell || !p.docked || pending} onClick={sellNow}>
             {busy ? "Selling…" : `Sell ${fmt(counts.sell)}`}
           </button>
         </div>
@@ -428,7 +566,7 @@ export default function SellList(p: SellListProps) {
  */
 function RuleRow(q: {
   rule: Rule; kind: Kind; items: Item[]; ctx: FieldCtx;
-  onCopy: () => void; onEdit: () => void;
+  onCopy: () => void; onEdit: () => void; onDelete: () => void;
   /** This rule is open in the editor. It still APPLIES — what is on screen below is not in effect yet. */
   editing?: boolean;
 }) {
@@ -447,6 +585,7 @@ function RuleRow(q: {
         <div className={"sl-count k-" + q.kind}>{fmt(n)}</div>
         <button className="mini" title="duplicate into the editor" onClick={(e) => { e.stopPropagation(); q.onCopy(); }}>copy</button>
         <button className="mini" title="pull into the editor" onClick={(e) => { e.stopPropagation(); q.onEdit(); }}>edit</button>
+        <button className="mini danger" title="delete this rule" aria-label="delete rule" onClick={(e) => { e.stopPropagation(); q.onDelete(); }}>×</button>
       </div>
     </div>
   );
@@ -656,11 +795,12 @@ function RowGrid(p: {
               <Fragment key={`${r.it.location ?? ""}#${r.it.key ?? i}`}>
                 {cut && <tr className="sl-cut"><td colSpan={span}>— the count falls here —</td></tr>}
                 <tr className={p.rowClass?.(r) ?? ""} ref={i === 0 ? win.measureRef : undefined}
-                    onClick={p.onRowClick ? () => p.onRowClick?.(r) : undefined}
-                    onMouseEnter={(e) => p.showTip({ it: r.it, x: e.clientX, y: e.clientY })}
-                    onMouseLeave={p.hideTip}>
+                    onClick={p.onRowClick ? () => p.onRowClick?.(r) : undefined}>
                   {p.lead.cell(r)}
-                  <td className="nm" style={{ color: RARITY_COLOR[r.it.rarity] }}>
+                  {/* Only the name opens the cursor card, or it covers the columns being compared across. */}
+                  <td className="nm" style={{ color: RARITY_COLOR[r.it.rarity] }}
+                      onMouseEnter={(e) => p.showTip({ it: r.it, x: e.clientX, y: e.clientY })}
+                      onMouseLeave={p.hideTip}>
                     {r.it.name}{(r.it.count ?? 1) > 1 ? `  ×${r.it.count}` : ""}
                   </td>
                   {cols.map((k) => (

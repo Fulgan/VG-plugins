@@ -51,7 +51,7 @@ dialog.modal-box.sell-pop { width: min(1500px, 97vw); height: 92vh; max-height: 
 .sl-rule.editing { background: #14161d; box-shadow: inset 2px 0 0 #4f7fbf; }
 /* The sentence, its count, and the two controls. Track count MUST match the children: a column left over
    from a removed control takes the sentence's 1fr and renders it one word per line. */
-.sl-rhead { display: grid; grid-template-columns: 1fr auto auto auto; gap: 6px; align-items: start;
+.sl-rhead { display: grid; grid-template-columns: 1fr auto auto auto auto; gap: 6px; align-items: start;
   padding: 8px 10px; cursor: pointer; }
 .sl-rhead:hover { background: #16161c; }
 .sl-sent .sl-cl { display: block; font-size: 12.5px; line-height: 1.5; }
@@ -60,9 +60,9 @@ dialog.modal-box.sell-pop { width: min(1500px, 97vw); height: 92vh; max-height: 
 .sl-sent .cw { color: #cfe4ff; }
 .sl-count { font-family: ui-monospace, monospace; font-size: 11.5px; font-variant-numeric: tabular-nums; }
 /* sits where the rule it will make goes, instead of owning a card */
-.sl-addrule { display: block; width: 100%; border: 0; border-top: 1px dashed #33333e; border-radius: 0;
-  background: transparent; color: #8a8a96; padding: 8px 10px; font-size: 12px; text-align: center; }
-.sl-addrule:hover { color: #cfe4ff; background: #16161c; }
+.sl-addrule { display: block; width: 100%; margin: 8px 0 0; border: 1px solid #2f7a46; border-radius: 4px;
+  background: #1d3a26; color: #d4f7dd; padding: 7px 10px; font-size: 12.5px; font-weight: 600; text-align: center; }
+.sl-addrule:hover { color: #fff; background: #25502f; border-color: #3f9a5c; }
 
 /* the live split — what comes in, and how it divides */
 .sl-split { background: #101016; border-top: 1px solid #2c2c36; padding: 8px 10px;
@@ -275,7 +275,7 @@ dialog.modal-box.sell-pop { width: min(1500px, 97vw); height: 92vh; max-height: 
   border: 1px solid #2f3d4d; border-radius: 2px; color: inherit; }
 .sl-pkclose { display: flex; justify-content: flex-end; border-top: 1px solid #2c2c36; margin-top: 8px;
   padding-top: 7px; }
-.cfg-actions button.danger { background: #3b1d1d; border-color: #7f1d1d; color: #fca5a5; }
+.cfg-actions button.danger, .sl-lm-tab button.danger, .sl-rhead button.danger { background: #3b1d1d; border-color: #7f1d1d; color: #fca5a5; }
 
 /* the review step: the rules propose, this is where the player strikes items off */
 .sl-review { margin-top: 12px; }   /* sizing lives with the body's column rules above */
@@ -297,15 +297,21 @@ dialog.modal-box.sell-pop { width: min(1500px, 97vw); height: 92vh; max-height: 
 .sl-grid tr.sl-off td { opacity: .4; }
 .sl-grid tr.sl-off td.nm { text-decoration: line-through; }
 
-/* saved lists: names as tags, because the set is small and picking one is one click, not two */
-.sl-lists { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 0 0 10px; font-size: 12px; }
-.sl-lists > input { width: 150px; font-size: 12px; }
-.sl-tag { display: inline-flex; align-items: center; border: 1px solid #33333e; border-radius: 999px;
-  background: #16161c; overflow: hidden; }
-.sl-tag.on { border-color: #3a5470; background: #24303d; }
-.sl-tag button { background: none; border: 0; color: #cfe4ff; font-size: 11.5px; padding: 3px 4px 3px 10px; }
-.sl-tag button + button { color: #8a8a96; padding: 3px 8px 3px 4px; }
-.sl-tag button:hover { color: #fff; background: #2b2b36; }
+/* the list bar: which saved list is on screen; the manager popin does the rest */
+.sl-lists { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 0 0 10px; font-size: 12px; }
+.sl-lists-h { color: #8a8a96; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+.sl-dirty { color: #e0b060; }
+dialog.modal-box.lists-pop { width: min(620px, 94vw); }
+.sl-lm { display: flex; flex-direction: column; gap: 8px; font-size: 12.5px; }
+.sl-lm h4 { margin: 10px 0 0; font-size: 11px; color: #8a8a96; text-transform: uppercase; letter-spacing: .04em; }
+.sl-lm-row { display: flex; gap: 8px; align-items: center; }
+.sl-lm-row input { width: 200px; font-size: 12px; }
+.sl-lm-tab { width: 100%; border-collapse: collapse; }
+.sl-lm-tab td { padding: 5px 6px; border-top: 1px solid #26262e; }
+.sl-lm-tab tr.on td { background: #1d2733; }
+.sl-lm-tab td.nm { color: #cfe4ff; }
+.sl-lm-tab td.act { text-align: right; white-space: nowrap; }
+.sl-lm-tab td.act button + button { margin-left: 6px; }
 /* the file input is the label; a bare one cannot be styled to match a button */
 .sl-imp { cursor: pointer; }
 .sl-imp input[type=file] { display: none; }

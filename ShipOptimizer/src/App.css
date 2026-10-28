@@ -179,6 +179,14 @@ section h2 small { color: #777; font-weight: 400; }
 .opp-type { grid-column: 1; grid-row: 2; font-size: 11px; }
 .opp-cost { grid-column: 2; grid-row: 2; font-size: 11px; }
 .opp-cost.down { color: #fca5a5; }
+/* THE WHOLE ROW IS PLACED, ⊥ only the parts that had a rule. An unplaced child auto-flows into whatever cell is
+   free, so each one added landed on top of the last: the refusal under the name, then the reason on top of the
+   refusal. Naming every cell is what stops the next addition doing it again.
+     row 3 — the reason, across both columns, since it is a sentence rather than a figure.
+     row 4 — the two ACTIONS, refusal at the start and buy opposite it. */
+.opp-row .opp-why { grid-column: 1 / -1; grid-row: 3; max-width: none; }
+.opp-row .li-ban { grid-column: 1; grid-row: 4; justify-self: start; align-self: center; }
+.opp-row .opp-buy { grid-column: 2; grid-row: 4; justify-self: end; }
 .grid-wrap.sheet { max-width: 340px; max-height: none; margin-bottom: 10px; }
 
 /* pinned ship-stats pop-in */
@@ -648,3 +656,25 @@ td.c-sel input:disabled { cursor: not-allowed; opacity: .35; }
      stacked rows would break the one thing it is for, which is reading a column down. */
   .grid-wrap { max-height: 70vh; }
 }
+
+/* The head's controls, kept on one line of their own rather than one line each. */
+.opp-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* ONE HEIGHT PER LINE OF CONTROLS. The head's two buttons and the row's two actions each sit beside something
+   of a different size, so left alone every one of them set its own height and a narrow rail became a column of
+   pills at four heights. Font, padding and line-height are stated together for that reason: a shared height is
+   what makes them read as one row rather than several. */
+.opp-panel .ban-chip, .opp-panel .mini { font-size: 11px; padding: 2px 7px; line-height: 1.5; }
+.opp-row .li-ban, .opp-row .opp-buy { font-size: 10px; padding: 1px 6px; line-height: 1.5; align-self: center; }
+
+/* The rail's blocks. A heading names the shopping list that put those rows there, or the plain upgrades that no
+   list claimed — the question "why is this offered" is answered once per block instead of once per row. */
+.opp-group + .opp-group { margin-top: 8px; }
+.opp-group-head { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: #8a8a94;
+  padding: 3px 4px; border-bottom: 1px solid #2a2a33; margin-bottom: 2px; }
+
+/* The two list buttons, side by side and wrapping together on a narrow rail. */
+.list-buttons { display: flex; gap: 6px; flex-wrap: wrap; }
+/* A shelf row that is the player's own gun coming back. Inline on the type line: it is a fact ABOUT the item,
+   not a cell of its own, and every cell of this row is placed by hand. */
+.opp-back { margin-left: 6px; font-size: 9.5px; letter-spacing: .04em;
+  color: #c9a227; border: 1px solid #5a4a1e; border-radius: 3px; padding: 0 4px; }

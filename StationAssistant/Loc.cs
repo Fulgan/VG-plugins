@@ -166,6 +166,7 @@ namespace StationAssistant
             ["qm.autobuy"] = " Auto-buy the shortfall from station shops",
             ["qm.echoSkip"] = " Don't buy or sell while ECHO drives",
             ["qm.autoActivate"] = " activate on undock",
+            ["qm.autoActivateTravel"] = " on course to a friendly faction",
             ["qm.noShip"] = "<size=11>(no active ship)</size>",
             ["qm.ship"] = "Ship: <b>{0}</b>",
             ["qm.header"] = "<b>Stock targets</b>",

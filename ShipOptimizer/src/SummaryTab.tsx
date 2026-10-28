@@ -5,6 +5,7 @@ import type { OfficerBuilder } from "./OfficersTab";
 import { ApplyMsg } from "./ApplyBar";
 import PlanNotice from "./PlanNotice";
 import type { ApplyApi } from "./useApply";
+import ShipCard, { type ShipView } from "./ShipCard";
 import type { BoosterBuilder } from "./BoostersTab";
 import { type GearBuilder } from "./GearTab";
 import { type GearFilter } from "./gearFit";
@@ -87,8 +88,10 @@ function pairs<T>(leave: T[], join: T[]): { cur: T | null; next: T | null }[] {
 // The apply hub: a current→new change list per category (officers, boosters), applied to the CURRENT
 // ship via POST /loadout/apply (officers by guid, boosters by exact handle). Undo reverts the last apply.
 export default function SummaryTab({
-  officer, boosters, gear, portraitUrl, conn, currentShipGuid, playthrough, playthroughName, reloadNonce, apply,
+  officer, boosters, gear, portraitUrl, conn, currentShipGuid, playthrough, playthroughName, reloadNonce, apply, shipView,
 }: {
+  // Built once by `App`, so this tab and the three that feed it never disagree about the pending build.
+  shipView?: ShipView;
   officer: OfficerBuilder;
   boosters: BoosterBuilder;
   gear: GearBuilder;
@@ -243,6 +246,14 @@ export default function SummaryTab({
   return (
     <div className="summary">
       {confirmUi}
+
+      {/* The ship the summary is about, beside the list of what is being changed about it: on its own above
+          the cards it is a band of empty width they all have to start under. */}
+      <div className="opt-grid sum-grid">
+        <div className="opt-side">
+          {shipView && <ShipCard {...shipView} column />}
+        </div>
+        <div className="sum-main">
       <div className="sum-head">
         <div className="panel-title">Loadout summary <span className="dim">— {boosters.loadout?.name ?? "ship"} · {totalChanges} change{totalChanges === 1 ? "" : "s"}</span></div>
         <div className="sum-actions">
@@ -251,8 +262,6 @@ export default function SummaryTab({
         </div>
       </div>
       <ApplyMsg apply={apply} />
-
-      {/* What the ship currently IS, above the list of what you're about to change about it. */}
 
       {/* Saved loadouts */}
       <div className="sum-presets">
@@ -344,6 +353,8 @@ export default function SummaryTab({
               {e.req.length > 0 && <ul className="log-req">{e.req.map((l, j) => <li key={j}>{l}</li>)}</ul>}
             </div>
           ))}
+      </div>
+        </div>
       </div>
 
       {tip?.item && <ItemTip it={tip.item} x={tip.x} y={tip.y} conn={conn} imgUrl={tip.imgUrl} vs={tip.vs} />}

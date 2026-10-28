@@ -14,7 +14,7 @@ namespace QuickSave
     // No Harmony patch: the keys are registered with the shared settings host, which owns the polling and the
     // rebinding UI (Shared/ModHost.cs). The one thing this plugin ticks per frame is the update notice, which
     // hands over a finished version check on the main thread and does nothing else.
-    [BepInPlugin(Guid, "Quick Save", "1.0.2")]
+    [BepInPlugin(Guid, "Quick Save", "1.0.3")]
     public sealed class Plugin : BaseUnityPlugin
     {
         internal const string Guid = "fulgan.vanguardgalaxy.quicksave";
@@ -30,6 +30,11 @@ namespace QuickSave
         private void Awake()
         {
             Log = Logger;
+
+            // Another game version than this build targets still loads; the log says so and names the build to install.
+            var gameNote = VG.Game.GameTarget.Notice("Quick Save", out var gameWarn);
+            if (gameWarn) Log.LogWarning(gameNote);
+            else if (gameNote != null) Log.LogInfo(gameNote);
             VG.Game.GameToast.Warn = m => Log.LogWarning(m);
 
             _saveKey = Config.Bind("Keys", "QuickSave", KeyCode.None,

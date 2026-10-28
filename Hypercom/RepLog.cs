@@ -138,6 +138,10 @@ namespace Hypercom
             {
                 ["seq"] = ++_seq,
                 ["t"] = DateTime.Now.ToString("HH:mm:ss"),
+                // The DAY as well as the clock. `t` alone cannot say whether 09:23 was this morning or last
+                // week, so a client could only ever print a time and hope the reader knew. Local, because it is
+                // the player's own day that decides whether something reads as "yesterday".
+                ["day"] = DateTime.Now.ToString("yyyy-MM-dd"),
                 ["ladder"] = ladder,
                 ["factionId"] = id,
                 ["faction"] = Galaxy.FactionName(faction),

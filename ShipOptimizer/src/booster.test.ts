@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   boosterScore, boosterType, boosterValue, defaultSlotTypes, optimizeBoosters, resonanceCredit, resonanceLive,
-  boosterPinKey, type BoosterCtx,
+  boosterPinKey, dominates, swapVerdict, resonanceBase, resonanceBases, RESONANCE_WEIGHT, type BoosterCtx,
 } from "./booster";
 import { DEFAULT_PROFILE } from "./activityPresets";
 import type { Item, Resonance } from "./types";
@@ -245,5 +245,142 @@ describe("a pin survives the apply that satisfies it", () => {
     // Silence here is the defect: the badge says pinned while a different booster is proposed.
     expect(picks[0].pinUnresolved).toBe(true);
     expect(picks[0].chosen).toBeNull();
+  });
+});
+
+// Displacing a booster that has ALREADY earned its resonance. Two of one type reach the same ceiling, so under
+// the full-potential reading the bonus is credited to both, cancels, and the raw main stat decides: without a
+// second reading, a few points of headline buy away a finished bonus and the whole threshold has to be re-flown.
+describe("a swap that would destroy earned resonance", () => {
+  const res = (progress: number): Resonance => ({
+    unlocked: progress >= 794, progress, threshold: 794, unit: "kills",
+    bonus: "+4.89% Combat Power", bonusStat: "Combat Power",
+  });
+  const combat: BoosterCtx = {
+    scope: "potential", profile: { ...DEFAULT_PROFILE, main: "combat" },
+    fit: { role: "Combat", activities: ["Combat"] },
+  };
+  const fitted = (amount: string, r: Resonance | null): Item =>
+    ({ ...booster("Combat Power", amount), resonance: r ?? undefined, location: "equipped", slot: 0 });
+  const spare = (amount: string, r: Resonance | null): Item =>
+    ({ ...booster("Combat Power", amount), resonance: r ?? undefined, location: "armory", key: 7 });
+
+  it("keeps the incumbent over a larger booster that has earned nothing", () => {
+    const eq = fitted("1666", res(794));
+    const cand = spare("1675", res(0));
+    expect(dominates(cand, eq, combat)).toBe(false);
+    expect(optimizeBoosters([cand, eq], ["Combat Power"], undefined, combat).picks[0].chosen).toBe(eq);
+  });
+
+  it("takes a candidate that wins under BOTH readings", () => {
+    const eq = fitted("1666", res(794));
+    const cand = spare("4000", res(0));
+    expect(dominates(cand, eq, combat)).toBe(true);
+    expect(optimizeBoosters([cand, eq], ["Combat Power"], undefined, combat).picks[0].chosen).toBe(cand);
+  });
+
+  // The case the two readings exist FOR, and it has to keep working: nothing progresses in the armory, so an
+  // incumbent with no progress of its own loses nothing and the promise is still worth ranking on.
+  it("leaves the full-potential reading alone where the incumbent has nothing to lose", () => {
+    const eq = fitted("1666", null);
+    const cand = spare("1675", res(0));
+    expect(dominates(cand, eq, combat)).toBe(true);
+    expect(optimizeBoosters([cand, eq], ["Combat Power"], undefined, combat).picks[0].chosen).toBe(cand);
+  });
+
+  it("judges a newcomer against nothing while a slot of its type is still free", () => {
+    const eq = fitted("1666", res(794));
+    const cand = spare("1675", res(0));
+    const { picks } = optimizeBoosters([cand, eq], ["Combat Power", "Combat Power"], undefined, combat);
+    expect(picks.map((p) => p.chosen)).toContain(cand);
+    expect(picks.map((p) => p.chosen)).toContain(eq);
+  });
+
+  it("states the wait, in the unit the resonance counts", () => {
+    const v = swapVerdict(spare("1675", res(0)), fitted("1666", res(794)), combat);
+    expect(v).not.toBeNull();
+    // 794 x (1666 x 1.2 - 1675) / (1675 x 0.2): the candidate catching up at the rate its own threshold sets.
+    expect(v!.payback!.amount).toBeCloseTo(768.4, 0);
+    expect(v!.payback!.unit).toBe("kills");
+  });
+
+  it("says nothing about a candidate that loses under both readings", () => {
+    expect(swapVerdict(spare("900", res(0)), fitted("1666", res(794)), combat)).toBeNull();
+  });
+
+  // A bonus this ship is told not to chase is credited nothing, so there is no wait to describe and no earned
+  // progress to protect: the swap goes back to being an ordinary main-stat comparison.
+  it("has no verdict where the bonus stat is blacklisted on this ship", () => {
+    const ctx: BoosterCtx = { ...combat, blacklist: new Set(["Combat Power"]) };
+    expect(swapVerdict(spare("1675", res(0)), fitted("1666", res(794)), ctx)).toBeNull();
+  });
+});
+
+// The EXACT credit, where the bonus scales a pool this app holds a total for. The weight is a stand-in for an
+// exchange rate that does not exist between two different stats; it is not a stand-in for arithmetic, and where
+// the bonus and the headline are one quantity the arithmetic is available.
+describe("pricing a whole-pool resonance instead of weighting it", () => {
+  const POOL = 446529.219, MULT = 1.0489, VALUE = 1666;
+  const res = (progress: number, over: Partial<Resonance> = {}): Resonance => ({
+    unlocked: progress >= 794, progress, threshold: 794, unit: "kills",
+    bonus: "+4.89% Combat Power", bonusStat: "Combat Power", bonusMultiplier: MULT, ...over,
+  });
+  const withRes = (stat: string, amount: string, r: Resonance): Item =>
+    ({ ...booster(stat, amount), resonance: r });
+  const base = POOL / MULT;   // the fitted booster's own multiplier taken back out
+  const ctx = (pools?: Record<string, number>): BoosterCtx => ({
+    scope: "potential", profile: { ...DEFAULT_PROFILE, main: "combat" },
+    fit: { role: "Combat", activities: ["Combat"] }, pools,
+  });
+
+  it("divides a fitted resonance back out of the reported pool", () => {
+    const fitted = [withRes("Combat Power", "1666", res(794))];
+    expect(resonanceBase(POOL, fitted, "Combat Power")).toBeCloseTo(base, 3);
+    // half-progressed pays half the multiplier, so half of it comes back out
+    expect(resonanceBase(POOL, [withRes("Combat Power", "1666", res(397))], "Combat Power"))
+      .toBeCloseTo(POOL / (1 + (MULT - 1) * 0.5), 3);
+    // a stat nothing bonuses is returned untouched
+    expect(resonanceBase(POOL, fitted, "Mining Power")).toBe(POOL);
+  });
+
+  it("credits what the multiplier is actually worth against the booster's own value", () => {
+    const b = withRes("Combat Power", "1666", res(794));
+    const c = resonanceCredit(b, ctx({ "Combat Power": base }));
+    // (1.0489 - 1) x 425,712 / 1,666: about 12.5, where the weight alone said 0.2
+    expect(c.credit).toBeCloseTo((MULT - 1) * base / VALUE, 3);
+    expect(c.credit).toBeGreaterThan(12);
+    expect(c.credit).toBeLessThan(13);
+  });
+
+  it("scales the measured credit by progress, exactly as the weighted one does", () => {
+    const half = resonanceCredit(withRes("Combat Power", "1666", res(397)), { ...ctx({ "Combat Power": base }), scope: "current" });
+    const done = resonanceCredit(withRes("Combat Power", "1666", res(794)), { ...ctx({ "Combat Power": base }), scope: "current" });
+    expect(half.credit).toBeCloseTo(done.credit / 2, 6);
+  });
+
+  // Four unit conditions, each of which would otherwise divide one quantity by another.
+  it("falls back to the weight where the units do not line up", () => {
+    const weighted = RESONANCE_WEIGHT;
+    const pools = { "Combat Power": base, "Reload Speed": 0.0182 };
+    // the bonus is a DIFFERENT stat from the headline
+    const other = withRes("Combat Power", "1666", res(794, { bonusStat: "Reload Speed", bonus: "+2.22% Reload Speed" }));
+    expect(resonanceCredit(other, ctx(pools)).credit).toBeLessThanOrEqual(weighted);
+    // a percent headline is parsed as 2.22 where its pool is stored as 0.0182. Reload Speed is not this hull's
+    // role stat, so the weighted branch halves it, which is the softener the measured branch does without.
+    const pct = withRes("Reload Speed", "2.22%", res(794, { bonusStat: "Reload Speed" }));
+    expect(resonanceCredit(pct, ctx(pools)).credit).toBeCloseTo(weighted * 0.5, 6);
+    // no multiplier on the bonus states no share of a pool
+    const flat = withRes("Combat Power", "1666", res(794, { bonusMultiplier: undefined }));
+    expect(resonanceCredit(flat, ctx(pools)).credit).toBeCloseTo(weighted, 6);
+    // and no pool total in hand is nothing to measure against
+    expect(resonanceCredit(withRes("Combat Power", "1666", res(794)), ctx()).credit).toBeCloseTo(weighted, 6);
+  });
+
+  it("builds one base per bonus stat off the ship's pools", () => {
+    const fitted = [withRes("Combat Power", "1666", res(794))];
+    const bases = resonanceBases({ poolCombatPower: POOL } as never, fitted, []);
+    expect(bases["Combat Power"]).toBeCloseTo(base, 3);
+    // a stat the app holds no pool for is absent rather than guessed at
+    expect("Shield HP" in bases).toBe(false);
   });
 });

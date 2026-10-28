@@ -26,7 +26,13 @@
 .opp-badge.b-note { background: transparent; border: 1px solid #3a3a44; color: #8a8a94; font-weight: 600; }
 
 /* ---- officer optimizer ---- */
-.officers { margin-top: 12px; display: flex; flex-direction: column; gap: 16px; }
+/* ONE STACKING MODEL FOR EVERY TAB BODY. Each of these carries the ship block at the top of its rail, and a
+   tab that spaces its head differently starts that block at a different height, which reads as four panels
+   rather than one panel seen from four places. */
+.officers, .summary, .boosters { margin-top: 12px; display: flex; flex-direction: column; gap: 14px; }
+/* The gear tab is a grid rather than a column, so it takes the offset alone: without it the rail starts
+   higher here than on the three tabs that stack. */
+.gear { margin-top: 12px; }
 .role-hi { color: #ffcf70; font-weight: 600; }
 .dim { color: #7d7d86; }
 .officers .panel { background: #15151a; border: 1px solid #262626; border-radius: 8px; padding: 12px 14px; }
@@ -46,7 +52,11 @@
 .seg { background: #2a2a33; border: 1px solid #444; color: #ccc; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12.5px; }
 .seg.on { background: #1e293b; border-color: #3a4a63; color: #dbeafe; font-weight: 600; }
 
-.opt-grid { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 16px; align-items: start; }
+/* ONE RAIL WIDTH FOR EVERY TAB THAT HAS ONE. The officers, boosters and summary tabs each carry the ship block
+   at the top of their left track, and the same block at three widths reads as three different panels. A token,
+   ⊥ three literals, because that is exactly how they drifted apart. */
+:root { --rail: 340px; }
+.opt-grid { display: grid; grid-template-columns: var(--rail) minmax(0, 1fr); gap: 16px; align-items: start; }
 @media (max-width: 900px) { .opt-grid { grid-template-columns: 1fr; } }
 
 .activity { background: #101014; border: 1px solid #23232a; border-radius: 6px; padding: 9px 10px; margin-bottom: 10px; }
@@ -210,10 +220,15 @@
 .recruit-cost { font-size: 11.5px; color: #ffb020; white-space: nowrap; font-variant-numeric: tabular-nums; width: 96px; text-align: right; }
 
 /* game-style skill tooltip */
-.skill-tip { z-index: 50; max-width: 260px; background: #0b0b0e; border: 1px solid #3a3a44; border-radius: 5px;
+/* Same layer as the item and officer cards: it is now shown over the gear lists too, where a panel at 40/41
+   would otherwise cover it. Every cursor card sits above everything, because it is drawn where the pointer is. */
+.skill-tip { z-index: 200; max-width: 260px; background: #0b0b0e; border: 1px solid #3a3a44; border-radius: 5px;
   padding: 8px 10px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.6); pointer-events: none; }
 .skill-tip-head { font-size: 13px; font-weight: 700; margin-bottom: 4px; }
 .skill-tip-desc { font-size: 12px; color: #d8d8de; line-height: 1.4; }
+/* What the thing is WORTH, above what it does: a computed figure is the reason these are cards rather than
+   native tooltips, so it reads before the prose instead of being buried in it. */
+.skill-tip-worth { font-size: 12px; font-weight: 600; color: #86efac; margin-bottom: 4px; }
 .skill-tip-foot { font-size: 10.5px; color: #7d7d86; margin-top: 6px; text-transform: capitalize; }
 
 .explainer { border: 1px solid #23232a; border-radius: 8px; padding: 10px 14px; background: #101014; }
@@ -225,7 +240,6 @@
 .explainer b { color: #cfcfcf; }
 
 /* ---- summary tab ---- */
-.summary { margin-top: 12px; }
 .sum-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .sum-actions { display: flex; gap: 6px; }
 .sum-note { font-size: 12px; color: #8a8a8a; max-width: 820px; line-height: 1.5; margin: 6px 0 14px; }
@@ -261,7 +275,6 @@
   padding: 2px 10px; border-radius: 4px; font-size: 11.5px; cursor: pointer; }
 
 /* ---- boosters tab ---- */
-.boosters { margin-top: 12px; }
 .bslot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; }
 .bslot { display: flex; flex-direction: column; gap: 6px; background: #15151a; border: 1px solid #262626; border-radius: 8px; padding: 10px; }
 .bslot-head { display: flex; align-items: center; gap: 6px; }
@@ -375,7 +388,7 @@
 /* Ship art with the whole-build figures to its right. `center` keeps the art centred when the panel is
    absent (no reactor / older bridge); the panel wraps under the art on a narrow screen rather than squeezing
    it. `align-items: flex-start` so the panel sits at the top edge of the art, not floating mid-height. */
-.gear-ship { display: flex; justify-content: center; align-items: flex-start; gap: 14px; flex-wrap: wrap; margin: 10px 0 14px; }
+.gear-ship { display: flex; justify-content: center; align-items: flex-start; gap: 14px; flex-wrap: wrap; margin: 0 0 14px; }
 
 /* ---- whole-build totals ---- */
 .gear-totals {
@@ -422,20 +435,22 @@
 @media (min-width: 1200px) {
   .gear {
     display: grid;
-    grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
-    column-gap: 14px;
+    grid-template-columns: var(--rail) minmax(0, 1fr);
+    column-gap: 16px;
+    row-gap: 14px;
     align-items: start;
   }
   /* Everything lands in the right column unless placed otherwise. `min-width: 0` because a grid item's
      default `auto` minimum would let the slot tables push the column wider than the screen. */
   .gear > * { grid-column: 2; min-width: 0; }
-  /* The action row spans both, so Categories / Apply / Summary stay where the eye already looks for them. */
-  .gear > .sum-head { grid-column: 1 / -1; }
+  /* The action row stays over the SLOTS it acts on. It spanned both columns, which pushed the ship block down
+     a row and started the rail lower here than on every other tab. */
+  .gear > .sum-head { grid-column: 2; }
   /* Art + totals: left column, stacked, and spanning the rows the slots occupy so it can stick while they
      scroll. The row span is a ceiling, not a count — extra rows cost nothing. */
   .gear > .gear-ship {
     grid-column: 1;
-    grid-row: 2 / span 20;
+    grid-row: 1 / span 20;
     position: sticky;
     top: 8px;
     flex-direction: column;
@@ -462,10 +477,12 @@
    grow into the band instead of being cut to fit. It matters most where the two sides differ, which is exactly
    what a `kept` target side is: one line facing a portrait and a wrap of chips. */
 .oslot-grid > .gear-panel { display: flex; flex-direction: column; }
-/* A STACKED SWAP HUGS ITS CONTENT. Growing it hands the spare height to a one-line `kept` box, which is the
-   empty bordered rectangle this was meant to remove; the card is already equal to its neighbours through
-   the grid, so the leftover belongs below the swap, inside the border, where it reads as nothing. */
-.oslot-grid > .gear-panel > .gear-swap { flex: 0 0 auto; }
+/* A STACKED SWAP FILLS ITS CARD, and the NEW side takes what is spare. It hugged its content instead, so the
+   leftover sat below the swap where it read as nothing and every card's arrow lined up across the row.
+   ⚠ THAT ALIGNMENT IS WHAT THIS COSTS: the current vignette is sized by how many rows its skill chips wrap
+   into, so with the slack moved below it the arrow now follows each card's own content. The target box is what
+   opens the picker, and a one-line box under a tall card was a small target beside a large one. */
+.oslot-grid > .gear-panel > .gear-swap { flex: 1 1 auto; }
 /* STACKED: current ABOVE new, for a card whose vignettes are tall. Two of those side by side are narrow
    columns with the width left empty, and worst where one side is a one-line `kept`.
 
@@ -485,9 +502,17 @@
    room reads as two different cards side by side, and the narrow half truncates the name it is showing. An
    uneven split was tried to buy the current side more room and cost exactly that. Room comes from the TRACK
    instead, which widens both halves at once. */
-.gear-swap:not(.stack) > .gear-vig { flex: 1 1 0; }
+/* THESE REACH THROUGH `.gear-next`. That wrapper carries the picker's click and draws no box of its own, but a
+   child selector still walks the DOM ∴ without the second half of each rule the NEW side matches nothing and
+   loses its sizing entirely. */
+.gear-swap:not(.stack) > .gear-vig,
+.gear-swap:not(.stack) > .gear-next > .gear-vig { flex: 1 1 0; }
 .gear-swap.stack { flex-direction: column; }
 .gear-swap.stack > .gear-vig { flex: 0 0 auto; }
+/* THE NEW SIDE TAKES THE SPARE HEIGHT. It is what opens the picker, and a one-line `kept` box under a tall
+   officer card is a small target beside a large one. This reverses the earlier reading above: the empty box
+   that reading avoided is now the thing being clicked, which is worth the space it costs. */
+.gear-swap.stack > .gear-next > .gear-vig { flex: 1 1 auto; }
 .gear-swap.stack > .gear-arrow { flex: 0 0 auto; }
 /* ONE HEIGHT WHATEVER THE SLOT SAYS. The three states carry different amounts of text — an item body, a one-line
    `keep current`, and a `kept` verdict with its reason underneath — and letting each size itself made neighbouring
@@ -552,6 +577,15 @@
 .gear-cat-types label { font-size: 11px; color: #9aa4b2; }
 .gear-cat-types label.on { color: #86efac; }
 .gear-modules { margin-top: 14px; }
+/* WIDER THAN THE SHARED TRACK. `.gear-cols` is sized for a column holding ONE thing; a module card holds two
+   vignettes and the arrow between them, so at 240px the name of every module truncated to its first letters
+   ("Rea…", "E.", "Sca…") and the card said nothing a player could read. */
+.gear-modules .gear-cols { grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); }
+/* THE VIGNETTES FILL THE CARD, so a card carrying an extra line (the `ignore` on a proposal) does not leave its
+   neighbours' boxes floating short of the same border. The grid already makes the CARDS equal; this hands that
+   height down to the two halves inside them. */
+.gear-modules .gear-panel { display: flex; flex-direction: column; }
+.gear-modules .gear-panel > .gear-swap { flex: 1 1 auto; align-items: stretch; }
 .gear-mod-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .gear-mod { font-size: 11.5px; background: #14161b; border: 1px solid #23252c; border-radius: 6px; padding: 3px 8px; }
 
@@ -583,10 +617,14 @@
 .slot-lock.on { border-color: #7dd3fc; color: #7dd3fc; background: #7dd3fc1a; }
 .gear-panel { cursor: pointer; }
 .gear-panel.sel { border-color: #86b0ff; box-shadow: 0 0 0 1px #86b0ff55; }
-.gear-panel.droptgt { border-color: #ffcf70; box-shadow: 0 0 0 2px #ffcf7066; }
+/* Every slot that can take the item, marked as soon as the drag starts. A target found only by hovering it is
+   a target the player does not know exists. `droptgt` is then the one under the pointer. */
+.gear-panel.dropready { border-style: dashed; border-color: #ffcf7066; }
+.gear-panel.droptgt { border-style: solid; border-color: #ffcf70; box-shadow: 0 0 0 2px #ffcf7066; }
+/* The row being dragged, so the list says which one is in flight while the cursor is over a card. */
+.brow[draggable="true"] { cursor: grab; }
 .gear-panel.dim { opacity: .3; }
 .gear-vig.dim { opacity: .5; }
-.vig-x { float: right; background: none; border: none; color: #d77; cursor: pointer; font-size: 13px; line-height: 1; padding: 0 2px; }
 /* Candidate rail: a bit wider when there is room (name + badges + % + level + button all live on one row). */
 .gear-list-panel { flex: 0 0 clamp(300px, 22vw, 400px); width: clamp(300px, 22vw, 400px); position: sticky; top: 8px; background: #101216; border: 1px solid #23252c; border-radius: 8px; padding: 10px; }
 .gear-list-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
@@ -628,6 +666,8 @@
 .git-foot { display: flex; justify-content: space-between; gap: 8px; margin-top: 6px; border-top: 1px solid #1c1c22; padding-top: 4px; font-size: 10.5px; color: #7d7d86; }
 .git-cmp { margin-top: 6px; border-top: 1px solid #1c1c22; padding-top: 5px; }
 .git-cmp-head { font-size: 10px; color: #7d7d86; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 3px; }
+/* A cost the deltas below cannot show: the swap wins on the stat lines and still loses until it is flown. */
+.git-cmp-swap { font-size: 11px; line-height: 1.4; color: #ffcf70; margin-bottom: 4px; }
 .git-cmp-row { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: #b9bec7; }
 .git-cmp-row.dim { color: #6b6b73; font-style: italic; }
 .git-cmp-row .up { color: #86efac; }
@@ -864,13 +904,11 @@
    the ranking produced on the right. These two rules are the whole difference — the left panel stacks its
    controls, and the right column is a plain flow so the slot grid, the totals and the owned list keep the
    spacing they already had. */
-/* Narrower than the officer tab's 340px: a priority skill there carries a name AND its effect sentence, while a
-   resonance row is just a stat name and the ▲▼× column, so the same width left half the panel empty and took
-   the space off the slot grid — which is the thing actually being read. */
-.boosters .opt-grid { grid-template-columns: 232px minmax(0, 1fr); }
-@media (max-width: 900px) { .boosters .opt-grid { grid-template-columns: 1fr; } }
+/* The booster rail once ran narrower than the others, on the argument that a resonance row is a stat name and
+   the ▲▼× column where a priority skill carries a whole sentence. It now holds the ship block too, and one
+   block at two widths is worse than a little slack under the ranked lists. */
 .bres-panel { display: flex; flex-direction: column; gap: 8px; }
-/* One ranked list per booster type, in a 232px column. Collapsed by default for a type the ship's slots do not
+/* One ranked list per booster type, in the rail. Collapsed by default for a type the ship's slots do not
    use, because nine expanded lists are taller than the grid they are meant to be read beside. The count stays
    on the header so a collapsed section still says whether it holds a ranking. */
 .bres-order { display: flex; flex-direction: column; gap: 4px; }
@@ -1067,3 +1105,78 @@
   .undo-suggest { padding: 8px 12px; }
   .gear-cap input { width: 56px; padding: 5px 6px; }
 }
+
+/* THE BUILD PANEL AS A STRIP, on the tabs where it is reference rather than the thing being edited. Beside the
+   gear it is a 260px column standing next to the ship; above a crew grid or a slot list that same column is a
+   band of empty width and 270px of height the content has to start under. Laid across instead, it reads in one
+   glance and the tab's own work stays on the fold. */
+.gear-ship.strip { justify-content: flex-start; align-items: flex-start; }
+.gear-ship.strip .gear-img { max-height: 120px; width: auto; }
+/* The column is CAPPED, not stretched: at `1fr` on a wide screen the track grows to a quarter of the page and
+   `.gt-label` pushes its own figure to the far end of it, so a label and the number it belongs to end up an inch
+   apart and the eye has to pair them by counting. A bounded track keeps each pair readable as one thing. */
+.gear-ship.strip .gear-totals {
+  flex: 1 1 auto; min-width: 0; align-self: flex-start; max-width: 840px;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 195px));
+  gap: 0 18px; align-content: start; justify-content: start;
+}
+/* A heading, a note or a warning is about the whole build, so it spans rather than taking one cell. */
+.gear-ship.strip .gt-head, .gear-ship.strip .gt-note,
+.gear-ship.strip .gt-warn, .gear-ship.strip .sum-none { grid-column: 1 / -1; }
+/* The groups it separated are gone once the rows flow in columns, and a rule in a cell reads as a missing row. */
+.gear-ship.strip .gt-sep { display: none; }
+
+/* IN THE SIDEBAR. The ship and its figures stack down the 340px track above whatever that column ranks, so the
+   grid beside them starts at the top of the page rather than under a band of its own. */
+.opt-side { display: flex; flex-direction: column; min-width: 0; }
+.gear-ship.col { flex-direction: column; align-items: stretch; justify-content: flex-start; margin: 0 0 10px; }
+.gear-ship.col .gear-ship-wrap { width: 100%; }
+.gear-ship.col .gear-totals { flex: 0 0 auto; width: 100%; min-width: 0; }
+
+/* The summary is one column of cards, so its sidebar track is the ship block alone and the cards keep the rest. */
+.sum-grid > .sum-main { min-width: 0; display: flex; flex-direction: column; }
+
+/* The ban, on the row it refuses. Quiet until hovered: it is a rare action sitting on every row of a long list. */
+.li-ban { background: none; border: 1px solid transparent; color: #6b6b73; cursor: pointer;
+  font-size: 9.5px; line-height: 1; padding: 2px 4px; border-radius: 3px; }
+.gear-litem:hover .li-ban { color: #b9bec7; border-color: #2f2f36; }
+.li-ban:hover { color: #f0a0a0; border-color: #5a3232; background: #2a1a1a; }
+.li-ban.on { color: #ffcf70; border-color: #6b5320; background: #201c10; }
+
+/* The standing count of what a ship refuses, beside the actions on each tab that filters on it. */
+.ban-chip { background: #201c10; border: 1px solid #6b5320; color: #ffcf70; cursor: pointer;
+  font-size: 11.5px; padding: 3px 8px; border-radius: 4px; white-space: nowrap; }
+.ban-chip:hover { border-color: #8a6b28; }
+/* The ban is on every row of two long lists, so it stays quiet until the row is under the cursor. */
+/* On a rail row the button is a flex item that would otherwise take a share of the row: it stays the size of
+   its own word, like the `buy` beside it. */
+/* Amber like the other controls that change a plan: in grey it read as one more dim label on the row. */
+.opp-row .li-ban, .brow .li-ban { margin-left: 6px; flex: 0 0 auto; font-size: 9.5px; padding: 2px 5px;
+  color: #ffcf70; border-color: #6b5320; background: #201c10; }
+.opp-row:hover .li-ban, .brow:hover .li-ban { color: #b9bec7; border-color: #2f2f36; }
+
+/* Handing the slot back, at the top of the picker. It takes the app's own small-action button rather than a
+   style of its own: full width it read as a heading or a disabled field, and a control that spans a list looks
+   like part of the list. */
+.pick-clear { margin: 2px 0 8px; }
+/* Amber, the tone this app already uses for a control that changes a plan rather than reporting on one. In the
+   grey of an ordinary button it sat in the list's own palette and read as one more row. */
+.pick-clear .undo-suggest { background: #201c10; border-color: #6b5320; color: #ffcf70; }
+.pick-clear .undo-suggest:hover { background: #2b2415; border-color: #8a6b28; color: #ffdc93; }
+
+/* What opens the cursor card: the icon and the name, never the whole box. The card follows the pointer, so a
+   box-wide target draws itself over the controls in that box and they cannot be clicked. */
+/* NO BOX OF ITS OWN: it wraps the icon only, so as a flex item it grew and pushed the name out of line with
+   the vignette beside it. `contents` leaves the layout exactly as it was and still carries the handlers. */
+.vig-hov { display: contents; }
+/* Same rule in the pick list: the row is the click target, the icon and name are the hover target. */
+.li-hov { display: contents; }
+
+/* The roster ranks the crew shown in the content column, so it lines up under that column rather than under the
+   whole page. It sits OUTSIDE the grid (it is a sibling of it), so the offset is the rail plus the grid's gap
+   rather than a grid placement. Under 900px the grid is one column and the offset goes with it. */
+.officers > .roster { margin-left: calc(var(--rail) + 16px); }
+@media (max-width: 900px) { .officers > .roster { margin-left: 0; } }
+/* The new side is the picker's click target; it generates no box, so the swap's layout is untouched. */
+.gear-next { display: contents; }
+

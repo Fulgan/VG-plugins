@@ -105,6 +105,24 @@ describe("a grid the player lays out", () => {
     expect(h).toContain("Lvl");
   });
 
+  // The header and the body are memoized separately. Changing the layout on a MOUNTED grid has to change both: a
+  // header still carrying a hidden column puts every cell after it under the wrong label.
+  it("keeps header and cells in step when a column is hidden on a live grid", () => {
+    const all = blank();
+    mount(all);
+    const cols = [...host!.querySelectorAll("thead th")].length;
+    act(() => {
+      root!.render(<ItemGrid items={ITEMS} conn={conn} gridId="test" view={{ ...all, cols: ["__level", "__type"] }} onView={vi.fn()} />);
+    });
+    const h = headers();
+    expect(h).not.toContain("Size");
+    expect(h).toContain("Lvl");
+    const ths = host!.querySelectorAll("thead th").length;
+    expect(ths).toBeLessThan(cols);
+    for (const tr of host!.querySelectorAll("tbody tr:not(.grid-group):not([aria-hidden])"))
+      expect(tr.querySelectorAll("td").length).toBe(ths);
+  });
+
   it("offers no bar at all to a grid with no id to remember it by", () => {
     host = document.createElement("div");
     document.body.appendChild(host);

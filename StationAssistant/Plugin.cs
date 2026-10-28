@@ -9,8 +9,10 @@ using BepInEx.Logging;
 using VG.Shared;
 using Behaviour.Item;
 using Behaviour.Item.Usable;
+using Behaviour.Managers;
 using Behaviour.UI.Spacestation;
 using HarmonyLib;
+using Source.Galaxy;
 using Source.Galaxy.POI;
 using Source.Item;
 using Source.Player;
@@ -24,7 +26,7 @@ namespace StationAssistant
 {
     internal enum SellTrigger { Manual, OnDock, OnUndock }
 
-    [BepInPlugin(Guid, "Station Assistant", "1.1.7")]
+    [BepInPlugin(Guid, "Station Assistant", "1.1.8")]
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "fulgan.vanguardgalaxy.stationassistant";
@@ -38,6 +40,11 @@ namespace StationAssistant
         private void Awake()
         {
             Log = Logger;
+
+            // Another game version than this build targets still loads; the log says so and names the build to install.
+            var gameNote = VG.Game.GameTarget.Notice("Station Assistant", out var gameWarn);
+            if (gameWarn) Log.LogWarning(gameNote);
+            else if (gameNote != null) Log.LogInfo(gameNote);
             Cfg = new Config(base.Config);
             GameSettings.Init(base.Config); // persist per-playthrough on every settings change
             Loc.Setup(Info?.Location);
@@ -89,6 +96,7 @@ namespace StationAssistant
         internal readonly ConfigEntry<bool> AutoBuy;
         internal readonly ConfigEntry<int> DesiredStock;
         internal readonly ConfigEntry<bool> ActivateOnUndock;
+        internal readonly ConfigEntry<bool> ActivateOnTravel;
         internal readonly ConfigEntry<bool> DecoyDisableDuringEcho;
         internal readonly ConfigEntry<KeyboardShortcut> DecoyHotkey;
         internal readonly ConfigEntry<KeyboardShortcut> ToggleKey;
@@ -195,6 +203,12 @@ namespace StationAssistant
             ActivateOnUndock = file.Bind("DecoyTransponder", "ActivateOnUndock", true,
                 "Activate one decoy transponder when leaving a station, if one isn't already active.");
 
+            ActivateOnTravel = file.Bind("DecoyTransponder", "ActivateOnTravel", false,
+                "Activate one decoy transponder when you set course for a destination whose owning faction " +
+                "still has standing with you, because those are the kills that cost reputation. Off by default, " +
+                "and it does not change ActivateOnUndock: turn that one off to spend a charge only on the trips " +
+                "where it protects something.");
+
             DecoyDisableDuringEcho = file.Bind("DecoyTransponder", "DisableDuringEcho", true,
                 "Skip ACTIVATING a decoy on undock while ECHO (autopilot) is running the ship. Buying one is " +
                 "covered by Quartermaster/EchoSkip: deploying a decoy is a separate decision from stocking it.");
@@ -264,7 +278,7 @@ namespace StationAssistant
             // Everything except the UI keybinds is per-playthrough.
             Gameplay.AddRange(new ConfigEntryBase[]
             {
-                Enabled, AutoBuy, DesiredStock, ActivateOnUndock, DecoyDisableDuringEcho,
+                Enabled, AutoBuy, DesiredStock, ActivateOnUndock, ActivateOnTravel, DecoyDisableDuringEcho,
                 SellEnabled, SellMode, KeepRarity, KeepBoosterRarity, KeepItemLevel, KeepRulesRaw,
                 AmmoEnabled, AmmoMode, AmmoStowUnused, AmmoAutoBuy, AmmoUseEchoMinutes, AmmoTargetsRaw,
                 QmMode, QmTargetsRaw,
@@ -460,15 +474,9 @@ namespace StationAssistant
             {
                 var cfg = Plugin.Cfg;
 
-                // Decoy: activate one transponder on undock.
+                // Decoy: activate one transponder on undock, whatever the destination turns out to be.
                 if (cfg.Enabled.Value && cfg.ActivateOnUndock.Value)
-                {
-                    var player = GamePlayer.current;
-                    var cargo = player?.currentSpaceShip?.cargo;
-                    var echo = cfg.DecoyDisableDuringEcho.Value && player?.currentAutopilotSessionStats != null;
-                    if (cargo != null && !player.hasUmbralTransponder && !echo)
-                        DecoyLogic.ActivateDecoy(cargo);
-                }
+                    DecoyLogic.AutoDeploy(cfg);
 
                 // Quartermaster restock (after the decoy is activated, so the deployed one gets replaced).
                 // OnUndock is the default: it targets the ship you actually leave in — switching ships in a
@@ -496,11 +504,67 @@ namespace StationAssistant
         }
     }
 
-    // Decoy transponder activation on undock. Stocking the decoy (and other consumables) is the
-    // Quartermaster's job now; this keeps the "activate one when leaving a station" behaviour, plus the
-    // shared shop-purchase / cargo helpers reused by the gunner and the Quartermaster.
+    // THE PLAYER PICKING A DESTINATION ON THE MAP, which is the only place the destination is known.
+    // `StartUndocking` fires with `SpaceStation.current` still live, so it says where the ship IS and never
+    // where it is going. This runs ONCE PER ROUTE, not once per leg: a multi-system route continues through
+    // `TravelToNextWaypoint`, which calls `StartTravel` directly and never re-enters here.
+    [HarmonyPatch(typeof(TravelManager), nameof(TravelManager.SetRouteToPOI))]
+    internal static class SetCoursePatch
+    {
+        [HarmonyPostfix]
+        private static void Postfix(MapPointOfInterest poi, bool __result)
+        {
+            try
+            {
+                var cfg = Plugin.Cfg;
+                if (!cfg.Enabled.Value || !cfg.ActivateOnTravel.Value) return;
+                // A refused route means the ship is not going anywhere, so nothing is at risk yet.
+                if (!__result || !DecoyLogic.StandingAtRisk(poi)) return;
+                DecoyLogic.AutoDeploy(cfg);
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogWarning($"Course-set decoy skipped after an error: {ex}");
+            }
+        }
+    }
+
+    // Decoy transponder activation. Stocking the decoy (and other consumables) is the Quartermaster's job now;
+    // this keeps the "activate one when leaving" behaviour for both triggers, plus the shared shop-purchase /
+    // cargo helpers reused by the gunner and the Quartermaster.
     internal static class DecoyLogic
     {
+        // THE ONE GATE BOTH AUTOMATIC TRIGGERS ASK, so undock and course-set cannot drift into two answers
+        // about when a charge may be spent. A manual hotkey press does NOT come through here: it is deliberate,
+        // and the ECHO guard exists to stop the mod acting while the player is away, not to stop the player.
+        internal static bool AutoDeploy(Config cfg)
+        {
+            var player = GamePlayer.current;
+            var cargo = player?.currentSpaceShip?.cargo;
+            if (cargo == null || player.hasUmbralTransponder) return false;
+            if (cfg.DecoyDisableDuringEcho.Value && player.currentAutopilotSessionStats != null) return false;
+            return ActivateDecoy(cargo);
+        }
+
+        // The reputation the game will actually charge for a kill is the VICTIM's, and it is charged whether or
+        // not war is declared: `LootManager.HandleKillReputation` never consults `atWar`, and it multiplies the
+        // bill by 20 while the victim's standing is above the -500 foe threshold. So the question is not "is
+        // there a fight here" but "does this place belong to someone I still stand well with".
+        //
+        // READS ONLY WHAT THE GALAXY MAP ALREADY SHOWS. The POI's own unit list would answer more precisely,
+        // but reaching it runs `EnsureContentGenerated()` and builds the destination before the ship arrives.
+        internal static bool StandingAtRisk(MapPointOfInterest poi)
+        {
+            // The game's own fallback where a POI has no owner of its own.
+            var f = poi?.faction ?? poi?.system?.faction;
+            if (f == null || f == Faction.player) return false;
+            return f.GetReputation(Faction.player) > FoeReputation;
+        }
+
+        // `FactionData.foeReputation`: at or below it a faction is already an enemy and its standing is not
+        // worth a charge.
+        private const int FoeReputation = -500;
+
         // Activate one decoy from cargo. Returns true when one was actually deployed (a charge consumed).
         internal static bool ActivateDecoy(Inventory cargo)
         {
@@ -1025,6 +1089,10 @@ namespace StationAssistant
                 GUILayout.BeginHorizontal();
                 GUILayout.Space(16f);
                 _cfg.ActivateOnUndock.Value = GUILayout.Toggle(_cfg.ActivateOnUndock.Value, Loc.T("qm.autoActivate"));
+                GUILayout.Space(14f);
+                // The second trigger sits BESIDE the first, because they answer the same question at two
+                // moments and the player picks which moment. It is not a clause on the undock toggle.
+                _cfg.ActivateOnTravel.Value = GUILayout.Toggle(_cfg.ActivateOnTravel.Value, Loc.T("qm.autoActivateTravel"));
                 GUILayout.Space(14f);
                 _cfg.DecoyDisableDuringEcho.Value =
                     GUILayout.Toggle(_cfg.DecoyDisableDuringEcho.Value, Loc.T("qm.echoSkipDecoy"));

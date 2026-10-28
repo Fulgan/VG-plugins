@@ -79,14 +79,25 @@ describe("gearModuleOpps", () => {
     expect(opps[0].delta).toBeCloseTo(0);
   });
 
-  it("keeps the best instance per item NAME and sorts by delta", () => {
+  // ONE ROW PER ROLL, ⊥ per name. Two offers sharing a name are two different items with different stats, and
+  // collapsing them showed the cheapest while a refusal of it promoted the next into the same row — the list
+  // then read as though nothing had happened.
+  it("keeps every distinct roll, sorted by delta", () => {
     const eq = mod({ name: "eq", mainStat: { name: "Energy", amount: "10,000" } });
     const dupLow = mod({ name: "dup", mainStat: { name: "Energy", amount: "12,000" } });
     const dupHigh = mod({ name: "dup", mainStat: { name: "Energy", amount: "18,000" } });
     const other = mod({ name: "other", mainStat: { name: "Energy", amount: "14,000" } });
     const opps = gearModuleOpps([dupLow, dupHigh, other], reactorSlot(eq), undefined, null);
-    expect(opps.map((o) => o.item.name)).toEqual(["dup", "other"]);   // 8,000 then 4,000
+    expect(opps.map((o) => o.item.name)).toEqual(["dup", "other", "dup"]);   // 8,000 then 4,000 then 2,000
     expect(opps[0].delta).toBeCloseTo(8_000);
+  });
+
+  // Genuinely identical offers are one item to a player, so they still collapse: the signature is the identity.
+  it("still keeps one row for two identical offers", () => {
+    const eq = mod({ name: "eq", mainStat: { name: "Energy", amount: "10,000" } });
+    const a = mod({ name: "dup", key: 1, mainStat: { name: "Energy", amount: "18,000" } });
+    const b = mod({ name: "dup", key: 2, mainStat: { name: "Energy", amount: "18,000" } });
+    expect(gearModuleOpps([a, b], reactorSlot(eq), undefined, null)).toHaveLength(1);
   });
 
   // The reactor bracket outranks everything else in `compareModules`, so a lower-draw module can win on that
@@ -123,18 +134,37 @@ describe("gearBoosterOpps", () => {
     expect(gearBoosterOpps([same, worse], ["Combat Power"], [eq])).toHaveLength(0);
   });
 
+  // The tab will not displace a booster part-way through its resonance for a slightly larger headline, so the
+  // rail cannot go on offering it: that is one slot carrying two verdicts.
+  it("does not offer a swap that would throw away earned resonance", () => {
+    const combat: BoosterCtx = {
+      scope: "potential", profile: { ...DEFAULT_PROFILE, main: "combat" },
+      fit: { role: "Combat", activities: ["Combat"] },
+    };
+    const r = (progress: number) => ({
+      unlocked: progress >= 794, progress, threshold: 794, unit: "kills",
+      bonus: "+4.89% Combat Power", bonusStat: "Combat Power",
+    });
+    const trained = { ...booster("trained", "Combat Power", "1,666"), resonance: r(794) } as Item;
+    const fresh = { ...booster("fresh", "Combat Power", "1,675"), resonance: r(0) } as Item;
+    expect(gearBoosterOpps([fresh], ["Combat Power"], [trained], combat)).toHaveLength(0);
+    // one that wins under both readings is still an opportunity
+    const big = { ...booster("big", "Combat Power", "4,000"), resonance: r(0) } as Item;
+    expect(gearBoosterOpps([big], ["Combat Power"], [trained], combat)).toHaveLength(1);
+  });
+
   it("skips an untyped slot and an empty one", () => {
     const better = booster("better", "Combat Power", "1,500");
     expect(gearBoosterOpps([better], [null], [eq])).toHaveLength(0);
     expect(gearBoosterOpps([better], ["Combat Power"], [null])).toHaveLength(0);
   });
 
-  it("keeps the best instance per name and sorts by delta", () => {
+  it("keeps every distinct roll, sorted by delta", () => {
     const dupLow = booster("dup", "Combat Power", "1,200");
     const dupHigh = booster("dup", "Combat Power", "1,900");
     const other = booster("other", "Combat Power", "1,400");
     const opps = gearBoosterOpps([dupLow, dupHigh, other], ["Combat Power"], [eq]);
-    expect(opps.map((o) => o.item.name)).toEqual(["dup", "other"]);
+    expect(opps.map((o) => o.item.name)).toEqual(["dup", "other", "dup"]);
     expect(opps[0].delta).toBeCloseTo(900);
   });
 

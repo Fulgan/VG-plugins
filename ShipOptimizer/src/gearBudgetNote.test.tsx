@@ -9,6 +9,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import GearTotals from "./GearTotals";
 import { pairBudget, poolsFromStatus, reactorBudgetOf } from "./fleetDps";
+import { PLAN_KEY } from "./storage";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -66,5 +67,43 @@ describe("the panel when the budget cannot be paired", () => {
     // No reassuring variant: a paired budget is drawn as an ordinary panel, never as a clean verdict.
     expect(text).not.toContain("different brackets");
     expect(text).toContain("11'858");
+  });
+});
+
+// ONE PANEL, ONE PENDING BUILD. The same component is mounted on every tab that changes the loadout, so a plan
+// made on one of them has to be in the figures shown on all of them — and only one mount may publish.
+describe("the panel across the tabs", () => {
+  const booster = (amount: string) => ({
+    key: null, slot: 0, name: `CP ${amount}`, rarity: "Standard", level: 60, size: null,
+    type: "Combat R-Booster", category: "Booster", sellValue: 0,
+    aspects: [], stats: [], substats: [], bonus: null, bonusStat: null,
+    mainStat: { name: "Combat Power", amount },
+  }) as unknown as Parameters<typeof GearTotals>[0]["curTurrets"][number];
+
+  it("folds the booster plan into the projection, like any other gear swap", () => {
+    const pools = poolsFromStatus(LIVE);
+    const common = {
+      pools, reactor: reactorBudgetOf(pools), ranking: "expanded" as const,
+      curTurrets: [], nextTurrets: [], curOther: [], nextOther: [], publish: false,
+    };
+    const without = render(<GearTotals {...common} />);
+    act(() => root!.unmount()); host!.remove(); root = null; host = null;
+    const withSwap = render(
+      <GearTotals {...common} curBoosters={[booster("1,000")]} nextBoosters={[booster("40,000")]} />);
+    expect(withSwap).not.toBe(without);
+  });
+
+  it("publishes the diagnosis record from the one mount that says so", () => {
+    const pools = poolsFromStatus(LIVE);
+    const common = {
+      pools, reactor: reactorBudgetOf(pools), ranking: "expanded" as const,
+      curTurrets: [], nextTurrets: [], curOther: [], nextOther: [],
+    };
+    localStorage.clear();
+    render(<GearTotals {...common} publish={false} />);
+    expect(localStorage.getItem(PLAN_KEY)).toBeNull();
+    act(() => root!.unmount()); host!.remove(); root = null; host = null;
+    render(<GearTotals {...common} publish />);
+    expect(localStorage.getItem(PLAN_KEY)).not.toBeNull();
   });
 });

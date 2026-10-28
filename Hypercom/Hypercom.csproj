@@ -4,7 +4,7 @@
     <TargetFramework>netstandard2.1</TargetFramework>
     <AssemblyName>Hypercom</AssemblyName>
     <Product>Hypercom</Product>
-    <Version>0.5.0</Version>
+    <Version>0.5.1</Version>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
@@ -66,6 +66,7 @@
        self-contained assembly. One source of truth in the workspace; cross-mod calls reflect. -->
   <ItemGroup>
     <Compile Include="..\Shared\ModHost.cs" Link="ModHost.cs" />
+    <Compile Include="..\Shared\GameTarget.cs" Link="GameTarget.cs" />
     <!-- Name-based game access + the on-screen notification: needed by every plugin, so one owner each. -->
     <Compile Include="..\Shared\GameMembers.cs" Link="GameMembers.cs" />
     <Compile Include="..\Shared\ViewDivergence.cs" Link="ViewDivergence.cs" />

@@ -1,8 +1,12 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties, type MouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import ApplyBar, { ApplyMsg } from "./ApplyBar";
+import ShipCard, { type ShipView } from "./ShipCard";
+import { officerKey, type Bans } from "./bans";
+import BanChip from "./BanChip";
 import { Notice } from "./Notice";
 import type { ApplyApi } from "./useApply";
-import { rankSkillsByValue, type StatMarginal } from "./statMarginals";
+import { rankSkillsByValue, valueOfEffect, type StatMarginal } from "./statMarginals";
+import { InfoTip, useTip } from "./HoverCard";
 import { dedupeOfficers, effectLookup } from "./officer";
 import { buildCatalog, buildFullCatalog, defaultPriorities, evaluateRecruits, exportPriorities, importPriorities, isNamePrio, MAX_LEVEL, namePrioLabel, optimize, prioritiesFromCrew, visibleRecruits, type BrowsableSkill, type CatalogSkill, type OptimizeResult, type RecruitOfficer, type Scope } from "./officer";
 import { composeActivity, defaultProfileForShip, defensiveSkillNames, mergeByWeight, DEFAULT_PROFILE, STANCE_LABEL, STANCE_ORDER, STANCE_WEIGHT, type ActivityProfile, type MainActivity } from "./activityPresets";
@@ -38,6 +42,8 @@ export interface OfficerBuilder {
   officers: Officer[];
   /** Roster entries dropped as repeats of an officer already listed — a corrupt save, not a preference. */
   duplicates: number;
+  /** The keys the ban filter kept out of the pool, so the tab can say what it holds back AND lift exactly that. */
+  bansHidden: string[];
   ships: BuilderShip[];
   ship: BuilderShip | undefined;
   scope: Scope;
@@ -72,12 +78,19 @@ function loadBuilder(): BuilderSaved {
   return { prio: {}, slotPins: {}, profile: {}, scope: "potential", ...load<Partial<BuilderSaved>>(BUILDER_KEY, {}) };
 }
 
-export function useOfficerBuilder(roster: Officer[], ships: BuilderShip[], currentShipGuid: string | null): OfficerBuilder {
+export function useOfficerBuilder(roster: Officer[], ships: BuilderShip[], currentShipGuid: string | null, bans?: Bans): OfficerBuilder {
   // ONE ENTRY PER OFFICER before anything reads the list. A save can hold the same `OfficerData` twice, and the
   // optimizer picks `slots` ENTRIES: duplicates of one guid collapse when the picks are mapped back onto slots, so a
   // six-slot ship proposed four officers and two empty slots with nothing on screen explaining it. The count is kept
   // so the tab can say the roster is in that state rather than quietly papering over it.
-  const { officers, duplicates } = useMemo(() => dedupeOfficers(roster), [roster]);
+  const { officers: allOfficers, duplicates } = useMemo(() => dedupeOfficers(roster), [roster]);
+  // A REFUSED OFFICER LEAVES THE POOL, the same rule the gear and booster pools follow: the optimizer picks
+  // `slots` entries out of this list, so dropping one after the pick would leave a seat unfilled rather than
+  // filled by the next best.
+  const officers = useMemo(() => (bans ? allOfficers.filter((o) => !bans.hasOfficer(o, "fit")) : allOfficers),
+                           [allOfficers, bans]);
+  const bansHidden = useMemo(() => (bans ? allOfficers.filter((o) => bans.hasOfficer(o, "fit")).map((o) => officerKey("fit", o)) : []),
+                              [allOfficers, bans]);
   const catalog = useMemo(() => buildCatalog(officers), [officers]);
   // Always optimize the current (docked) ship — there's no manual ship picker. Fall back to the first
   // ship with officer slots when the current ship is unknown (e.g. undocked before ever docking).
@@ -148,12 +161,17 @@ export function useOfficerBuilder(roster: Officer[], ships: BuilderShip[], curre
     [officers, ship, prio, scope, forced],
   );
 
-  return { officers, duplicates, ships, ship, scope, setScope, catalog, prio, setPrio, forced, slotPins, pinSlot, setSlotPins, result, profile, setProfile };
+  return { officers, duplicates, bansHidden, ships, ship, scope, setScope, catalog, prio, setPrio, forced, slotPins, pinSlot, setSlotPins, result, profile, setProfile };
 }
 
 export default function OfficersTab({
-  builder, portraitUrl, recruits, portraitByIcon, goSummary, conn, docked, credits, onHired, apply, marginals,
+  builder, portraitUrl, recruits, portraitByIcon, goSummary, conn, docked, credits, onHired, apply, marginals, shipView, bans,
 }: {
+  // The pending build, gear and boosters included. Nothing this panel prices moves with a seat, so it stands
+  // here as the ship the crew is being chosen for rather than as a projection of the crew itself.
+  shipView?: ShipView;
+  /** What this ship refuses. Filtered out of the roster and the hire list alike. */
+  bans?: Bans;
   builder: OfficerBuilder;
   portraitUrl: (guid: string | null) => string | null;
   recruits: Recruits | null;
@@ -201,23 +219,16 @@ export default function OfficersTab({
     catalog.find((c) => c.id === id)?.name ?? (isNamePrio(id) ? namePrioLabel(id) : id);
   const byUnlock = (a: { unlock?: number }, b: { unlock?: number }) => (a.unlock ?? 0) - (b.unlock ?? 0); // activation order
 
-  // Styled skill tooltip (game-like) — follows the cursor; one instance rendered per tab. Shared hover
-  // props + per-skill colour so EVERY skill display (chips, priority rows, rank labels) reads the same.
-  const [skillHover, setSkillHover] = useState<{ id: string; x: number; y: number } | null>(null);
-  // Generic styled info tooltip (same look as the skill cards) — for the (i) markers.
-  const [infoTip, setInfoTip] = useState<{ text: string; x: number; y: number } | null>(null);
-  const infoProps = (text: string) => ({
-    onMouseEnter: (e: MouseEvent) => setInfoTip({ text, x: e.clientX, y: e.clientY }),
-    onMouseMove: (e: MouseEvent) => setInfoTip({ text, x: e.clientX, y: e.clientY }),
-    onMouseLeave: () => setInfoTip(null),
-  });
+  // The skill card, and the generic one behind the (i) markers. Both are `HoverCard`'s box: the placement it
+  // owns measures and clamps, where the copy that used to live here chose a side from the viewport midpoint and
+  // so could anchor a card off the top edge. Shared hover props + per-skill colour keep EVERY skill display
+  // (chips, priority rows, rank labels) reading the same.
+  const skillTip = useTip<string>();
+  const infoTip = useTip<string>();
+  const infoProps = infoTip.anchor;
   const skillColor = (id: string) => `hsl(${hueOf(id)} 62% 72%)`;
-  // No native `title` — the styled tooltip below replaces it (avoids a double tooltip).
-  const skillHoverProps = (id: string) => ({
-    onMouseEnter: (e: MouseEvent) => setSkillHover({ id, x: e.clientX, y: e.clientY }),
-    onMouseMove: (e: MouseEvent) => setSkillHover({ id, x: e.clientX, y: e.clientY }),
-    onMouseLeave: () => setSkillHover((h) => (h?.id === id ? null : h)),
-  });
+  // No native `title`: the card below replaces it, and both at once is two tooltips for one thing.
+  const skillHoverProps = skillTip.anchor;
   // A skill pill: hue-colored, tooltip on hover, a leading dot when it's in the priority list (strong),
   // dimmed when the officer hasn't unlocked it yet.
   const chipEl = (id: string, strong: boolean, dim = false) => (
@@ -436,7 +447,7 @@ export default function OfficersTab({
     // `hasHangarBay` is passed because `evaluateRecruits` gained it and this call site did not: defaulting it to
     // false dropped `Hangar Extension` from a recruit's coverage while `result.chosen` HAD been scored with it, so
     // on a hull with a bay every such recruit was undervalued and a real hire was never flagged.
-    ? evaluateRecruits(visibleRecruits(recruits.officers as RecruitOfficer[], hired),
+    ? evaluateRecruits(visibleRecruits((recruits.officers as RecruitOfficer[]).filter((o) => !bans?.hasOfficer(o, "notice")), hired),
                        { role: ship.role, hasDroneBay: ship.hasDroneBay, hasHangarBay: ship.hasHangarBay,
                          priorities: prio, scope }, result.chosen)
     : [];
@@ -479,9 +490,13 @@ export default function OfficersTab({
     return (
       <div className="ocard-body">
         <div className="oc-top">
-          <div className="oc-portrait" style={{ borderColor: rc, color: rc }}>{pu ? <div className="portrait-img" style={{ backgroundImage: `url("${pu}")` }} /> : initials(o.name)}</div>
+          {/* The portrait and the name open the card. The skill chips below carry their own meaning and a
+              card over them hides exactly what the player is reading. */}
+          <div className="oc-portrait" style={{ borderColor: rc, color: rc }}
+               onMouseEnter={(e) => setOffHover({ o, x: e.clientX, y: e.clientY })} onMouseLeave={() => setOffHover(null)}>{pu ? <div className="portrait-img" style={{ backgroundImage: `url("${pu}")` }} /> : initials(o.name)}</div>
           <div className="oc-id">
-            <div className="oc-name-row"><span className="oc-name" style={{ color: rc }}>{o.name}</span>{o.level >= MAX_LEVEL && <span className="max">MAX</span>}</div>
+            <div className="oc-name-row"><span className="oc-name" style={{ color: rc }}
+                 onMouseEnter={(e) => setOffHover({ o, x: e.clientX, y: e.clientY })} onMouseLeave={() => setOffHover(null)}>{o.name}</span>{o.level >= MAX_LEVEL && <span className="max">MAX</span>}</div>
             <div className="oc-sub">Lv {o.level} · {o.profession}</div>
           </div>
         </div>
@@ -499,14 +514,16 @@ export default function OfficersTab({
   // the caller knows that two officers are the same person (a guid), the control knows what that should look
   // like. An officer body repeated on both sides of one card is the most expensive version of that mistake,
   // because it is the tallest.
-  const offVig = (o: Officer | null, kind: "current" | "after", mine: boolean, unchanged?: boolean, onClear?: () => void) => (
+  const offVig = (o: Officer | null, kind: "current" | "after", mine: boolean, unchanged?: boolean) => (
     unchanged ? <KeptVig mine={mine} /> : (
     <VigFrame best={kind === "after" && !!o}
-      onMouseEnter={o ? (e) => setOffHover({ o, x: e.clientX, y: e.clientY }) : undefined}
-      onMouseLeave={o ? () => setOffHover(null) : undefined}
-      tag={kind === "current" ? undefined : <>{mine ? "locked" : "new"}
-        {o && onClear && <button className="vig-x" onClick={(e) => { e.stopPropagation(); onClear(); }} title="let the optimizer answer this slot">×</button>}</>}>
+      tag={kind === "current" ? undefined : <>{mine ? "locked" : "new"}</>}>
       {o ? offBody(o) : <div className="gear-vig-name dim">{kind === "after" ? "still empty" : "empty slot"}</div>}
+      {/* On the PROPOSED side only: refusing the officer already in a seat is what the roster row is for. */}
+      {o && kind === "after" && bans && (
+        <button className="vig-action" title="Stop offering this officer on this ship"
+                onClick={(e) => { e.stopPropagation(); bans.toggleOfficer(o, "fit"); }}>ignore</button>
+      )}
     </VigFrame>)
   );
 
@@ -526,7 +543,12 @@ export default function OfficersTab({
         setQuery={setPickQ}
         placeholder="search name / profession / skill…"
         onPick={(o) => { pinSlot(slot, o.guid); setPickFor(null); }}
+        onBan={bans ? (o) => bans.toggleOfficer(o, "fit") : undefined}
+        banned={bans ? (o) => bans.hasOfficer(o, "fit") : undefined}
         onClose={() => setPickFor(null)}
+        // The officer already in this seat, ⊥ nothing: unpinning re-runs the optimizer, which proposes the very
+        // person just cleared. An empty seat has nothing to keep, so it can only be handed back.
+        onClearSlot={() => { pinSlot(slot, curBySlot[slot]?.guid ?? null); setPickFor(null); }}
         keyOf={(o) => o.guid}
         iconOf={(o) => portraitUrl(o.guid)}
         nameOf={(o) => o.name}
@@ -570,30 +592,13 @@ export default function OfficersTab({
       {confirmUi}
       {offHover && <OfficerTip o={offHover.o} x={offHover.x} y={offHover.y} portraitUrl={portraitUrl} />}
       {/* ship context bar — always the current ship */}
-      <div className="ctx-bar">
-        <span className="ctx-line">
-          <b>{ship.name}</b> · <span className="role-hi">{ship.role ?? "—"}</span> role ·{" "}
-          <b>{ship.slots}</b> officer slots ·{" "}
-          <span style={{ color: ship.hasDroneBay ? "#86efac" : "#7d7d86" }}>{ship.hasDroneBay ? "drone bay" : "no drone bay"}</span>
-        </span>
-        <span className="sep" />
-        {result && (
-          <span className="ctx-idle" title="Idle income from officers not assigned to this ship">
-            <span className="idle-v">¢ {result.idleTotal.toLocaleString()}</span> / hr idle
-            <span className="dim"> · {result.benchedCount} benched</span>
-          </span>
-        )}
-        <span className="spacer" />
-        <span className="dim" title="Evaluate skills at each officer's current unlocked level, or full potential once maxed">Skills at</span>
-        <button className={`seg ${scope === "current" ? "on" : ""}`} onClick={() => setScope("current")}>current level</button>
-        <button className={`seg ${scope === "potential" ? "on" : ""}`} onClick={() => setScope("potential")}>full potential</button>
-        {apply && <ApplyBar apply={apply} section="officers" label="officer" />}
-        <button className="apply sm" style={{ marginLeft: 8 }} onClick={goSummary} title="Review & apply changes in the Summary tab">Go to Summary →</button>
-      </div>
-      {apply && <ApplyMsg apply={apply} />}
 
       <div className="opt-grid">
         {/* priority skills */}
+        {/* THE LEFT COLUMN IS ONE GRID CHILD, so the ship block joins the panel inside it rather than
+            beside it: a third child of a two-track grid wraps onto a row of its own. */}
+        <div className="opt-side">
+        {shipView && <ShipCard {...shipView} column />}
         <div className="panel">
           <div className="panel-title title-info">Priority skills <span className="info" {...infoProps("Highest first. The optimizer fills every officer slot to maximize the rank of #1, then #2, and so on. Each assigned officer that has a skill adds +1 rank; ranks stack.")}>ⓘ</span></div>
 
@@ -770,9 +775,32 @@ export default function OfficersTab({
             </div>
           </div>
         </div>
+        </div>
 
         {/* optimized crew */}
         <div>
+      <div className="ctx-bar">
+        <span className="ctx-line">
+          <b>{ship.name}</b> · <span className="role-hi">{ship.role ?? "—"}</span> role ·{" "}
+          <b>{ship.slots}</b> officer slots ·{" "}
+          <span style={{ color: ship.hasDroneBay ? "#86efac" : "#7d7d86" }}>{ship.hasDroneBay ? "drone bay" : "no drone bay"}</span>
+        </span>
+        <span className="sep" />
+        {result && (
+          <span className="ctx-idle" title="Idle income from officers not assigned to this ship">
+            <span className="idle-v">¢ {result.idleTotal.toLocaleString()}</span> / hr idle
+            <span className="dim"> · {result.benchedCount} benched</span>
+          </span>
+        )}
+        <span className="spacer" />
+        <span className="dim" title="Evaluate skills at each officer's current unlocked level, or full potential once maxed">Skills at</span>
+        <button className={`seg ${scope === "current" ? "on" : ""}`} onClick={() => setScope("current")}>current level</button>
+        <button className={`seg ${scope === "potential" ? "on" : ""}`} onClick={() => setScope("potential")}>full potential</button>
+        {apply && <ApplyBar apply={apply} section="officers" label="officer" />}
+        <BanChip bans={bans} keys={builder.bansHidden} />
+        <button className="apply sm" style={{ marginLeft: 8 }} onClick={goSummary} title="Review & apply changes in the Summary tab">Go to Summary →</button>
+      </div>
+      {apply && <ApplyMsg apply={apply} />}
           <div className="crew-head">
             {duplicates > 0 && (
             <p className="stale" title="Two roster entries for one officer, and the repeats cost slots">
@@ -816,7 +844,7 @@ export default function OfficersTab({
                   // unchanged crew would otherwise be six identical portraits, and the one seat that moved
                   // would be the hardest thing on the screen to find. A slot that stays EMPTY is not "kept"
                   // either, because nothing is being kept.
-                  next={offVig(chg ? aft : null, "after", mine, !chg && !!cur, mine ? () => pinSlot(i, null) : undefined)}
+                  next={offVig(chg ? aft : null, "after", mine, !chg && !!cur)}
                 >
                   {pickFor === i && crewPickList(i)}
                 </SlotCard>
@@ -894,6 +922,11 @@ export default function OfficersTab({
               {/* Money after the chips, as in the hire list below: the chips are what you scan, the figure is
                   what you check afterwards. */}
               <span className="roster-idle" title={on ? "Assigned — inactive (earns no idle income)" : "Benched — earning idle income"} style={{ color: on ? "#6a6a72" : "#c7ccd4" }}>¢ {o.idle.toLocaleString()}/hr</span>
+              {bans && (
+                <button className={`li-ban${bans.hasOfficer(o, "fit") ? " on" : ""}`}
+                        title={bans.hasOfficer(o, "fit") ? "Consider this officer again on this ship" : "Stop offering this officer on this ship"}
+                        onClick={(e) => { e.stopPropagation(); bans.toggleOfficer(o, "fit"); }}>{bans.hasOfficer(o, "fit") ? "show" : "ignore"}</button>
+              )}
             </div>
           );
         })}
@@ -933,6 +966,12 @@ export default function OfficersTab({
                 </div>
                 {o.isOpp && <span className="recruit-opp">↑ replaces {o.replaces}</span>}
                 <span className="recruit-cost">¢ {o.hireCost.toLocaleString()}</span>
+                {/* A recruit's guid dies with the roster it was rolled into, so this lasts until the next
+                    restock on its own — the lifetime a shop offer's refusal has. */}
+                {bans && (
+                  <button className="li-ban" title="Stop pointing this recruit out on this ship"
+                          onClick={(e) => { e.stopPropagation(); bans.toggleOfficer(o, "notice"); }}>ignore</button>
+                )}
                 {conn && (() => {
                     const why = hireBlockedBecause(o.hireCost);
                     return (
@@ -969,31 +1008,25 @@ export default function OfficersTab({
       </details>
 
       {/* game-style skill tooltip (follows cursor) */}
-      {skillHover && (() => {
-        const c = catalog.find((x) => x.id === skillHover.id);
+      {skillTip.tip && (() => {
+        const c = catalog.find((x) => x.id === skillTip.tip!.at);
         if (!c) return null;
-        const flip = skillHover.x > window.innerWidth / 2;
-        const style: CSSProperties = {
-          position: "fixed", top: Math.min(skillHover.y + 16, window.innerHeight - 96),
-          left: flip ? undefined : skillHover.x + 16, right: flip ? window.innerWidth - skillHover.x + 16 : undefined,
-        };
+        // WHAT THE SKILL IS WORTH ON THIS SHIP, which the ranking already computes and had nowhere to say. It is
+        // a DPS fraction through this battery, so it belongs beside the effect rather than instead of it.
+        // Absent when the model cannot price the effect — a trigger, a non-damage stat, a clause with no number.
+        // An unpriced skill is ⊥ a worthless one, and a blank line must not be readable as either.
+        const v = marginals?.length ? valueOfEffect(c.effect, marginals) : null;
+        const worth = v ? `${v.gain >= 0 ? "+" : ""}${(v.gain * 100).toFixed(2)}% DPS${v.approximate ? ", indicative" : ""}` : null;
         return (
-          <div className="skill-tip" style={style}>
-            <div className="skill-tip-head" style={{ color: `hsl(${hueOf(c.id)} 62% 74%)` }}>{c.name}</div>
-            <div className="skill-tip-desc">{c.effect ?? "—"}</div>
-            <div className="skill-tip-foot">{c.roles.join(", ") || "—"} · {c.major ? "major" : "minor"}{c.drone ? " · drone" : ""}</div>
-          </div>
+          <InfoTip x={skillTip.tip!.x} y={skillTip.tip!.y}
+                   head={c.name} headColor={`hsl(${hueOf(c.id)} 62% 74%)`}
+                   worth={worth}
+                   desc={c.effect ?? "—"}
+                   foot={<>{c.roles.join(", ") || "—"} · {c.major ? "major" : "minor"}{c.drone ? " · drone" : ""}</>} />
         );
       })()}
 
-      {infoTip && (() => {
-        const flip = infoTip.x > window.innerWidth / 2;
-        const style: CSSProperties = {
-          position: "fixed", top: Math.min(infoTip.y + 16, window.innerHeight - 96),
-          left: flip ? undefined : infoTip.x + 16, right: flip ? window.innerWidth - infoTip.x + 16 : undefined,
-        };
-        return <div className="skill-tip" style={style}><div className="skill-tip-desc">{infoTip.text}</div></div>;
-      })()}
+      {infoTip.tip && <InfoTip x={infoTip.tip.x} y={infoTip.tip.y} desc={infoTip.tip.at} />}
     </div>
   );
 }

@@ -4,9 +4,10 @@ import type { ApplyApi } from "./useApply";
 import {
   ANY_TYPE, boosterId, boosterPinKey, boosterScore, boosterType, boosterTypeColor, boosterTypes, boosterValue,
   EMPTY_PIN,
-  defaultSlotTypes, isBooster, optimizeBoosters, resonancePct, unlockBonusText,
+  defaultSlotTypes, isBooster, optimizeBoosters, resonanceBases, resonancePct, unlockBonusText,
   type BoosterCtx, type BoosterPick, type ResonanceOrder,
 } from "./booster";
+import type { ShipPools } from "./fleetDps";
 import { defaultProfileForShip } from "./activityPresets";
 // What the hull can actually use, derived from the fit — one owner, shared with the gear tab and the rail.
 import { shipFit } from "./itemKind";
@@ -17,6 +18,10 @@ import type { Inventories, Item, Loadout, Resonance } from "./types";
 import { itemIcon, type Conn } from "./api";
 import { RARITY_COLOR, fmt } from "./format";
 import { ItemTip } from "./ItemCard";
+import ShipCard, { type ShipView } from "./ShipCard";
+import { banKey, type Bans } from "./bans";
+import { dragSource } from "./dragItem";
+import BanChip from "./BanChip";
 import SlotPickList from "./SlotPickList";
 import SlotCard, { Vig, NewVig, FilterSelect, SlotLock } from "./SlotCard";
 import { useEscape } from "./Modal";
@@ -103,12 +108,14 @@ export interface BoosterBuilder {
   pinSlot: (slot: number, it: Item | null) => void;
   /** What the ranking used, for the row that explains a pick. */
   ctx: BoosterCtx;
+  /** Boosters this ship refuses, by id, so the tab and the shop rail refuse the same ones. */
+  refused: ReadonlySet<string>;
   changed: number;
   unfilled: number;
   applyPayload: { kind: string; slot: number; store?: string; key: number | null; name: string; level: number }[];
 }
 
-export function useBoosterBuilder(loadout: Loadout | null, inv: Inventories | null): BoosterBuilder {
+export function useBoosterBuilder(loadout: Loadout | null, inv: Inventories | null, pools?: ShipPools | null, bans?: Bans): BoosterBuilder {
   const shipGuid = loadout?.shipGuid ?? "";
   const role = loadout?.role ?? null;
   const slotCount = loadout?.boosterSlots ?? loadout?.boosters?.length ?? 0;
@@ -225,6 +232,12 @@ export function useBoosterBuilder(loadout: Loadout | null, inv: Inventories | nu
   // mining laser counts as mining and a hull with no drone bay stops crediting Drone Power. Judged by role alone,
   // this refused an `ore` resonance its potential credit on exactly that ship and called its Mining Power bonus
   // inert — both wrong about the ship in front of the player.
+  // What a whole-pool resonance is actually worth on THIS ship, with the fitted boosters' own multipliers taken
+  // back out of the reported totals so every candidate for a stat is priced against the same base.
+  const basePools = useMemo(
+    () => resonanceBases(pools, equippedBySlot.filter(Boolean) as Item[], pool),
+    [pools, equippedBySlot, pool],
+  );
   const ctx = useMemo<BoosterCtx>(() => ({
     scope: view.scope,
     profile: defaultProfileForShip(role, null),
@@ -235,10 +248,15 @@ export function useBoosterBuilder(loadout: Loadout | null, inv: Inventories | nu
       loadout?.hardpoints ?? []),
     blacklist,
     order: resOrder,
-  }), [view.scope, role, loadout, blacklist, resOrder]);
+    pools: basePools,
+  }), [view.scope, role, loadout, blacklist, resOrder, basePools]);
 
+  // A BANNED booster leaves the candidate pool rather than losing a comparison inside it, and the same set goes
+  // to the rail: a rail offering what the tab was told to stop offering is one slot carrying two verdicts.
+  const refused = useMemo(
+    () => new Set(pool.filter((b) => bans?.has(b, "fit")).map(boosterId)), [pool, bans]);
   const { picks, unplaceableForced } = useMemo(
-    () => optimizeBoosters(pool, slotTypes, forced, ctx, undefined, pins), [pool, slotTypes, forced, ctx, pins],
+    () => optimizeBoosters(pool, slotTypes, forced, ctx, refused, pins), [pool, slotTypes, forced, ctx, refused, pins],
   );
   const assigned = useMemo(() => new Set(picks.filter((p) => p.chosen).map((p) => boosterId(p.chosen!))), [picks]);
   const unplaceable = useMemo(() => new Set(unplaceableForced.map(boosterId)), [unplaceableForced]);
@@ -256,10 +274,10 @@ export function useBoosterBuilder(loadout: Loadout | null, inv: Inventories | nu
     .filter((p) => p.chosen && p.chosen !== equippedBySlot[p.slot] && p.chosen.location !== "equipped" && p.chosen.key != null)
     .map((p) => ({ kind: "Booster", slot: p.slot, store: p.chosen!.location, key: p.chosen!.key, name: p.chosen!.name, level: p.chosen!.level }));
 
-  return { locked: pins, loadout, slotCount, equippedBySlot, pool, invBoosters, types, slotTypes, setType, setSlotTypes, forced, toggleForce, picks, assigned, unplaceable, totals, scope: view.scope, setScope, blacklist, toggleBlacklist, resOrder, setTypeOrder, toggleLock, pins, pinSlot, ctx, changed, unfilled, applyPayload };
+  return { locked: pins, loadout, slotCount, equippedBySlot, pool, invBoosters, types, slotTypes, setType, setSlotTypes, forced, toggleForce, picks, assigned, unplaceable, totals, scope: view.scope, setScope, blacklist, toggleBlacklist, resOrder, setTypeOrder, toggleLock, pins, pinSlot, ctx, refused, changed, unfilled, applyPayload };
 }
 
-export default function BoostersTab({ builder, docked, conn, goSummary, apply, marginals }: { builder: BoosterBuilder; docked: boolean; conn: Conn; goSummary: () => void; apply?: ApplyApi; marginals?: StatMarginal[] }) {
+export default function BoostersTab({ builder, docked, conn, goSummary, apply, marginals, shipView, bans }: { shipView?: ShipView; bans?: Bans; builder: BoosterBuilder; docked: boolean; conn: Conn; goSummary: () => void; apply?: ApplyApi; marginals?: StatMarginal[] }) {
   const { loadout, slotCount, equippedBySlot, pool, types, slotTypes, setType, forced, toggleForce, picks, assigned, unplaceable, totals, scope, setScope, blacklist, toggleBlacklist, resOrder, setTypeOrder, toggleLock, pins, pinSlot, ctx, changed, unfilled } = builder;
   // The cursor-following card, the same one the gear and inventory tabs use (`ItemTip`, one owner). The booster
   // cards showed a name, a level and one number; everything else an item carries — its own stat lines, its
@@ -385,32 +403,14 @@ export default function BoostersTab({ builder, docked, conn, goSummary, apply, m
 
   return (
     <div className="boosters">
-      <div className="sum-head">
-        <div className="panel-title">Booster optimizer <span className="dim">— {loadout?.name ?? "ship"} · {slotCount} slots</span></div>
-        {/* Grouped in `.sum-actions` like every other tab head: `.sum-head` is `space-between`, so a third direct
-            child gets spread into the middle of the bar instead of sitting with the other actions. */}
-        <div className="sum-actions">
-          {apply && <ApplyBar apply={apply} section="boosters" label="booster" />}
-          <button className="apply" onClick={goSummary} title="Review & apply changes in the Summary tab">Go to Summary →</button>
-        </div>
-      </div>
-      {apply && <ApplyMsg apply={apply} />}
-      {/* CONTROLS, NOT PROSE. What each control does belongs in its own `title`, where it is available to whoever
-          wants it and costs nothing to whoever does not — three paragraphs above a six-slot grid pushed the
-          grid off the screen and were read once, on the first visit, by one person. */}
-      <div className="btype-note">
-        {hasResonance && <>
-          {(["current", "potential"] as Scope[]).map((sc) => (
-            <button key={sc} className={`seg ${scope === sc ? "on" : ""}`} onClick={() => setScope(sc)}
-                    title="Price resonance as it stands now, or as it will be once flown">{SCOPE_LABEL[sc]}</button>
-          ))}
-        </>}
-        <span className="up">{changed > 0 ? `${changed} slot${changed === 1 ? "" : "s"} would change` : "matches current"}</span>
-      </div>
       {/* THE OFFICERS TAB'S LAYOUT: `opt-grid` is `340px minmax(0, 1fr)`, the ranking panel on the left and the
           thing being ranked on the right, collapsing to one column under 900px. The two tabs ask the same
           question — state an order, then look at what it produced — so they are read the same way round. */}
       <div className="opt-grid">
+        {/* THE LEFT COLUMN IS ONE GRID CHILD, so the ship block joins the panel inside it rather than
+            beside it: a third child of a two-track grid wraps onto a row of its own. */}
+        <div className="opt-side">
+        {shipView && <ShipCard {...shipView} column />}
         <div className="panel bres-panel">
       {hasResonance && (
         // The BLOCKLIST, visible and reversible. The RES chip on a card blocks a bonus in one click, but a blocked
@@ -565,8 +565,32 @@ export default function BoostersTab({ builder, docked, conn, goSummary, apply, m
       )}
       {!hasResonance && <p className="hint">No resonances on anything you own — nothing to rank.</p>}
         </div>
+        </div>
 
         <div className="bres-main">
+      <div className="sum-head">
+        <div className="panel-title">Booster optimizer <span className="dim">— {loadout?.name ?? "ship"} · {slotCount} slots</span></div>
+        {/* Grouped in `.sum-actions` like every other tab head: `.sum-head` is `space-between`, so a third direct
+            child gets spread into the middle of the bar instead of sitting with the other actions. */}
+        <div className="sum-actions">
+          <BanChip bans={bans} keys={pool.filter((b) => bans?.has(b, "fit")).map((b) => banKey("fit", b))} />
+          {apply && <ApplyBar apply={apply} section="boosters" label="booster" />}
+          <button className="apply" onClick={goSummary} title="Review & apply changes in the Summary tab">Go to Summary →</button>
+        </div>
+      </div>
+      {apply && <ApplyMsg apply={apply} />}
+      {/* CONTROLS, NOT PROSE. What each control does belongs in its own `title`, where it is available to whoever
+          wants it and costs nothing to whoever does not — three paragraphs above a six-slot grid pushed the
+          grid off the screen and were read once, on the first visit, by one person. */}
+      <div className="btype-note">
+        {hasResonance && <>
+          {(["current", "potential"] as Scope[]).map((sc) => (
+            <button key={sc} className={`seg ${scope === sc ? "on" : ""}`} onClick={() => setScope(sc)}
+                    title="Price resonance as it stands now, or as it will be once flown">{SCOPE_LABEL[sc]}</button>
+          ))}
+        </>}
+        <span className="up">{changed > 0 ? `${changed} slot${changed === 1 ? "" : "s"} would change` : "matches current"}</span>
+      </div>
       {/* A note, not a second warning — the app-level bar already says you are undocked. This adds only what is
           specific to boosters: the pool is narrower, and applying needs a station. */}
       {!docked && <p className="sum-note">Cargo only out here; applying needs a station.</p>}
@@ -596,6 +620,8 @@ export default function BoostersTab({ builder, docked, conn, goSummary, apply, m
           <SlotCard key={i}
             className={pickFor === i ? "sel" : undefined}
             onClick={() => setPickFor(pickFor === i ? null : i)}   // click the card to open the picker, as a gear slot does
+            // Dropping is the picker's answer given from the owned list instead of from inside the card.
+            onDropItem={(it) => pinSlot(i, it)}
             title={`Slot ${i + 1}`}
             sub={t ?? "no type"}
             head={<>
@@ -612,9 +638,9 @@ export default function BoostersTab({ builder, docked, conn, goSummary, apply, m
                           sub={eq ? bSub(eq) : null} extra={eq ? bMark(eq) : null}
                           onHover={(h) => setHover(h ? { ...h, vs: null } : null)} />}
             next={<NewVig it={best} conn={conn} mine={pins.has(i)} unchanged={same}
-                          onClear={pins.has(i) ? () => pinSlot(i, null) : undefined}
                           sub={best ? bSub(best) : null} extra={best ? bMark(best) : null}
-                          onHover={(h) => setHover(h ? { ...h, vs: eq } : null)} />}
+                          onHover={(h) => setHover(h ? { ...h, vs: eq } : null)}
+                          action={best && bans ? { label: "ignore", title: "Stop offering this on this ship", onClick: () => bans.toggle(best, "fit") } : null} />}
             // WHAT THIS SLOT IS FOR, in the gear tab's own selector at the foot of the card — the same control
             // in the same place, so changing a slot is one gesture across both tabs.
             foot={<FilterSelect
@@ -640,6 +666,8 @@ export default function BoostersTab({ builder, docked, conn, goSummary, apply, m
                     setQuery={setPickQ}
                     placeholder="search name / type / resonance…"
                     onPick={(b) => { pinSlot(i, b); setPickFor(null); }}
+                    onBan={bans ? (b) => bans.toggle(b, "fit") : undefined}
+                    banned={bans ? (b) => bans.has(b, "fit") : undefined}
                     onClose={() => setPickFor(null)}
                     keyOf={(b) => boosterId(b)}
                     iconOf={(b) => itemIcon(conn, b)}
@@ -655,11 +683,12 @@ export default function BoostersTab({ builder, docked, conn, goSummary, apply, m
                     cells={(b) => b.resonance?.bonusStat
                       ? <span className="li-asp" title={unlockBonusText(b.resonance)}>{b.resonance.bonusStat}</span>
                       : null}
-                    leadRow={pins.has(i) ? (
-                      <div className="gear-litem" onClick={() => { pinSlot(i, null); setPickFor(null); }}>
-                        <span className="li-name dim">let the optimizer decide</span>
-                      </div>
-                    ) : null}
+                    // Keeping what is fitted, ⊥ unsetting: an unanswered slot gets the same suggestion back.
+                    onClearSlot={() => {
+                      const eq = equippedBySlot[i];
+                      if (eq) pinSlot(i, eq); else if (!pins.has(i)) toggleLock(i);
+                      setPickFor(null);
+                    }}
                   />
                 );
               })()}
@@ -710,9 +739,18 @@ export default function BoostersTab({ builder, docked, conn, goSummary, apply, m
             const isA = assigned.has(id), isSkip = unplaceable.has(id), isF = forced.has(id);
             const rc = RARITY_COLOR[b.rarity] ?? "#cfcfcf";
             return (
-              <div key={id} className={`brow${isA ? " a" : isSkip ? " s" : ""}`}>
-                <span className="bicon26" style={{ backgroundColor: boosterTypeColor(b), backgroundImage: `url("${itemIcon(conn, b) ?? ""}")` }} />
-                <span className="bname" style={{ color: rc, width: 216, flex: "0 0 auto" }}>{b.name}</span>
+              // THE WHOLE ROW IS THE HANDLE, the icon is the drag IMAGE. Dragging a booster onto a slot card
+              // pins it there, which is the same answer the slot's own picker gives — this adds a way to say
+              // it from the list already in front of you, and takes none away.
+              <div key={id} className={`brow${isA ? " a" : isSkip ? " s" : ""}`} {...dragSource(b)}>
+                <span className="bicon26" data-drag-image style={{ backgroundColor: boosterTypeColor(b), backgroundImage: `url("${itemIcon(conn, b) ?? ""}")` }}
+                      onMouseEnter={(e) => setHover({ it: b, vs: equippedBySlot[b.slot ?? -1] ?? null, x: e.clientX, y: e.clientY })}
+                      onMouseLeave={() => setHover(null)} />
+                {/* The owned list had no card at all, while every other list of items has one. On the NAME,
+                    like the rest: the card follows the cursor and the row carries its own controls. */}
+                <span className="bname" style={{ color: rc, width: 216, flex: "0 0 auto" }}
+                      onMouseEnter={(e) => setHover({ it: b, vs: equippedBySlot[b.slot ?? -1] ?? null, x: e.clientX, y: e.clientY })}
+                      onMouseLeave={() => setHover(null)}>{b.name}</span>
                 <span className="btype" style={{ width: 120 }}>{boosterType(b)}</span>
                 <span className="bvalc" style={{ width: 80 }}>+{fmt(boosterValue(b))}</span>
                 <span className="blvlc" style={{ width: 52 }}>Lv {b.level}</span>
@@ -726,6 +764,12 @@ export default function BoostersTab({ builder, docked, conn, goSummary, apply, m
                 {isA && <span className="badot">● assigned</span>}
                 {isSkip && <span className="bwarn" title="Forced but no slot is set to its type">⚠ forced · no slot</span>}
                 <button className={`bforce${isF ? " on" : ""}`} title="Force this booster into a slot of its type" onClick={() => toggleForce(id)}>{isF ? "★" : "☆"}</button>
+                {/* The refusal sits beside the star: one row, the two things a player can say about a booster. */}
+                {bans && (
+                  <button className={`li-ban${bans.has(b, "fit") ? " on" : ""}`}
+                          title={bans.has(b, "fit") ? "Offer this again on this ship" : "Stop offering this on this ship"}
+                          onClick={() => bans.toggle(b, "fit")}>{bans.has(b, "fit") ? "show" : "ignore"}</button>
+                )}
               </div>
             );
           })}
@@ -737,7 +781,7 @@ export default function BoostersTab({ builder, docked, conn, goSummary, apply, m
       {/* The same card every other tab shows, rather than a booster-shaped summary of it — one owner, so a
           booster's stat lines, aspects and resonance read identically wherever the player meets them. */}
       {hover && <ItemTip it={hover.it} x={hover.x} y={hover.y} conn={conn} vs={hover.vs}
-                         role={loadout?.role ?? null} />}
+                         role={loadout?.role ?? null} boosterCtx={ctx} />}
     </div>
   );
 }

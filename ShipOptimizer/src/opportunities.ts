@@ -1,6 +1,7 @@
 import type { Item, ShipHardpoint } from "./types";
-import { boosterId, boosterScore, boosterType, boosterValue, resonanceRank, type BoosterCtx } from "./booster";
+import { boosterId, boosterScore, boosterType, boosterValue, dominates, resonanceRank, type BoosterCtx } from "./booster";
 import { shipFit } from "./itemKind";
+import { itemSignature } from "./bans";
 import { moduleWhy, type ModuleCtx, type ShipPools } from "./fleetDps";
 import { saturatedMainVal } from "./format";
 import { turretFits, moduleFits, mayKeepEquipped, type GearFilter } from "./gearFit";
@@ -39,9 +40,10 @@ export function gearTurretOpps(cands: Item[], hps: ShipHardpoint[], filters: Rec
       // Right type already equipped → upgrades only. Wrong type (filter set, equipped doesn't match) →
       // offer any candidate of the configured type, even at lower power (a deliberate type switch).
       if (keepAllowed && delta <= 0) continue;
-      const prev = best.get(c.name);
+      const sig = itemSignature(c);
+      const prev = best.get(sig);
       if (!prev || delta > prev.delta)
-        best.set(c.name, { item: c, replaces: eq, delta, slotLabel: `slot ${hp.index + 1}` });
+        best.set(sig, { item: c, replaces: eq, delta, slotLabel: `slot ${hp.index + 1}` });
     }
   }
   return [...best.values()].sort((a, b) => b.delta - a.delta);
@@ -97,11 +99,12 @@ export function gearModuleOpps(cands: Item[], mslots: { slot: string; size: stri
       // put it here: a rail promising +4 tractor beams the objective priced at 0 is the rail disagreeing with the
       // tab about the same swap.
       const delta = (saturatedMainVal(c) ?? 0) - (saturatedMainVal(eq) ?? 0);
-      const prev = best.get(c.name);
+      const sig = itemSignature(c);
+      const prev = best.get(sig);
       // The REASON travels with the row: a module row's delta is a headline change, and where the headline ties the
       // number is 0 while the decision was made on something else entirely.
       if (!prev || delta > prev.delta)
-        best.set(c.name, { item: c, replaces: eq, delta, slotLabel: m.slot, why: verdict.why });
+        best.set(sig, { item: c, replaces: eq, delta, slotLabel: m.slot, why: verdict.why });
     }
   }
   return [...best.values()].sort((a, b) => b.delta - a.delta);
@@ -117,15 +120,16 @@ export function gearModuleOpps(cands: Item[], mslots: { slot: string; size: stri
 export function wantedOpps(offers: Item[], rules: WantRule[], ctx: FieldCtx, taken?: Set<string>): Opp[] {
   const best = new Map<string, Opp>();
   for (const it of offers) {
-    if (taken?.has(it.name)) continue;
+    if (taken?.has(itemSignature(it))) continue;
     const claims = wantedByAll(it, rules, ctx);
     if (!claims.length) continue;
-    const prev = best.get(it.name);
+    const sig = itemSignature(it);
+    const prev = best.get(sig);
     if (!prev || creditPrice(it) < creditPrice(prev.item)) {
       // The tooltip carries EVERY claiming rule's sentence: the tag says which list, the sentence says what the
       // list actually asks for, and with two claims the second is the one a player would not have guessed.
       const names = claims.map(wantTag).filter((n): n is string => !!n);
-      best.set(it.name, {
+      best.set(sig, {
         item: it, delta: 0,
         wanted: claims.map(wantSentence).join("\n"),
         ...(names.length ? { wantNames: names } : {}),
@@ -152,6 +156,40 @@ const creditPrice = (it: Item) => (it.costItem ? Number.POSITIVE_INFINITY : it.c
  * own — cheapest-first for wants, biggest-delta-first for upgrades.
  */
 export const shopRailRows = (upgrades: Opp[], wanted: Opp[]): Opp[] => [...wanted, ...upgrades];
+
+/** A named block of rail rows: one shopping list, or the upgrades no list claimed. */
+export interface RailGroup { label: string; rows: Opp[]; wanted: boolean }
+
+/** What an unnamed rule's block is called. Not a name, because the player gave it none. */
+export const UNNAMED_LIST = "shopping list";
+/** The block for rows no list claimed: they are here because they beat something, which is a different reason. */
+export const GENERAL_BLOCK = "general upgrades";
+
+/**
+ * The rail, split into the blocks a player can act on.
+ *
+ * One flat column with the wants merely first made a player with four lists recognise their own rules row by row.
+ * The blocks are named by the list that claimed each offer, and ordered as the flat list already was: wants
+ * first, in the order they arrive, then the upgrades nothing wanted.
+ *
+ * AN OFFER APPEARS ONCE, under the FIRST list that claimed it, with the others still named on the row itself.
+ * Repeating it under every claiming list would put the same item twice on one screen, and the row already says
+ * every claim it has — `wantNames` is the whole set, and the tooltip carries each rule's sentence.
+ *
+ * ⚠ A BLOCK IS ⊥ EVERYTHING A RULE MATCHED: `wantedOpps` keeps one offer per item NAME, cheapest first, so a
+ * heading here means "what this list found worth showing", never "what it matched".
+ */
+export function railGroups(rows: Opp[]): RailGroup[] {
+  const out: RailGroup[] = [];
+  const at = new Map<string, RailGroup>();
+  for (const o of rows) {
+    const label = o.wanted ? (o.wantNames?.[0] ?? UNNAMED_LIST) : GENERAL_BLOCK;
+    let g = at.get(label);
+    if (!g) { g = { label, rows: [], wanted: !!o.wanted }; at.set(label, g); out.push(g); }
+    g.rows.push(o);
+  }
+  return out;
+}
 
 /**
  * Config-aware booster opportunities: per booster slot, candidates of the slot's CONFIGURED type that beat the
@@ -193,12 +231,17 @@ export function gearBoosterOpps(
       const cRank = rank(c);
       if (cRank > eqRank) continue;
       if (cRank === eqRank && score(c) <= eqScore) continue;
+      // A swap the tab refuses is not offered here either. Displacing a booster part-way through its resonance
+      // needs a candidate that wins under both readings, and a rail offering what the slot would then decline is
+      // one slot carrying two verdicts.
+      if (!dominates(c, eq, ctx)) continue;
       // Ranked by score, reported in raw value — and a candidate that only wins on resonance still has to be
       // worth swapping for, so a row whose headline would go DOWN is not offered.
       if (v <= eqVal) continue;
       const delta = v - eqVal;
-      const prev = best.get(c.name);
-      if (!prev || delta > prev.delta) best.set(c.name, { item: c, replaces: eq, delta });
+      const sig = itemSignature(c);
+      const prev = best.get(sig);
+      if (!prev || delta > prev.delta) best.set(sig, { item: c, replaces: eq, delta });
     }
   });
   return [...best.values()].sort((a, b) => b.delta - a.delta);

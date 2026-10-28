@@ -42,6 +42,9 @@ namespace VG.Game
          *     store is the closest equivalent; `SpaceStation.shopInventory` is only "first non-null of the
          *     eight", which at a bounty-only station is the bounty office.
          *   - `Inventory.Add` grows its array and checks no capacity, so there is nothing to clamp against.
+         *   - a `Data` item is never shelved (`SellAmount`, 0.8.2.5). Data slates are mission objectives, and one
+         *     that comes back on a shelf can be bought and handed in again. `ItemCategory.Data` is 18 on every
+         *     build that defines it; a build without it has no item carrying 18, so the check is inert there.
          *
          * Returns whether the goods can be BOUGHT BACK, and the reason when they cannot.
          */
@@ -80,6 +83,7 @@ namespace VG.Game
         {
             if (station == null) return (false, "no station");
             if (item == null || amount <= 0) return (false, "nothing to shelve");
+            if (item.itemCategory == ItemCategory.Data) return (false, "the game does not return data items to the shop");
             ShopInventory target = station.generalShopInventory;
             if (target == null)
                 foreach (var s in Enumerate(station)) { target = s; break; }

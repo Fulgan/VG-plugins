@@ -53,6 +53,8 @@ namespace CicWatch
         // nothing to report, so one switch owns both halves. Two switches for one question is what the tab had before,
         // and the player could not tell what either of them did.
         internal readonly ConfigEntry<bool> QuietLines;
+        internal readonly ConfigEntry<bool> ChimeEnabled;
+        internal readonly ConfigEntry<float> ChimeVolume;
 
         internal readonly ConfigEntry<string> PanelRect;
 
@@ -119,6 +121,14 @@ namespace CicWatch
             QuietLines = file.Bind("UI", "QuietLines", true,
                 "Report a quiet plot in words and stay up while it is quiet. Off hides the panel whenever there is "
                 + "nothing to report and brings it back when there is.");
+
+            ChimeEnabled = file.Bind("UI", "ChimeEnabled", true,
+                "Let rules make a sound. This is the master switch and it changes nothing on its own: a rule is silent until you mark it, so the mod stays quiet until you ask it not to.");
+
+            ChimeVolume = file.Bind("UI", "ChimeVolume", 0.6f,
+                new ConfigDescription(
+                    "How loud the call tone is. The game's own sound-effects slider still applies on top, so muting effects in the game mutes this too.",
+                    new AcceptableValueRange<float>(0f, 1f)));
 
             PanelRect = file.Bind("UI", "PanelRect", "",
                 new ConfigDescription(

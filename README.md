@@ -37,24 +37,24 @@ Ship Optimizer ships inside it: one download for both.
 
 Needs game 0.8.2 or newer. On an older game, take Hypercom 0.4.0 from the all-releases link.
 
-**[Download Hypercom 0.5.0](https://github.com/Fulgan/VG-plugins/releases/download/Hypercom-v0.5.0/Hypercom-v0.5.0.zip)**
+**[Download Hypercom 0.5.1](https://github.com/Fulgan/VG-plugins/releases/download/Hypercom-v0.5.1/Hypercom-v0.5.1.zip)**
 ([all Hypercom releases](https://github.com/Fulgan/VG-plugins/releases?q=Hypercom))
 
 ### Station Assistant
 
-**[Download Station Assistant 1.1.7](https://github.com/Fulgan/VG-plugins/releases/download/StationAssistant-v1.1.7/StationAssistant-v1.1.7.zip)**
+**[Download Station Assistant 1.1.8](https://github.com/Fulgan/VG-plugins/releases/download/StationAssistant-v1.1.8/StationAssistant-v1.1.8.zip)**
 ([all Station Assistant releases](https://github.com/Fulgan/VG-plugins/releases?q=Station+Assistant))
 
 ### Quick Save
 
-**[Download Quick Save 1.0.2](https://github.com/Fulgan/VG-plugins/releases/download/QuickSave-v1.0.2/QuickSave-v1.0.2.zip)**
+**[Download Quick Save 1.0.3](https://github.com/Fulgan/VG-plugins/releases/download/QuickSave-v1.0.3/QuickSave-v1.0.3.zip)**
 ([all Quick Save releases](https://github.com/Fulgan/VG-plugins/releases?q=Quick+Save))
 
 ### CIC Watch
 
 Needs game 0.8.2 or newer, the build that brought hull refits and boarding. On an older game it switches itself off.
 
-**[Download CIC Watch 0.2.0](https://github.com/Fulgan/VG-plugins/releases/download/CicWatch-v0.2.0/CicWatch-v0.2.0.zip)**
+**[Download CIC Watch 0.3.0](https://github.com/Fulgan/VG-plugins/releases/download/CicWatch-v0.3.0/CicWatch-v0.3.0.zip)**
 ([all CIC Watch releases](https://github.com/Fulgan/VG-plugins/releases?q=CIC+Watch))
 
 <!-- DOWNLOADS:END -->

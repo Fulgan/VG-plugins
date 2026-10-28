@@ -1,5 +1,6 @@
-import { useState, type MouseEvent, type ReactNode } from "react";
+import { useState, type DragEvent, type MouseEvent, type ReactNode } from "react";
 import { itemIcon, type Conn } from "./api";
+import { endDrag, useDragged } from "./dragItem";
 import { RARITY_COLOR } from "./format";
 import type { Item } from "./types";
 
@@ -131,13 +132,20 @@ export function Vig({ it, conn, sub, extra, onHover }: {
   onHover?: (h: { it: Item; x: number; y: number } | null) => void;
 }) {
   if (!it) return <VigFrame><div className="gear-vig-name dim">empty</div></VigFrame>;
+  // The icon and the NAME open the card; the stat line under it does not, or the card sits over the very
+  // properties it is meant to enlarge on.
+  const hov = {
+    onMouseEnter: (e: React.MouseEvent) => onHover?.({ it, x: e.clientX, y: e.clientY }),
+    onMouseLeave: () => onHover?.(null),
+  };
   return (
-    <VigFrame
-      onMouseEnter={(e) => onHover?.({ it, x: e.clientX, y: e.clientY })} onMouseLeave={() => onHover?.(null)}>
+    <VigFrame>
       <div className="gear-vig-body">
-        <VigIcon it={it} conn={conn} />
+        {/* THE HOVER TARGET IS THE ICON AND THE NAME, ⊥ the whole box. The cursor card opens under the pointer, so
+            a box-wide target puts the card over its own controls and the button underneath cannot be reached. */}
+        <span className="vig-hov" {...hov}><VigIcon it={it} conn={conn} /></span>
         <div className="gear-vig-text">
-          <div className="gear-vig-name" style={{ color: RARITY_COLOR[it.rarity] ?? "#cfcfcf" }}>{it.name}</div>
+          <div className="gear-vig-name" style={{ color: RARITY_COLOR[it.rarity] ?? "#cfcfcf" }} {...hov}>{it.name}</div>
           <div className="gear-vig-sub">{sub}</div>
         </div>
         {extra && <span className="gear-vig-asps">{extra}</span>}
@@ -170,8 +178,8 @@ export function KeptVig({ mine }: { mine?: boolean }) {
 }
 
 /** The NEW side: a proposal, the player's own pick, or the reason there is neither. */
-export function NewVig({ it, onClear, onHover, dimmed, conn, sub, extra, verdict, unchanged, mine, action }: {
-  it: Item | null; onClear?: () => void;
+export function NewVig({ it, onHover, dimmed, conn, sub, extra, verdict, unchanged, mine, action }: {
+  it: Item | null;
   onHover: (h: { it: Item; x: number; y: number } | null) => void;
   dimmed?: boolean; conn: Conn; sub?: ReactNode; extra?: ReactNode;
   verdict?: { text: string; why?: string } | null;
@@ -188,18 +196,18 @@ export function NewVig({ it, onClear, onHover, dimmed, conn, sub, extra, verdict
     /* The tag says WHOSE choice this is. A pinned slot holds the item the PLAYER picked, and labelling it "new"
        like an optimizer answer leaves no way to tell a proposal from a decision, which reads as the suggester
        having written through the pin. */
-    // THE WHOLE VIGNETTE IS THE HOVER TARGET, not the text inside it. `Vig` already put the handlers on the
-    // frame; here they sat on the body, so the card described its current item anywhere in the box and its
-    // proposed one only over the words. A box that responds in part of itself reads as not responding.
     <VigFrame best={!!it} dimmed={dimmed}
-      onMouseEnter={it ? (e) => onHover({ it, x: e.clientX, y: e.clientY }) : undefined}
-      onMouseLeave={it ? () => onHover(null) : undefined}
-      tag={<>{mine ? "locked" : "new"}{it && onClear && <button className="vig-x" onClick={(e) => { e.stopPropagation(); onClear(); }} title="leave alone">×</button>}</>}>
+      tag={<>{mine ? "locked" : "new"}</>}>
       {it ? (
         <div className="gear-vig-body">
-          <VigIcon it={it} conn={conn} />
+          {/* Icon and name only: the card follows the cursor, so a box-wide target covers the action below it. */}
+          <span className="vig-hov"
+                onMouseEnter={(e) => onHover({ it, x: e.clientX, y: e.clientY })} onMouseLeave={() => onHover(null)}>
+            <VigIcon it={it} conn={conn} />
+          </span>
           <div className="gear-vig-text">
-            <div className="gear-vig-name" style={{ color: RARITY_COLOR[it.rarity] ?? "#cfcfcf" }}>{it.name}</div>
+            <div className="gear-vig-name" style={{ color: RARITY_COLOR[it.rarity] ?? "#cfcfcf" }}
+                 onMouseEnter={(e) => onHover({ it, x: e.clientX, y: e.clientY })} onMouseLeave={() => onHover(null)}>{it.name}</div>
             <div className="gear-vig-sub">{sub}</div>
           </div>
           {extra && <span className="gear-vig-asps">{extra}</span>}
@@ -232,22 +240,54 @@ export function NewVig({ it, onClear, onHover, dimmed, conn, sub, extra, verdict
  * whole rule, and it is written here so a third caller answers it by measuring its own content rather than by
  * copying whichever neighbour it happened to look at.
  */
-export default function SlotCard({ title, sub, head, current, next, arrow, foot, children, className, stack, onClick, onMouseEnter, onMouseLeave }: {
+export default function SlotCard({ title, sub, head, current, next, arrow, foot, children, className, stack, onClick, onMouseEnter, onMouseLeave, onDropItem }: {
   title: ReactNode; sub?: ReactNode; head?: ReactNode;
   current: ReactNode; next: ReactNode; arrow?: ReactNode; foot?: ReactNode; children?: ReactNode;
   /** Current ABOVE new, for a card whose vignettes are tall. See the note above for when that is true. */
   stack?: boolean;
+  /**
+   * Answer this slot with a dragged item. THE TARGET LIVES HERE RATHER THAN IN ONE TAB, because a slot answers
+   * the same question about a turret, a module or a booster, and a gesture built into one of them is how the
+ * three cards drift apart again. A caller with no list on its own screen to drag FROM simply passes
+   * nothing, and the card is inert.
+   *
+   * A drop is the caller's own pin and nothing more, so it inherits what that already decided: it is the
+   * player's answer, it survives an apply, and it does not rewrite what the slot is FOR. A drop of the wrong
+   * type is therefore ACCEPTED, not refused — the type selector at the foot is where a slot is retyped, and
+   * the card already says when its type has nothing to offer.
+   */
+  onDropItem?: (it: Item) => void;
   className?: string; onClick?: () => void; onMouseEnter?: () => void; onMouseLeave?: () => void;
 }) {
+  // Armed the moment a drag starts, so every slot LOOKS like a target while one is in flight instead of only
+  // the one under the pointer. A target you have to find by hovering is a target you do not know is there.
+  const dragged = useDragged();
+  const [over, setOver] = useState(false);
+  const armed = !!onDropItem && !!dragged;
+  const drop = armed ? {
+    onDragOver: (e: DragEvent) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; if (!over) setOver(true); },
+    onDragLeave: () => setOver(false),
+    onDrop: (e: DragEvent) => {
+      e.preventDefault();
+      setOver(false);
+      const it = dragged;
+      endDrag();
+      if (it) onDropItem!(it);
+    },
+  } : null;
   return (
-    <div className={`gear-panel${className ? ` ${className}` : ""}`}
-         onClick={onClick} onMouseEnter={onMouseEnter} onMouseLeave={onMouseLeave}>
+    <div className={`gear-panel${className ? ` ${className}` : ""}${armed ? " dropready" : ""}${armed && over ? " droptgt" : ""}`}
+         {...drop}
+         onMouseEnter={onMouseEnter} onMouseLeave={onMouseLeave}>
       <div className="gear-panel-head">{title}{sub && <span className="dim"> · {sub}</span>}{head}</div>
       <div className={`gear-swap${stack ? " stack" : ""}`}>
         {current}
         {/* The arrow points the way the card reads, or it argues with the layout around it. */}
         <span className="gear-arrow">{stack ? "▼" : "→"}{arrow}</span>
-        {next}
+        {/* THE PICKER OPENS FROM THE NEW SIDE ONLY. On the whole card, reading the fitted item or reaching the
+            foot's own controls opened a list over the thing being read. The wrapper draws no box of its own, so
+            the swap keeps its layout and the click still bubbles from whatever is inside it. */}
+        <span className="gear-next" onClick={onClick}>{next}</span>
       </div>
       {foot}
       {children}

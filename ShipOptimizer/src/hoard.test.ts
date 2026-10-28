@@ -166,8 +166,10 @@ describe("the opportunity rail's scan over a long playthrough's armory", () => {
     const opps = gearTurretOpps(smalls, hps, {}, {}, gain);
     const ms = performance.now() - t0;
 
-    // Bounded output, unbounded scan: that asymmetry is the finding.
-    expect(opps.length).toBeLessThan(smalls.length / 4);
+    // Bounded output, unbounded scan: that asymmetry is the finding. The bound is ONE ROW PER ROLL now, not per
+    // name, so an armory of near-identical guns yields more rows than it used to — measured at 1,543 here where
+    // the per-name reading gave under 1,100. That is the cost of a rail whose rows can be refused individually.
+    expect(opps.length).toBeLessThan(smalls.length / 2);
     // eslint-disable-next-line no-console -- the number is the point of this test
     console.log(`rail scan: ${smalls.length} candidates × ${hps.length} hardpoints in ${ms.toFixed(0)}ms → ${opps.length} offers`);
     expect(ms).toBeLessThan(20_000);
@@ -229,5 +231,19 @@ describe("the shortlist keeps a gun for each ore layer", () => {
     const short = shortlist(cands);
     expect(short.length).toBeGreaterThan(0);
     expect(short.length).toBeLessThan(cands.length);
+  });
+});
+
+// IDENTICAL COPIES ARE ONE CANDIDATE. A hoard holds the same roll many times, and each copy took a place in every
+// axis it qualified on: enough of one gun could fill a criterion and keep a better-balanced gun out of the search.
+describe("the shortlist and a hoard of identical rolls", () => {
+  it("spends its places on distinct guns rather than copies of one", () => {
+    // One seed is one roll, so the copies really are indistinguishable — which is the whole reason the search
+    // loses nothing by seeing one of them.
+    const copies = Array.from({ length: 40 }, () => turret("Small Rail Cannon", "Small", 3, "Combat"));
+    const others = Array.from({ length: 40 }, (_, i) => turret("Small Laser", "Small", 100 + i, "Combat"));
+    const out = shortlist([...copies, ...others]);
+    expect(out.filter((c) => c.type === "Small Rail Cannon")).toHaveLength(1);
+    expect(out.length).toBeGreaterThan(1);
   });
 });

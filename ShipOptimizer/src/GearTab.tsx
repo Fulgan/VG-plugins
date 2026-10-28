@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, itemIcon, type Conn } from "./api";
+import { itemIcon, type Conn } from "./api";
 import type { CatalogTypes, Inventories, Item, ShipHardpoint, ShipLayout, Vitals } from "./types";
 import { num, mainVal, effectiveMainVal } from "./format";
 import { aspectDamageFraction, damageAspects } from "./aspect";
@@ -18,7 +18,9 @@ import { ItemTip } from "./ItemCard";
 import { useEscape } from "./Modal";
 import { turretFits, moduleFits, mayKeepEquipped, parseActivity, reachableLayers, type GearFilter } from "./gearFit";
 import { energyDraw, reactorModifier } from "./reactor";
-import GearTotals from "./GearTotals";
+import ShipCard, { type ShipView } from "./ShipCard";
+import { banKey, type Bans } from "./bans";
+import BanChip from "./BanChip";
 import GoalOrder from "./GoalOrder";
 import AllowanceSweep from "./AllowanceSweep";
 import { defenseLayerOf } from "./activityPresets";
@@ -118,9 +120,12 @@ function verdictText(v: { kind: string; n?: number; pct?: number } | undefined):
         why: `under the ${MIN_GAIN * 100}% worth-it floor`,
       };
     case "unchosen":
+      // The margin is a WHOLE-BATTERY figure: it comes from `setRank` over the plan's other slots with this
+      // candidate swapped in, against the same background. So the reason it was not taken is a constraint the
+      // objective applied, and the note names the two controls that can apply one rather than guessing which did.
       return {
-        text: `kept — best of ${v.n} scores ${((v.pct ?? 0) * 100).toFixed(2)}% higher in this slot alone`,
-        why: "the gain does not survive the whole battery — the pools are shared",
+        text: `kept — best of ${v.n} would gain ${((v.pct ?? 0) * 100).toFixed(2)}% for the whole battery`,
+        why: "the objective refused it: check the goal order and the % loss allowance",
       };
     default:
       return { text: `kept — best of ${v.n}` };
@@ -346,6 +351,8 @@ export function answerSlot(key: string, plan: Record<string, Item>, ctx: SlotCtx
 export interface GearChange { key: string; kind: "Turret" | "Module"; label: string; current: Item | null; next: Item; }
 export interface GearBuilder {
   gear: Item[];
+  /** The signatures the ban filter kept OUT of `gear`, so the tab can say what it holds back AND lift exactly that. */
+  bansHidden: string[];
   hps: ShipHardpoint[];
   mslots: { slot: string; size: string; equipped: Item | null }[];
   cats: Record<string, string[]>; setCats: (c: Record<string, string[]>) => void;
@@ -420,7 +427,7 @@ export interface GearBuilder {
 
 // Shared gear state (assignments + per-ship filters + categories), lifted into App so the Gear tab and
 // the Summary tab work off one result.
-export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | null, currentShipGuid?: string | null, crit: CritContext = BASE_CRIT, poolsReported?: ShipPools | null, role?: string | null, vitals?: Vitals | null): GearBuilder {
+export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | null, currentShipGuid?: string | null, crit: CritContext = BASE_CRIT, poolsReported?: ShipPools | null, role?: string | null, vitals?: Vitals | null, bans?: Bans): GearBuilder {
   // The layout and the live ship can disagree for a moment after a ship change (separate fetches). Every
   // proposal is derived from the layout's slots, so while they disagree we suggest nothing and apply
   // nothing — a plan for the previous hull's hardpoints is worse than no plan.
@@ -443,14 +450,22 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
     setScopeLocal(getScope());
     return subscribeScope(() => setScopeLocal(getScope()));
   }, []);
-  const gear = useMemo<Item[]>(() => {
-    const out: Item[] = [];
+  // The pool AND how many the ban filter kept out of it, from one walk: counting them separately would be the
+  // same predicate written twice, and the count would drift from the pool the moment either changed.
+  const gearPool = useMemo<{ items: Item[]; hidden: string[] }>(() => {
+    const items: Item[] = [];
+    const hidden: string[] = [];
     for (const st of inv?.stores ?? [])
       for (const it of st.items)
-        if (it.category === "Turret" || isModule({ ...it, location: st.id }))
-          out.push(atScope({ ...it, location: st.id }, scope));
-    return out;
-  }, [inv, scope]);
+        if (it.category === "Turret" || isModule({ ...it, location: st.id })) {
+          const at = atScope({ ...it, location: st.id }, scope);
+          // A BAN LEAVES THE POOL, it does not lose a comparison later: the shortlist is part of the objective, so
+          // an item dropped after scoring would still have decided which plans were reachable at all.
+          if (bans?.has(at, "fit")) hidden.push(banKey("fit", at)); else items.push(at);
+        }
+    return { items, hidden };
+  }, [inv, scope, bans]);
+  const gear = gearPool.items;
   /**
    * THE BASELINE, RE-READ AT THE CHOSEN SCOPE. The bridge's pools describe the ship as it is ∴ at `potential` they
    * describe the wrong ship, and leaving them alone would score upgraded candidates against un-upgraded pools —
@@ -1471,6 +1486,7 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
   }, [manual, keep, assign, setSlotItem]);
 
   return {
+    bansHidden: gearPool.hidden,
     suggestSlot,
     goalOrder,
     setGoalOrder,
@@ -1529,8 +1545,12 @@ export function useGearBuilder(layout: ShipLayout | null, inv: Inventories | nul
 }
 
 export default function GearTab({
-  layout, builder, catalog, conn, currentShipGuid, goSummary, reactor, budgetNote, role, vitals, apply,
+  layout, builder, catalog, conn, currentShipGuid, goSummary, role, apply, shipView, bans,
 }: {
+  // The panel's inputs, built once by `App` so every tab's copy carries the same pending build.
+  shipView?: ShipView;
+  /** What this ship refuses to be offered. Filtered out of the POOL, so no search ever sees it. */
+  bans?: Bans;
   layout: ShipLayout | null;
   builder: GearBuilder;
   catalog: CatalogTypes | null;
@@ -1885,6 +1905,10 @@ export default function GearTab({
 
   // The candidate list lives INSIDE the selected slot, not in a column of its own: it only ever applies to one
   // slot, and a permanent rail cost horizontal space on every slot that was not selected.
+  // What is fitted in a slot key, for the picker's clear: "t:<index>" is a hardpoint, "m:<slot>" a module bay.
+  const equippedOf = (key: string): Item | null => (key.startsWith("t:")
+    ? hps.find((h) => h.index === Number(key.slice(2)))?.equipped ?? null
+    : mslots.find((m) => m.slot === key.slice(2))?.equipped ?? null);
   const candidateList = () => (
     // ONE picker for the whole app (`SlotPickList`) — the boosters tab renders the same component with its own
     // cells, so a change to how choosing an item WORKS lands in both at once. What is passed here is only what
@@ -1896,6 +1920,11 @@ export default function GearTab({
       setQuery={setListQ}
       onPick={(it) => { if (selSlot) { setSlotItem(selSlot, it); setSelSlot(null); } }}
       onClose={() => setSelSlot(null)}
+      // Pinned to what is FITTED, ⊥ merely unset: an unanswered slot is one the optimizer answers again on the
+      // next pass, with the pick that was just cleared. Keeping the current item is what "clear" looks like.
+      onClearSlot={selSlot ? () => { setSlotItem(selSlot, equippedOf(selSlot)); setSelSlot(null); } : undefined}
+      onBan={bans ? (it) => bans.toggle(it, "fit") : undefined}
+      banned={bans ? (it) => bans.has(it, "fit") : undefined}
       keyOf={(it) => handle(it) + it.name}
       iconOf={(it) => itemIcon(conn, it)}
       nameOf={(it) => it.name}
@@ -1990,8 +2019,9 @@ export default function GearTab({
             {(slotGain.get(key) as number) >= 0 ? "+" : ""}{((slotGain.get(key) as number) * 100).toFixed(1)}%
           </span>
         ) : null}
-        next={<NewVig it={nu} mine={pinned.has(key)} onClear={() => setSlotItem(key, null)} onHover={(h) => setHover(h && { ...h, vs: cur ?? null })} conn={conn}
-          verdict={verdictText(verdicts.get(key))} unchanged={!!nu && sameFit(cur ?? null, nu)} />}
+        next={<NewVig it={nu} mine={pinned.has(key)} onHover={(h) => setHover(h && { ...h, vs: cur ?? null })} conn={conn}
+          verdict={verdictText(verdicts.get(key))} unchanged={!!nu && sameFit(cur ?? null, nu)}
+          action={nu && bans ? { label: "ignore", title: "Stop offering this on this ship", onClick: () => bans.toggle(nu, "fit") } : null} />}
         foot={<FilterSelect
           value={f.mode === "all" ? "" : `${f.mode}:${f.value}`}
           groups={filterGroups()}
@@ -2011,6 +2041,7 @@ export default function GearTab({
         <div className="panel-title">{onCurrent ? "" : <span className="dim">not the current ship</span>}</div>
         <div className="sum-actions">
           <button className="undo-suggest" onClick={() => setShowCats((v) => !v)}>{showCats ? "▾ Categories" : "▸ Categories"}</button>
+          <BanChip bans={bans} keys={builder.bansHidden} />
           {apply && <ApplyBar apply={apply} section="gear" label="gear" />}
           <button className="apply" onClick={goSummary} title="Review & apply all changes in the Summary tab">Go to Summary{payload.length ? ` (${payload.length})` : ""} →</button>
         </div>
@@ -2019,20 +2050,14 @@ export default function GearTab({
       <PlanNotice verdict={builder.planVerdict} />
       {showCats && <CategoryEditor combatTypes={combatTypes} cats={cats} setCats={setCats} />}
 
-      <div className="gear-ship">
-        <div className="gear-ship-wrap">
-          <img className="gear-img" src={api.shipImageUrl(conn, layout.shipGuid, layout.name) ?? ""} alt={layout.name} />
+      {shipView && (
+        <ShipCard {...shipView} publish>
           {hps.map((h) => {
             const on = hoverSlot === h.index || selSlot === `t:${h.index}`;
             return <span key={h.index} className={`gear-mount${on ? " hot" : ""}`} style={{ left: `${h.u * 100}%`, top: `${h.v * 100}%` }} title={`#${h.index} ${h.size}`}><span className="gear-mount-dot" /></span>;
           })}
-        </div>
-        <GearTotals pools={builder.pools} reactor={reactor} ranking={ranking} vitals={vitals} layerNote={builder.layerNote} budgetNote={budgetNote} shipGuid={layout?.shipGuid ?? currentShipGuid ?? null}
-          curTurrets={hps.map((h) => h.equipped).filter((x): x is Item => !!x)}
-          nextTurrets={hps.map((h) => assign[`t:${h.index}`] ?? h.equipped).filter((x): x is Item => !!x)}
-          curOther={mslots.map((m) => m.equipped).filter((x): x is Item => !!x)}
-          nextOther={mslots.map((m) => assign[`m:${m.slot}`] ?? m.equipped).filter((x): x is Item => !!x)} />
-      </div>
+        </ShipCard>
+      )}
 
       {modeNote && <p className="gear-modenote">{modeNote}</p>}
       {/* The player order refused this plan — said, not left as an empty tab. */}
@@ -2172,8 +2197,7 @@ export default function GearTab({
                 const key = `m:${m.slot}`;
                 const nu = assign[key] ?? null;
                 return (
-                  <div key={i} className={`gear-panel${selSlot === key ? " sel" : ""}`}
-                    onClick={() => setSelSlot(selSlot === key ? null : key)}>
+                  <div key={i} className={`gear-panel${selSlot === key ? " sel" : ""}`}>
                     <div className="gear-panel-head">{m.slot} <span className="dim">· {m.size}</span>
                       <SlotLock locked={pinned.has(key) || keep.has(key)}
                         what={m.equipped ? m.equipped.name : "nothing"}
@@ -2189,8 +2213,13 @@ export default function GearTab({
                     <div className="gear-swap">
                       <Vig it={m.equipped} conn={conn} onHover={setHover} />
                       <span className="gear-arrow">→</span>
-                      <NewVig it={nu} mine={pinned.has(key)} onClear={() => setSlotItem(key, null)} onHover={(h) => setHover(h && { ...h, vs: m.equipped })} conn={conn}
-                        unchanged={!!nu && sameFit(m.equipped, nu)} />
+                      {/* A module panel is built here rather than through `SlotCard`, so it needs the same rule
+                          spelled out: the picker opens from the NEW side, not from anywhere on the card. */}
+                      <span className="gear-next" onClick={() => setSelSlot(selSlot === key ? null : key)}>
+                      <NewVig it={nu} mine={pinned.has(key)} onHover={(h) => setHover(h && { ...h, vs: m.equipped })} conn={conn}
+                        unchanged={!!nu && sameFit(m.equipped, nu)}
+                        action={nu && bans ? { label: "ignore", title: "Stop offering this on this ship", onClick: () => bans.toggle(nu, "fit") } : null} />
+                      </span>
                     </div>
                     {selSlot === key && candidateList()}
                   </div>
@@ -2239,10 +2268,10 @@ function Vig({ it, conn, onHover }: { it: Item | null; conn: Conn; onHover?: (h:
                   sub={it ? gearSub(it) : null} extra={it ? gearMarks(it, conn) : null} />;
 }
 
-function NewVig({ it, onClear, onHover, dimmed, conn, verdict, unchanged, mine }: { it: Item | null; onClear?: () => void; onHover: (h: { it: Item; x: number; y: number } | null) => void; dimmed?: boolean; conn: Conn; verdict?: { text: string; why?: string } | null; unchanged?: boolean; mine?: boolean }) {
+function NewVig({ it, onHover, dimmed, conn, verdict, unchanged, mine, action }: { it: Item | null; onHover: (h: { it: Item; x: number; y: number } | null) => void; dimmed?: boolean; conn: Conn; verdict?: { text: string; why?: string } | null; unchanged?: boolean; mine?: boolean; action?: { label: string; title?: string; onClick: () => void } | null }) {
   return (
-    <BaseNewVig it={it} onClear={onClear} onHover={onHover} dimmed={dimmed} conn={conn}
-                verdict={verdict} unchanged={unchanged} mine={mine}
+    <BaseNewVig it={it} onHover={onHover} dimmed={dimmed} conn={conn}
+                verdict={verdict} unchanged={unchanged} mine={mine} action={action}
                 sub={it ? gearSub(it) : null} extra={it ? gearMarks(it, conn) : null} />
   );
 }

@@ -1,7 +1,7 @@
 import type { Item } from "./types";
 import { aspectDamageFraction } from "./aspect";
 import { mainVal, statTotals } from "./format";
-import { catOf, compareModulesWhy, isTurret } from "./itemKind";
+import { catOf, compareModulesWhy, isTurret, itemSignature } from "./itemKind";
 import type { ShipFit } from "./roleStats";
 import { energyDraw, poolReactorFactor, reactorModifier, repowered } from "./reactor";
 import { turretScore } from "./turretScore";
@@ -664,6 +664,17 @@ function axisValues(it: Item): number[] {
 }
 
 export function shortlist(cands: Item[], perKey = SHORTLIST_PER_KEY): Item[] {
+  // IDENTICAL GUNS ARE ONE CANDIDATE. A hoard holds the same roll many times over, and each copy took a place in
+  // every axis it qualified on — twelve of one gun could fill a criterion outright and keep a different gun,
+  // better on balance, out of the search entirely. They are interchangeable by definition, so the search loses
+  // nothing by seeing one of them and gains the room the others were holding.
+  const seen = new Set<string>();
+  cands = cands.filter((c) => {
+    const sig = itemSignature(c);
+    if (seen.has(sig)) return false;
+    seen.add(sig);
+    return true;
+  });
   if (cands.length <= perKey) return cands;
   // One pass, keeping the top `perKey` per axis in a small insertion-sorted list — 11 full sorts of a
   // thousands-long array is itself the cost being avoided.
@@ -1289,6 +1300,21 @@ const MODULE_POOLS: ReadonlyArray<readonly [pool: keyof ShipPools, mult: keyof S
  * leaves the torpedo term where it was and flatters the candidate. Bounded: the term is a few percent of a
  * gunship's output, and fixing it means the turret contribution reading this table too.
  */
+/**
+ * The reported TOTAL for one stat's pool, or null where this app holds no pool for that name.
+ *
+ * Reads `MODULE_POOLS`, the one owner of which stat name belongs to which pool, so a pool added there is
+ * answerable here without a second table. The figure is the total the ship reports, multipliers already in it.
+ */
+export function poolTotalFor(pools: ShipPools | null | undefined, stat: string): number | null {
+  if (!pools || !stat) return null;
+  const key = stat.trim().toLowerCase();
+  const row = MODULE_POOLS.find(([, , name]) => name.toLowerCase() === key);
+  if (!row) return null;
+  const v = (pools as unknown as Record<string, unknown>)[row[0]];
+  return typeof v === "number" && isFinite(v) ? v : null;
+}
+
 export type StatChannel = "pool" | "bracket" | "layer" | null;
 
 /**
@@ -2115,6 +2141,28 @@ export function rankLoses(plan: Rank, now: Rank, band = OBJECTIVE_TIE): boolean 
 }
 
 /**
+ * Does this plan improve NOTHING measurable while costing something?
+ *
+ * Read across every goal key that both readings can state, plus the battery's own ranked value. A key absent on
+ * either side is not evidence in either direction and is skipped, exactly as `goalDrops` skips it.
+ *
+ * Flat everywhere is left to the caller: "identical" is a tie rather than a refusal, and `worthSwitching` is what
+ * decides a tie. This answers only the case with a loss on the board and no gain anywhere to weigh it against.
+ */
+export function goalGivesNothing(fitted: GoalReading, planned: GoalReading,
+                                 plan: Rank, now: Rank, band = OBJECTIVE_TIE): boolean {
+  if (rankGt(plan, now)) return false;
+  let loss = false;
+  for (const k of GOAL_KEYS) {
+    const a = fitted[k], b = planned[k];
+    if (a == null || b == null || !Number.isFinite(a) || !Number.isFinite(b) || !(a > 0)) continue;
+    if (b > a * (1 + band)) return false;   // a gain anywhere makes it a trade, and the order decides
+    if (b < a * (1 - band)) loss = true;
+  }
+  return loss;
+}
+
+/**
  * Is this plan worth offering — the ONE gate, with the order and the floor each owning the case it can answer.
  *
  * V17 puts the worth-it floor in the objective rather than in the tab, so the rule about WHEN the floor still
@@ -2147,6 +2195,18 @@ export function goalAccepts(order: readonly GoalKey[], fitted: GoalReading, plan
   // main power and layer coverage does exactly that). Losses only: a GAIN on the player's first key still decides,
   // which is what keeps the order theirs. Same band `goalSign` uses ∴ "identical" stays a tie, not a refusal.
   if (rankLoses(plan, now, band)) return false;
+  // A PLAN THAT IMPROVES NOTHING IS NOT A COMPROMISE. Every measurable indicator flat or worse, and the battery's
+  // own value unmoved, means there is nothing on either side of a trade: whatever the order says, no sequencing of
+  // keys can make a plan that gains nowhere into an upgrade.
+  //
+  // ABOVE the order and above the allowance, because it does not depend on either. It matters most where the
+  // order cannot speak at all: on a hull whose role stat is not a POOL the game reports (a salvage or mining
+  // battery reads `GetStat` 0), no module swap moves any ranked key, so a plan giving up half the hull used to
+  // score exactly as well as one that gave up nothing.
+  //
+  // A REAL TRADE IS UNTOUCHED: a gain on any key is enough to let the order decide, which is what keeps the
+  // choice between two costs the player's.
+  if (goalGivesNothing(fitted, planned, plan, now, band)) return false;
   if (!order.length) return worthSwitching(plan, now);
   const signs = goalVector(order, planned, fitted, band);
   if (signs.every((s) => s === 0)) return worthSwitching(plan, now);

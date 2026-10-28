@@ -10,7 +10,7 @@ namespace VG.Core
     // A shop offer as plain data.
     public struct Offer
     {
-        public int Cost;         // credit price per unit; ignored when CostItem != null
+        public long Cost;        // credit price per unit; ignored when CostItem != null
         public string CostItem;  // barter item identifier, or null for a credit purchase
         public int CostItemPer;  // barter units required per purchased unit
         public int Stock;        // units in stock; negative = infinite supply

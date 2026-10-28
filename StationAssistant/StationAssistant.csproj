@@ -4,7 +4,7 @@
     <TargetFramework>netstandard2.1</TargetFramework>
     <AssemblyName>StationAssistant</AssemblyName>
     <Product>Station Assistant</Product>
-    <Version>1.1.7</Version>
+    <Version>1.1.8</Version>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
@@ -57,6 +57,7 @@
        self-contained assembly. One source of truth in the workspace; cross-mod calls reflect. -->
   <ItemGroup>
     <Compile Include="..\Shared\ModHost.cs" Link="ModHost.cs" />
+    <Compile Include="..\Shared\GameTarget.cs" Link="GameTarget.cs" />
     <Compile Include="..\Shared\LoadoutCore.cs" Link="LoadoutCore.cs" />
     <Compile Include="..\Shared\LoadoutStore.cs" Link="LoadoutStore.cs" />
     <!-- Game-free pure cores (also linked by tests\ and unit-tested headless). -->

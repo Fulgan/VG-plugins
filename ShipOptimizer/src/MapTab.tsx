@@ -7,7 +7,6 @@ import { MAP_LAYER_KEY, load as loadPref, save as savePref } from "./storage";
 import { INK_LIGHT, MAP_EMPTY, STATIONS_FULL, factionFill, factionPalette, faint, ink, mapRamp } from "./mapRamp";
 import { MapSparks, type Lane } from "./mapSpark";
 import { MapStars } from "./mapStars";
-import StandingPanels from "./StandingPanels";
 import FactionMark from "./FactionMark";
 import "./map.css";
 
@@ -25,7 +24,6 @@ type Layer = "owner" | "materials" | "level" | "recency" | "stations" | "umbral"
 
 // The game's quadrant ids (0 Prologue, 1 Frontier, 2 Conquest). Only the conquest one needs naming: its
 // presence in the payload is what tells us the conquest map is open to this save.
-const CONQUEST_QUADRANT = 2;
 
 const LAYERS: { id: Layer; label: string; hint: string }[] = [
   { id: "owner", label: "Ownership", hint: "Controlling faction per system" },
@@ -171,8 +169,8 @@ function classify(s: GalaxySystem): Special | null {
   return "graveyard";
 }
 
-export default function MapTab({ conn, docked, standingBump = 0 }: {
-  conn: Conn; docked: boolean; standingBump?: number;
+export default function MapTab({ conn, docked }: {
+  conn: Conn; docked: boolean;
 }) {
   const [g, setG] = useState<Galaxy | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -639,12 +637,6 @@ export default function MapTab({ conn, docked, standingBump = 0 }: {
           ))}
         </div>
       )}
-
-      {/* Standing lives at the foot of the map because it is about the same thing the map is: who holds what,
-          and who will shoot at you for being there. Conquest is shown only once its quadrant is on the map —
-          that is what "unlocked" means here, and it comes from the payload rather than a separate probe. */}
-      <StandingPanels conn={conn} bump={standingBump}
-        conquestUnlocked={quadrants.some((q) => q.id === CONQUEST_QUADRANT && q.sectors.length > 0)} />
 
       {hover && (
         <SystemTip conn={conn} sys={hover.sys} x={hover.x} y={hover.y} levelCap={g.levelCap ?? 64} factions={g.factions}

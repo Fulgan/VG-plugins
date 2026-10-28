@@ -277,6 +277,17 @@ namespace CicWatch
                 if (Pick(r.Boardable == WatchCriteria.BoardableNow, "boardable now", 108f)) { r.Boardable = WatchCriteria.BoardableNow; changed = true; }
                 GUILayout.EndHorizontal();
 
+                // A ROW OF ITS OWN, under the criteria rather than among them: this one does not change WHAT the
+                // rule calls, only whether the call is audible, and putting it in the `who`/`taking` run would read
+                // as a third thing being watched for.
+                GUILayout.BeginHorizontal();
+                L($"<color={Hint}>sound</color>", 46f);
+                if (Pick(!r.Chime, "silent", 52f)) { r.Chime = false; changed = true; }
+                if (Pick(r.Chime, "chime", 52f)) { r.Chime = true; changed = true; }
+                if (r.Chime && !Plugin.Cfg.ChimeEnabled.Value)
+                    L($"  <color={Hint}>sound is switched off below, so this rule stays silent</color>");
+                GUILayout.EndHorizontal();
+
                 GUILayout.Space(3f);
                 rules[i] = r;
             }
@@ -354,6 +365,32 @@ namespace CicWatch
 
             var pickQuiet = Choice(quiet, "Report a clear plot", "Strike the plot when clear");
             if (pickQuiet != quiet) cfg.QuietLines.Value = pickQuiet;
+
+            GUILayout.Space(6f);
+            // THE SWITCH AND THE LEVEL SIT TOGETHER, and neither is where a rule is made audible: this decides
+            // whether the mod may make a sound at all, the rule decides which calls are worth one. Off by rule
+            // rather than off by default here, so a player who marks a rule and hears nothing has one place to look.
+            var chime = cfg.ChimeEnabled.Value;
+            L(chime
+                ? Plain("Rules marked <b>chime</b> make a sound when they call something new")
+                  + $" <color={Hint}>(the game's own effects volume applies on top)</color>"
+                : Plain("<b>No sound</b>, whatever a rule says"));
+            var pickChime = Choice(chime, "Let rules chime", "Silence every rule");
+            if (pickChime != chime) cfg.ChimeEnabled.Value = pickChime;
+
+            if (cfg.ChimeEnabled.Value)
+            {
+                GUILayout.BeginHorizontal();
+                L($"<color={Hint}>volume</color>", 56f);
+                var v = GUILayout.HorizontalSlider(cfg.ChimeVolume.Value, 0f, 1f, GUILayout.Width(140f));
+                if (Mathf.Abs(v - cfg.ChimeVolume.Value) > 0.001f) cfg.ChimeVolume.Value = v;
+                L($"  <color={Hint}>{Mathf.RoundToInt(cfg.ChimeVolume.Value * 100f)}%</color>", 44f);
+                // A PREVIEW IGNORES THE COOLDOWN. It exists to answer "can I hear this", and a button that does
+                // nothing because a hull was called two seconds ago answers the opposite question.
+                if (GUILayout.Button(Plain("Play it"), GUILayout.Width(70f))) Chime.PlayNow();
+                GUILayout.FlexibleSpace();
+                GUILayout.EndHorizontal();
+            }
         }
 
         // THE LEVEL ROW IS GONE, and its rule is not: `level>=` is a criterion on a rule now. As a standalone

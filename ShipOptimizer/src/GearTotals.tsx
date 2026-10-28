@@ -34,7 +34,7 @@ function Row({ label, cur, next, fmt, goodUp = true, hint }: {
 // These exist because gear cannot be judged slot by slot: stats pool at the ship, and energy draw feeds a
 // bracketed multiplier on the power pools (see reactor.ts), so a bigger gun can cost damage overall. The panel
 // is the only place that answers "is this build actually better".
-export default function GearTotals({ pools, reactor, ranking, vitals, curTurrets, nextTurrets, curOther, nextOther, layerNote, budgetNote, shipGuid }: {
+export default function GearTotals({ pools, reactor, ranking, vitals, curTurrets, nextTurrets, curOther: curOtherIn, nextOther: nextOtherIn, curBoosters, nextBoosters, publish = true, layerNote, budgetNote, shipGuid }: {
   pools?: ShipPools | null;
   // Only so the published diagnosis record says WHICH ship it describes; the panel itself never reads it.
   shipGuid?: string | null;
@@ -47,11 +47,24 @@ export default function GearTotals({ pools, reactor, ranking, vitals, curTurrets
   nextTurrets: Item[];
   curOther: Item[];   // equipped non-turret gear, for the energy budget
   nextOther: Item[];
+  // THE BOOSTER PLAN, as a positional out/in pair, folded in with the other gear rather than modelled apart: a
+  // booster's pooled lines and its draw move the ship exactly as a module's do, and the projection is positional
+  // over the pair rather than about modules. Pairs only, both sides present — a slot going from EMPTY to filled
+  // is not represented, so the panel understates such a plan rather than mis-stating it.
+  curBoosters?: Item[];
+  nextBoosters?: Item[];
+  // Exactly one mounted panel may publish the diagnosis record. With several on screen the last render decides
+  // what it describes, and a reader of it cannot tell which tab that was.
+  publish?: boolean;
   // Why the score is single-layer when it is: set only when the ship cannot reach one layer at all.
   layerNote?: string | null;
   // Why there is no set score at all: the held budget and the reported one straddle a bracket edge.
   budgetNote?: string | null;
 }) {
+  // One list per side, so every reading below folds the whole pending build and no two of them disagree about
+  // what "the plan" is.
+  const curOther = curBoosters?.length ? [...curOtherIn, ...curBoosters] : curOtherIn;
+  const nextOther = nextBoosters?.length ? [...nextOtherIn, ...nextBoosters] : nextOtherIn;
   const capacityNow = reactor?.capacity ?? null;
   const usedNow = reactor?.used ?? null;
   // A REACTOR swap moves the budget itself, so the projected load is over the projected capacity — and the
@@ -127,7 +140,11 @@ export default function GearTotals({ pools, reactor, ranking, vitals, curTurrets
     if (act) label = `${act} power`;
     // A bridge that predates the per-activity pools sends none, so a mining battery has nothing to be scored
     // against. Say so rather than print a 0 that reads as "this build does nothing".
-    noPool = cur[0] === 1 && (act === "Salvage" ? pools.poolSalvagePower : pools.poolMiningPower) == null;
+    // ZERO IS NO POOL, not an empty one. The game reports no ship-level pool for a salvage or mining battery
+    // (`GetStat` and `GetStatMultiplier` both read 0 while the per-source list is full), and the bridge passes
+    // that through rather than inventing a 1.0 ∴ testing for null alone let a 0 be ranked against as if real.
+    const activityPool = act === "Salvage" ? pools.poolSalvagePower : pools.poolMiningPower;
+    noPool = cur[0] === 1 && !(activityPool != null && activityPool > 0);
     if (!noPool) {
       dpsCur = cur[1];
       // Same TIER is not enough: a Mining figure against a Salvage one is two units, so the projected side
@@ -231,7 +248,7 @@ export default function GearTotals({ pools, reactor, ranking, vitals, curTurrets
     },
     notes: { layerNote: layerNote ?? null, budgetNote: budgetNote ?? null },
   };
-  useEffect(() => { save(PLAN_KEY, planRecord); }, [JSON.stringify(planRecord)]);
+  useEffect(() => { if (publish) save(PLAN_KEY, planRecord); }, [publish, JSON.stringify(planRecord)]);
 
   const nothing = capacity == null && cpNow == null && dpsCur == null;
   return (
@@ -336,3 +353,7 @@ export default function GearTotals({ pools, reactor, ranking, vitals, curTurrets
     </aside>
   );
 }
+
+// The panel's inputs, minus the one flag that differs per mount. Owned by `App` so every tab shows one
+// projection: a plan pending on another tab has to be in the figures a player is deciding on here.
+export type TotalsInputs = Omit<Parameters<typeof GearTotals>[0], "publish">;

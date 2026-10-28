@@ -50,7 +50,9 @@ namespace Hypercom
                 if (Compat.Get<string>(o, "guid", null) == guid) { officer = o; break; }
             if (officer == null) return Api.Result.Err(404, "no such recruit at this station");
 
-            var cost = (long)Compat.Get<int>(officer, "purchaseCost", 0);
+            // `int` up to game 0.8.2, `long` from 0.8.3: converted from the boxed value, since `Get<T>` matches the
+            // exact type and answers its fallback for any other.
+            var cost = Convert.ToInt64(Compat.Get(officer, "purchaseCost") ?? 0);
             var credits = Compat.Get<long>(GamePlayer.current, "credits", 0L);
 
             // Find a callable hire method whose single parameter accepts this officer.

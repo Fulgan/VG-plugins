@@ -1,74 +1,71 @@
-SHIP  Assayer · Mining · game 0.8.2.1
-      docked=true statsLive=true equivalentTurrets=0
+SHIP  Manglor · Combat · game 0.8.2.3
+      docked=false statsLive=true equivalentTurrets=15
 
 MOUNTED — hardpoints
-  [0] Small  Core Breaker Mk.XVI Lv63  draw 330
-        Mining Power 3,037, Hull HP 719, Power 375, Turret Rotation Speed 0
-  [1] Medium Core Buster Mk.XVII Lv65  draw 0
-        Mining Power 5,516, Turret Rotation Speed 0, Torpedo Power 924
-  [2] Small  Cutter Mk.XVI Lv64  draw 0
-        Mining Power 3,271, Shield HP 743, Power 517, Mining Power 712
-  [3] Small  Cutter Mk.XVII Lv65  draw 0
-        Mining Power 3,475, Drone Power 685, Torpedo Power 750, Armor HP 694
+  [0] Medium Railgun Mk.XIX Lv74 Q15  draw 1,510
+        Combat Power 10,454, Combat Power 2,176, Critical Damage 0
+  [1] Medium Railgun Mk.XIX Lv74 Q15  draw 1,586
+        Combat Power 10,503, Armor HP 1,831, Attack Speed 0
+  [2] Medium BX Railcaster Mk.XIX Lv74 Q20  draw 1,422
+        Combat Power 11,550, Armor HP 2,472, Reload Speed 0, Critical Damage 0
+  [3] Large  Railgun Mk.XIX Lv74 Q15  draw 0
+        Combat Power 15,897, Critical Damage 0, Combat Power 3,110
+  [4] Large  Railgun Mk.XIX Lv74 Q15  draw 2,421
+        Combat Power 15,843, Power 2,176, Precision 2,668
+  [5] Large  Railgun Mk.XIX Lv74 Q15  draw 0
+        Combat Power 15,490, Armor HP 3,028, Power 1,854
 MOUNTED — modules
-  Reactor      Reactor Mk.XVI Lv65 Q20  draw 0
-        Energy 12,536, Hull HP 1,743, Armor HP 1,893, Shield HP 1,943
-  Engine       Engine Mk.XVI Lv64 Q20  draw 1,183
-        Thrust 38,677, Power 1,337, Combat Power 1,651, Torpedo Power 1,749, Side Thrust 14,876, Rotational Thrust 87,077
-  Scanner      Scanner Mk.XIX Lv74 Q20  draw 2,460
-        Precision 12,994, Mining Power 3,321, Armor HP 3,193, Power 2,605
-  TractorBeam  Tractor Beam Mk.XVIII Lv69  draw 0
-        Energy Resistance 0, Precision 1,929
-  Hull         Hull Kit Mk.XVIII Lv69 Q20  draw 0
-        Hull HP ×127.103752, Armor HP 2,578, Hull HP 2,670, Shield HP 2,361
-  Armor        Armor Plating Mk.XVIII Lv71  draw 1,794
-        Armor HP ×141.98053, Drone Power 2,501, Mining Power 2,191, Torpedo Power 2,107
-  HangarBay    Hangar Bay Mk.XVIII Lv69  draw 961
-        Drone Power 1,511, Mining Power 1,485, Hangar Build Speed 0
+  Reactor      Reactor Mk.XIX Lv74 Q20  draw 0
+        Energy 22,309, Armor HP 3,144, Combat Power 3,575, Shield HP 3,870
+  Engine       Engine Mk.XVIII Lv69 Q20  draw 0
+        Thrust 40,041, Combat Power 2,668, Armor HP 2,357, Precision 2,529, Side Thrust 15,401, Rotational Thrust 90,150
+  Scanner      Scanner Mk.XIX Lv74 Q15  draw 2,294
+        Precision 11,614, Armor HP 3,014, Combat Power 2,725
+  TractorBeam  Tractor Beam Mk.XVIII Lv69 Q20  draw 0
+        Armor HP 2,563, Hull HP 2,753, Precision 2,660
+  Hull         Hull Kit Mk.XVI Lv64 Q20  draw 1,020
+        Hull HP ×67.2614, Kinetic Resistance 0, Armor HP 1,787, Corrosion Resistance 0
+  Armor        Armor Plating Mk.XIX Lv74 Q20  draw 2,223
+        Armor HP ×171.42894, Armor HP 3,614, Shield HP 3,522, Combat Power 3,490
 
 TAB STATE  26 keys loaded from /client/state
-PUBLISHED — what the player's tab last drew (ship 45b0a49b-f66c-436d-b309-f39796833a59, expanded)
-  Core Breaker Mk.XVI Lv63  →  Cutter Mk.XVI Lv63
-     main 3,037 → 3,101   draw 330 → 574
-     aspects [Firestarter, Critical Attenuation] → [Firestarter, Reload Subroutine]
-  Cutter Mk.XVII Lv65  →  Core Breaker Mk.XVI Lv64
-     main 3,475 → 2,553   draw 0 → 354
-     aspects [Firestarter, Solar Powered] → [Shielding Subsystem]
-    Mining power                110,391 →        108,415  (-1.79%)
-    combatPower                  10,730 →          9,964  (-7.14%)
-    precision                    15,234 →         15,234  (-0.00%)
-    critChance                    26.8%
-    load                          44.4% →          48.3%  (+8.89%)
-    hull                      1,396,754 →      1,279,521  (-8.39%)
-    armor                     2,832,231 →      2,705,916  (-4.46%)
-    shield                        7,831
+PUBLISHED — what the player's tab last drew (ship 68db8f14-7095-4f2e-aa6c-88b6914afeaa, expanded)
+  (the tab proposes nothing)
+    Salvage power                     —
+    combatPower                  17,282
+    precision                    15,559
+    critChance                    21.0%
+    load                          41.3%
+    hull                      2,211,342
+    armor                     2,213,439
+    shield                        5,344
 
 PROPOSED (Suggest whole ship, expanded)
   (nothing — the objective proposes no change)
 
 PREDICTED — current → planned
-  Power (tier 1)                106,592
-  Combat power                   10,329
-  Precision                      14,923
-  Crit chance                     26.4%
-  Mining power                  205,281
-  Salvage power                   8,355
-  Energy used                     6,729
-  Reactor capacity               15,168
-  Load                            44.4%
+  DPS index (tier 2)            357,958
+  Combat power                  443,981
+  Precision                      19,472
+  Crit chance                     44.1%
+  Mining power                    6,534
+  Salvage power                   6,336
+  Energy used                    12,476
+  Reactor capacity               26,994
+  Load                            46.2%
   Reactor bonus                   20.0%
-  Hull (game)                 1,396,754
-  Armor (game)                2,832,231
-  Shield (game)                   7,831
+  Hull (game)                   808,030
+  Armor (game)               12,789,701
+  Shield (game)                  19,253
 
-  VERDICT  worthSwitching = false   rank 106592.5 → 106592.5  (+0.00%)
-  loadAsRead(now) = 44.4%   loadAsRead(proj) = 44.4%   (must be equal — V73)
+  VERDICT  worthSwitching = false   rank 357958.2 → 357958.2  (+0.00%)
+  loadAsRead(now) = 46.2%   loadAsRead(proj) = 46.2%   (must be equal — V73)
 
 RECONCILE — the game's own sources vs the model
-  Combat Power   total       10,329  mult 1.5920  additive      6,486 of      6,488  (short 0.04%)  via: CombatPower, Power
-  Mining Power   total      205,281  mult 5.2774  additive     38,063 of     38,898  (short 2.15%)  via: MiningPower, Power
-  Salvage Power  total        8,355  mult 1.6965  additive      4,835 of      4,925  (short 1.83%)  via: Power
-  Precision      total       14,923  mult 1.0000  additive     14,923 of     14,923  (short -0.00%)  via: Precision
+  Combat Power   total      443,981  mult 4.1273  additive    106,592 of    107,572  (short 0.91%)  via: CombatPower, Power
+  Mining Power   total        6,534  mult 1.6055  additive      4,030 of      4,070  (short 0.98%)  via: Power
+  Salvage Power  total        6,336  mult 1.5655  additive      4,030 of      4,047  (short 0.43%)  via: Power
+  Precision      total       19,472  mult 1.0000  additive     19,472 of     19,472  (short -0.00%)  via: Precision
 
 MAIN POWER the model subtracts as each gun's own (GetMainPowerSum):
-  0
+  79,738

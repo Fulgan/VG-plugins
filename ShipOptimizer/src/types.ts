@@ -518,6 +518,8 @@ export interface Reputation {
 export interface StandingEntry {
   seq: number;
   t: string;                       // HH:mm:ss, when the change was NOTICED (sampled, up to 3s late)
+  /** The local calendar day `t` belongs to, `yyyy-MM-dd`. Absent from a bridge older than this field. */
+  day?: string;
   ladder: "faction" | "conquest";
   factionId: string; faction: string | null;
   delta: number; value: number;

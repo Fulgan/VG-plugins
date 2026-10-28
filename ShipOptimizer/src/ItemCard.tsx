@@ -3,7 +3,7 @@ import type { Item } from "./types";
 import { RARITY_COLOR, num, statPct, subFmt, effectiveMainVal, compareStats, priceLabel } from "./format";
 import { aspectDamageFraction, damageAspects, aspectValue } from "./aspect";
 import { isRoleStat } from "./roleStats";
-import { isBooster, resonanceFigure, resonanceLive } from "./booster";
+import { isBooster, resonanceFigure, resonanceLive, swapVerdict, type BoosterCtx } from "./booster";
 import { activityLabel, isTurret, kindOf } from "./itemKind";
 import { moduleStatChannel, pricesModuleStat, vsRollsOf } from "./fleetDps";
 import AspectMark from "./AspectMark";
@@ -24,7 +24,7 @@ import { useCursorTip } from "./useCursorTip";
 export type CardTone = "hovered" | "target" | "alt";
 
 // One full in-game-style item panel. When `cmp` is given, appends a per-stat Δ (this − cmp) block.
-export function ItemCard({ it, conn, imgUrl, cmp, cmpLabel, tag, tone, pieStat, maxPower, rel, role }: { it: Item; conn: Conn; imgUrl?: string | null; cmp?: Item | null; cmpLabel?: string; tag?: string; tone?: CardTone; pieStat?: string | null; maxPower?: number; rel?: { pct: number; note: string; metric?: string } | null; role?: string | null }) {
+export function ItemCard({ it, conn, imgUrl, cmp, cmpLabel, tag, tone, pieStat, maxPower, rel, role, boosterCtx }: { it: Item; conn: Conn; imgUrl?: string | null; cmp?: Item | null; cmpLabel?: string; tag?: string; tone?: CardTone; pieStat?: string | null; maxPower?: number; rel?: { pct: number; note: string; metric?: string } | null; role?: string | null; boosterCtx?: BoosterCtx | null }) {
   // Store items resolve by handle; equipped ones (no handle) by their ship slot — see Item.slotKey.
   const img = imgUrl !== undefined ? imgUrl : itemIcon(conn, it);
   const deltas = cmp && cmp !== it ? compareStats(it, cmp) : [];
@@ -36,6 +36,9 @@ export function ItemCard({ it, conn, imgUrl, cmp, cmpLabel, tag, tone, pieStat, 
   // meaningful to rank.
   const better = !!cmp && cmp !== it && !!it.mainStat && it.mainStat.name === cmp.mainStat?.name
     && (effectiveMainVal(it) ?? 0) > (effectiveMainVal(cmp) ?? 0);
+  // THIS panel holds the booster that would be displaced and `cmp` the one being offered, so the verdict is
+  // asked in that direction. Only a tab with a ship to judge against passes a reading; the rest get nothing.
+  const swap = cmp ? swapVerdict(cmp, it, boosterCtx) : null;
   return (
     <div className={`git git-static${cmp ? " git-vs" : " hovered"}${better ? " better" : ""}${tone ? ` git-${tone}` : ""}`}>
       {/* The role gets its own strip rather than a grey suffix on the class line: as a suffix it read as part
@@ -170,6 +173,14 @@ export function ItemCard({ it, conn, imgUrl, cmp, cmpLabel, tag, tone, pieStat, 
           <div className="git-cmp-head" title={`Each row is this item minus ${cmp.name}: a plus means this item has more.`}>
             {cmpLabel ?? "Δ vs hovered"}
           </div>
+          {/* WHY THE PLAN LEAVES THIS ONE FITTED. The offered booster reaches the same ceiling, so it wins once
+              flown and loses until then, and the wait is the whole cost of taking it. */}
+          {swap && (
+            <div className="git-cmp-swap" title="Resonance progress is earned only while a booster is fitted, and unfitting it keeps none of it.">
+              Wins at full potential, loses today
+              {swap.payback && <>. Breaks even after ~{num(Math.round(swap.payback.amount))} {swap.payback.unit}</>}
+            </div>
+          )}
           {/* WHICH lines the objective can act on. `MODULE_POOLS` is the whole set a module swap moves, so a
               stat outside it changes the score by nothing — and a panel listing "+3,892 Torpedo Power" beside
               "−1,220 Precision" as though they weighed against each other is why an offer could look absurd and
@@ -205,7 +216,6 @@ export function ItemCard({ it, conn, imgUrl, cmp, cmpLabel, tag, tone, pieStat, 
             so "Value" was the only number on the card and read as the price. */}
         {priceLabel(it) && <span className="git-price" title="asking price">Price <Price it={it} conn={conn} size={13} /></span>}
         <span>Value ¢{(it.sellValue ?? 0).toLocaleString()}</span>
-        <span className="dim">◆ {(it.aspects ?? []).length}/{it.aspectSlots ?? 0}</span>
       </div>
     </div>
   );
@@ -217,7 +227,7 @@ export function ItemCard({ it, conn, imgUrl, cmp, cmpLabel, tag, tone, pieStat, 
 // the hovered item, mirroring the inventory tab. With neither `vs` nor `others` it's a single panel
 // (Summary tab reuse).
 const MAX_PANELS = 5; // panels are 264px — beyond this the row can't fit a normal screen
-export function ItemTip({ it, x, y, conn, imgUrl, vs, others, rel, role }: { it: Item; x: number; y: number; conn: Conn; imgUrl?: string | null; vs?: Item | null; others?: { it: Item; label: string }[]; rel?: (it: Item) => { pct: number; note: string; metric?: string } | null; role?: string | null }) {
+export function ItemTip({ it, x, y, conn, imgUrl, vs, others, rel, role, boosterCtx }: { it: Item; x: number; y: number; conn: Conn; imgUrl?: string | null; vs?: Item | null; others?: { it: Item; label: string }[]; rel?: (it: Item) => { pct: number; note: string; metric?: string } | null; role?: string | null; boosterCtx?: BoosterCtx | null }) {
   const compare = vs && vs !== it ? vs : null;
   // Which slot the displaced item sits in, taken from `others` rather than asked of the caller: every tab that
   // has a slot to name already lists it there, and one that has none (the inventory grid) names no slot at all.
@@ -229,13 +239,16 @@ export function ItemTip({ it, x, y, conn, imgUrl, vs, others, rel, role }: { it:
   const { ref, style } = useCursorTip(x, y);
   // Power pie: only cards sharing the hovered item's main stat take part; denominator is the
   // strongest of those, bonus lines on that stat included (see PowerPie / effectiveMainVal).
-  const pieStat = it.mainStat?.name ?? null;
-  const inPie = [it, ...(compare ? [compare] : []), ...extra.map((o) => o.it)].filter((p) => p.mainStat?.name === pieStat);
+  const stat = it.mainStat?.name ?? null;
+  const inPie = [it, ...(compare ? [compare] : []), ...extra.map((o) => o.it)].filter((p) => p.mainStat?.name === stat);
+  // THE PIE IS A SHARE OF THE STRONGEST PANEL ∴ with only one panel it is always the whole circle, which states
+  // nothing and reads as a rating. A comparison needs something to compare against.
+  const pieStat = inPie.length > 1 ? stat : null;
   const maxPower = Math.max(0, ...inPie.map((p) => effectiveMainVal(p) ?? 0));
   return (
     <div className="gits" ref={ref} style={style}>
       <ItemCard it={it} conn={conn} imgUrl={imgUrl} tag={compare || extra.length ? "hovered" : undefined} tone="hovered" pieStat={pieStat} maxPower={maxPower} rel={rel?.(it)} role={role} />
-      {compare && <ItemCard it={compare} conn={conn} cmp={it} cmpLabel={`Δ this − ${it.name}`} tag={vsLabel ? `being replaced · ${vsLabel}` : "being replaced"} tone="target" pieStat={pieStat} maxPower={maxPower} rel={rel?.(compare)} role={role} />}
+      {compare && <ItemCard it={compare} conn={conn} cmp={it} cmpLabel={`Δ this − ${it.name}`} tag={vsLabel ? `being replaced · ${vsLabel}` : "being replaced"} tone="target" pieStat={pieStat} maxPower={maxPower} rel={rel?.(compare)} role={role} boosterCtx={boosterCtx} />}
       {extra.map((o, i) => (
         <ItemCard key={`${o.label}:${i}`} it={o.it} conn={conn} cmp={it} cmpLabel={`Δ this − ${it.name}`} tag={o.label} tone="alt" pieStat={pieStat} maxPower={maxPower} rel={rel?.(o.it)} role={role} />
       ))}

@@ -4,7 +4,7 @@
     <TargetFramework>netstandard2.1</TargetFramework>
     <AssemblyName>QuickSave</AssemblyName>
     <Product>QuickSave</Product>
-    <Version>1.0.2</Version>
+    <Version>1.0.3</Version>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
@@ -52,6 +52,7 @@
        GameToast are the name-based game access and the on-screen notification every plugin needs. -->
   <ItemGroup>
     <Compile Include="..\Shared\ModHost.cs" Link="ModHost.cs" />
+    <Compile Include="..\Shared\GameTarget.cs" Link="GameTarget.cs" />
     <Compile Include="..\Shared\GameMembers.cs" Link="GameMembers.cs" />
     <Compile Include="..\Shared\GameState.cs" Link="GameState.cs" />
     <Compile Include="..\Shared\GameToast.cs" Link="GameToast.cs" />

@@ -462,7 +462,15 @@ namespace CicWatch
                     // test uses ∴ a guid-less hull is answered once rather than every quarter second. The `!`
                     // suffix makes a hull becoming boardable its own call: that state has a clock on it.
                     var callKey = boardable ? trackKey + "!" : trackKey;
-                    if (!Called.Contains(callKey)) somethingNew = true;
+                    if (!Called.Contains(callKey))
+                    {
+                        somethingNew = true;
+                        // ONE SOUND PER CONTACT, off the same key the panel's own "is this new" test uses, ⊥ off a
+                        // freshness test of its own. That is the whole correctness of it: a guid-less hull once read
+                        // as fresh on every sweep, and a sound repeating four times a second is far worse than a
+                        // panel doing it (root). Only a rule the player marked makes any noise.
+                        if (WatchMatch.ChimeWanted(Plugin.Cfg.RuleList, facts)) Chime.Play();
+                    }
                     calledNow.Add(callKey);
 
                     var c = new Contact { Guid = guid, Unit = unit };

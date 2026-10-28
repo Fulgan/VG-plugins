@@ -7,6 +7,69 @@ Each mod versions on its own, so a date can carry one mod or all of them. Every 
 
 ---
 
+## 2026-10-28: Hypercom 0.5.1 | CIC Watch 0.3.0 | Station Assistant 1.1.8 | Quick Save 1.0.3
+
+Manageable sell list, optimizer ignore list, destination-aware decoys, CIC Watch chimes. Game 0.8.2.5,
+normal Steam branch.
+
+### Hypercom 0.5.1
+
+**Sell list**
+
+- Added: **manage lists...** window: load, delete, save, new empty list, import/export.
+- Added: rule edits wait for **save**; **discard** undoes them; **Sell** uses saved rules only.
+- Added: delete a rule (red **x** next to **copy** and **edit**).
+- Changed: sell list and shopping list share a "My lists" panel in the right-hand rail.
+
+**Ignoring things**
+
+- Added: per-ship ignore for items, shop offers, officers and recruits.
+- Changed: slot-card ignore and opportunity-list ignore are separate lists.
+
+**Shop rail**
+
+- Changed: shop rail grouped by shopping list; plain upgrades in their own block.
+- Added: gear sold back to a station appears in the shop rail, marked "resold".
+
+**Boosters**
+
+- Added: drag a booster from the owned list onto a slot to pin it.
+- Changed: pool-wide resonance boosters ranked on their actual value for your ship.
+- Changed: no swap suggestions that discard an earned resonance; compare card shows payback time.
+
+**Everywhere else**
+
+- Changed: "This build" figures on the officers, boosters, gear and summary tabs, covering the whole build.
+- Added: aspect and officer skill cards, with their value on this ship.
+- Changed: reputations moved to their own tab; map no longer marked work in progress.
+- Removed: aspect slot count on item cards.
+
+**Fixes**
+
+- Fixed: column headings shifted after hiding a column in an inventory grid.
+- Added: BepInEx log warning when the game version does not match the mod.
+- Added: **Update-VGMods.ps1**, installs the build for your Steam branch.
+
+### CIC Watch 0.3.0
+
+- Added: per-rule `chime` sound, with master switch, volume and **Play it** button.
+- Warning: an older version deletes rules marked `chime` after a downgrade.
+- Added: BepInEx log warning when the game version does not match the mod.
+- Added: **Update-VGMods.ps1**, installs the build for your Steam branch.
+
+### Station Assistant 1.1.8
+
+- Added: decoy on course set to a destination owned by a faction you have standing with. Off by default.
+- Added: BepInEx log warning when the game version does not match the mod.
+- Added: **Update-VGMods.ps1**, installs the build for your Steam branch.
+
+### Quick Save 1.0.3
+
+- Added: BepInEx log warning when the game version does not match the mod.
+- Added: **Update-VGMods.ps1**, installs the build for your Steam branch.
+
+---
+
 ## 2026-08-29: Hypercom 0.5.0 | CIC Watch 0.2.0 | Station Assistant 1.1.7 | Quick Save 1.0.2
 
 Keeps up with game version 0.8.2, and CIC Watch leaves the beta branch. Every mod in this release is built

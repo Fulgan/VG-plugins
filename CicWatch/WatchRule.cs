@@ -32,6 +32,12 @@ namespace CicWatch
         public int Hostility;
         /// <summary>0 = any, 1 = only a hull that can be taken RIGHT NOW.</summary>
         public int Boardable;
+        /// <summary>Make a sound when this rule calls something new.</summary>
+        // AN ACTION, ⊥ A CRITERION, and the difference is load-bearing in two places: it is excluded from
+        // `IsEmpty` (a chime does not narrow what a rule calls, so a rule carrying only this one still calls
+        // everything and the editor must still warn) and from `Nearest` (a contact is never a near miss on
+        // account of a sound).
+        public bool Chime;
 
         internal const int AnyHostility = 0, HostileOnly = 1, FriendlyOnly = 2;
         internal const int AnyBoardable = 0, BoardableNow = 1;
@@ -128,6 +134,20 @@ namespace CicWatch
         {
             if (rules == null) return false;
             for (var i = 0; i < rules.Count; i++) if (Matches(rules[i], f)) return true;
+            return false;
+        }
+
+        /// <summary>
+        /// Whether any rule that CALLS this contact also asks for a sound.
+        ///
+        /// The list is a disjunction, so a contact can be called by several rules at once and the question is not
+        /// which one won — there is no winner. One rule asking for a sound is the whole answer: a player who marks
+        /// "S6 and up" for a chime means to hear an S6, whether or not a quieter rule also matched it.
+        /// </summary>
+        internal static bool ChimeWanted(IList<WatchCriteria> rules, ContactFacts f)
+        {
+            if (rules == null) return false;
+            for (var i = 0; i < rules.Count; i++) if (rules[i].Chime && Matches(rules[i], f)) return true;
             return false;
         }
 
@@ -231,6 +251,7 @@ namespace CicWatch
             if (c.Hostility == WatchCriteria.HostileOnly) parts.Add("hostile");
             if (c.Hostility == WatchCriteria.FriendlyOnly) parts.Add("friendly");
             if (c.Boardable == WatchCriteria.BoardableNow) parts.Add("boardable");
+            if (c.Chime) parts.Add("chime");
             if (c.MinSize >= 0) parts.Add("size>=" + SizeNames[c.MinSize]);
             if (c.MaxSize >= 0) parts.Add("size<=" + SizeNames[c.MaxSize]);
             if (c.MinRarity >= 0) parts.Add("rarity>=" + VG.Core.Rarity.Order[c.MinRarity]);
@@ -262,6 +283,10 @@ namespace CicWatch
                     if (term.Equals("hostile", StringComparison.OrdinalIgnoreCase)) { c.Hostility = WatchCriteria.HostileOnly; continue; }
                     if (term.Equals("friendly", StringComparison.OrdinalIgnoreCase)) { c.Hostility = WatchCriteria.FriendlyOnly; continue; }
                     if (term.Equals("boardable", StringComparison.OrdinalIgnoreCase)) { c.Boardable = WatchCriteria.BoardableNow; continue; }
+                    // ⚠ ONE-WAY: a rule saved with this term and then read by a build that predates it does not
+                    // come back silent, it VANISHES, because an unreadable term drops its whole rule rather than
+                    // widening it. That is the accepted cost of the term and it belongs in the release notes.
+                    if (term.Equals("chime", StringComparison.OrdinalIgnoreCase)) { c.Chime = true; continue; }
 
                     // `<=` is accepted for SIZE alone: every other criterion is a floor, and a ceiling on quality
                     // or rank would be a way of saying "and nothing better than this", which nobody has asked for.
@@ -329,7 +354,11 @@ namespace CicWatch
             if (c.HasLevel) parts.Add(LevelSaid(c.MinLevelDelta));
             if (c.Hostility == WatchCriteria.HostileOnly) parts.Add("hostile");
             if (c.Hostility == WatchCriteria.FriendlyOnly) parts.Add("friendly");
-            return parts.Count == 0 ? "everything" : string.Join(" and ", parts.ToArray());
+            // AFTER the criteria and joined differently, because it is not one of them: "boardable and hostile,
+            // with a chime" reads as a rule that has a sound, where "and a chime" reads as a third thing being
+            // watched for.
+            var said = parts.Count == 0 ? "everything" : string.Join(" and ", parts.ToArray());
+            return c.Chime ? said + ", with a chime" : said;
         }
     }
 }

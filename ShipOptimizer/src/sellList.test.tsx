@@ -66,6 +66,8 @@ const click = (el: Element | undefined, what: string) => {
   if (!el) throw new Error(`no ${what}. buttons: ${buttons().map((b) => b.textContent).join(" | ")}`);
   act(() => { el.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
 };
+// The bar's save: rule edits are pending until it is pressed.
+const save = () => click(host.querySelector(".sl-lists button")!, "the bar's save");
 const ticks = () => [...host.querySelectorAll<HTMLInputElement>(".sl-rlist input[type=checkbox]")];
 // React reads a controlled input through its OWN value descriptor, so assigning `el.value` and firing an
 // event leaves state untouched — the box shows the text and the component never hears about it.
@@ -83,6 +85,8 @@ describe("writing a rule", () => {
     render([], onChange);
     click(button("add sell rule"), "the add button");
     click(button("Add rule"), "the commit button");
+    expect(onChange).not.toHaveBeenCalled();                 // pending until saved
+    save();
     expect(onChange).toHaveBeenCalledTimes(1);
     expect(onChange.mock.calls[0][0].rules).toHaveLength(1);
   });
@@ -97,6 +101,7 @@ describe("writing a rule", () => {
     click(button("add"), "the adder");            // defaults: at least / below
     expect(host.querySelector(".sl-chip")!.textContent).toContain("levels");
     click(button("Add rule"), "the commit button");
+    save();
     const rules = onChange.mock.calls.at(-1)![0].rules as Rule[];
     expect(rules.at(-1)!.where.lrel).toEqual({ min: null, max: -10 });
   });
@@ -110,9 +115,9 @@ describe("writing a rule", () => {
     expect(onChange).not.toHaveBeenCalled();                 // the rule set is untouched by opening an editor
     expect(host.querySelector(".sl-rule.editing")).toBeTruthy();
     click(button("Add rule"), "the commit button");
-    const rules = onChange.mock.calls.at(-1)![0].rules as Rule[];
-    expect(rules).toHaveLength(1);                           // replaced in place, not appended beside itself
-    expect(rules[0].id).toBe(RULE.id);
+    expect(host.querySelectorAll(".sl-rule")).toHaveLength(1);   // replaced in place, not appended beside itself
+    // an unchanged edit leaves nothing to save
+    expect(host.querySelector(".sl-lists")!.textContent).not.toContain("unsaved changes");
   });
 
   it("leaves the original alone when the edit is discarded", () => {
@@ -129,6 +134,7 @@ describe("writing a rule", () => {
     click(button("edit"), "the edit button");        // pulls the rule into the draft
     click(button("or less"), "the comparison word");
     click(button("Add rule"), "the commit button");
+    save();
     const rules = onChange.mock.calls.at(-1)![0].rules as Rule[];
     expect(rules.at(-1)!.where.v).toEqual({ min: 500, max: null });
   });
@@ -181,6 +187,7 @@ describe("writing a rule", () => {
     expect(host.querySelector(".sl-pkrow input")).toBeNull();   // nothing to type
     click(button("add"), "the adder");
     click(button("Add rule"), "the commit button");
+    save();
     const rules = onChange.mock.calls.at(-1)![0].rules as Rule[];
     expect(rules.at(-1)!.where.lrel).toEqual({ min: 0, max: 0 });
   });
@@ -313,16 +320,78 @@ describe("the review step", () => {
   });
 });
 
+describe("pending edits", () => {
+  it("refuses to sell while edits are pending, and discard restores the saved set", () => {
+    const onChange = vi.fn();
+    render([], onChange);
+    click(button("add sell rule"), "the add button");
+    click(button("Add rule"), "the commit button");
+    expect(host.querySelector(".sl-lists")!.textContent).toContain("unsaved changes");
+    expect(host.querySelector<HTMLButtonElement>(".cfg-actions button.danger")!.disabled).toBe(true);
+    click([...host.querySelectorAll(".sl-lists button")].find((b) => b.textContent === "discard"), "discard");
+    expect(host.querySelector(".sl-lists")!.textContent).not.toContain("unsaved changes");
+    expect(host.querySelector(".sl-empty")).toBeTruthy();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("asks before closing with edits pending", async () => {
+    render([]);
+    click(button("add sell rule"), "the add button");
+    click(button("Add rule"), "the commit button");
+    click(host.querySelector(".popin-x")!, "the close button");
+    await act(async () => {});
+    expect(host.querySelector(".modal-confirm .modal-title")?.textContent).toContain("Discard unsaved changes");
+  });
+});
+
+describe("deleting a rule", () => {
+  it("removes it from the set once confirmed, and leaves it alone if not", async () => {
+    const onChange = vi.fn();
+    render([RULE, { ...RULE, id: "r2" }], onChange);
+    const del = () => host.querySelector<HTMLButtonElement>('.sl-rhead [aria-label="delete rule"]')!;
+    click(del(), "the delete button");
+    await act(async () => {});
+    click(button("Cancel"), "the cancel button");
+    await act(async () => {});
+    expect(onChange).not.toHaveBeenCalled();
+    click(del(), "the delete button");
+    await act(async () => {});
+    click(button("Delete"), "the confirmation");
+    await act(async () => {});
+    expect(onChange).not.toHaveBeenCalled();
+    save();
+    expect(onChange).toHaveBeenCalledWith({ defaultKind: "keep", rules: [{ ...RULE, id: "r2" }] });
+  });
+});
+
 describe("saved lists (V38)", () => {
-  const nameBox = () => host.querySelector<HTMLInputElement>(".sl-lists input:not([type=file])")!;
+  // Every list action lives in the manager popin; the sell list itself shows only which list is on screen.
+  const manage = () => click(button("manage lists…"), "the manage-lists button");
+  const nameBox = () => host.querySelector<HTMLInputElement>(".sl-lm input:not([type=file])")!;
+  const saveBtn = () => nameBox().nextElementSibling as HTMLButtonElement;
+  const row = (name: string) => [...host.querySelectorAll(".sl-lm-tab tr")].find((r) => r.querySelector("td.nm")?.firstChild?.textContent === name);
+  const rowBtn = (name: string, label: string) => [...(row(name)?.querySelectorAll("button") ?? [])].find((b) => b.textContent === label);
+  const confirmBox = () => host.querySelector(".modal-confirm .modal-title")?.textContent ?? "";
+  const fileOf = (name: string, rules: Rule[]): SellListFile => ({ v: 1, name, defaultKind: "keep", rules, cats: {} });
+  // Rules and saved lists held the way the app holds them, so a save or a load re-renders with its result.
+  const live = (rules: Rule[], lists: Record<string, SellListFile> = {}) => {
+    const s = { rules, lists, onLists: vi.fn(), onChange: vi.fn(), draw: () => {} };
+    s.draw = () => root.render(tree(s.rules, s.onChange, s.lists, s.onLists, vi.fn()));
+    s.onChange.mockImplementation((n: { rules: Rule[] }) => { s.rules = n.rules; s.draw(); });
+    s.onLists.mockImplementation((n: Record<string, SellListFile>) => { s.lists = n; s.draw(); });
+    act(s.draw);
+    return s;
+  };
+  const settle = () => act(async () => {}); // list actions are async: each may stop to ask first
 
   it("saves what is on screen under a name, carrying the categories the rules use", async () => {
     const onLists = vi.fn();
     const catRule: Rule = { ...RULE, where: { cat: { values: ["mining tools"], not: false } } };
     render([catRule], vi.fn(), {}, onLists);
+    manage();
     type(nameBox(), "scrap");
-    click(button("save"), "save");
-    await act(async () => {}); // the save path is async: it may have to ask about an overwrite first
+    click(saveBtn(), "save");
+    await settle();
     expect(onLists).toHaveBeenCalledTimes(1);
     const saved = onLists.mock.calls[0][0].scrap as SellListFile;
     expect(saved.rules).toHaveLength(1);
@@ -331,21 +400,95 @@ describe("saved lists (V38)", () => {
 
   it("refuses to save an empty rule set or a nameless list", () => {
     render([]);
-    expect(button("save")?.hasAttribute("disabled")).toBe(true); // no name yet
+    manage();
+    expect(saveBtn().disabled).toBe(true); // no name yet
     type(nameBox(), "scrap");
-    expect(button("save")?.hasAttribute("disabled")).toBe(true); // named, but nothing to save
+    expect(saveBtn().disabled).toBe(true); // named, but nothing to save
   });
 
   it("loads a saved list, replacing the stance and the rules", async () => {
     const onChange = vi.fn();
-    const file: SellListFile = {
-      v: 1, name: "keep-good", defaultKind: "sell",
-      rules: [{ ...RULE, id: "r9" }], cats: {},
-    };
+    const file: SellListFile = { v: 1, name: "keep-good", defaultKind: "sell", rules: [{ ...RULE, id: "r9" }], cats: {} };
     render([], onChange, { "keep-good": file });     // no current rules ∴ no confirm to clear
-    click(button("keep-good"), "the saved list");
-    await act(async () => {});
+    manage();
+    click(rowBtn("keep-good", "load"), "the load button");
+    await settle();
     expect(onChange).toHaveBeenCalledWith({ defaultKind: "sell", rules: file.rules });
+  });
+
+  it("names a new list as new, then shows it as the list on screen", async () => {
+    live([RULE]);
+    manage();
+    expect(host.querySelector(".sl-lm")!.textContent).toContain("No saved lists yet");
+    type(nameBox(), "scrap");
+    expect(saveBtn().textContent).toBe("save as new list");
+    click(saveBtn(), "save");
+    await settle();
+    expect(saveBtn().textContent).toBe("saved");
+    expect(saveBtn().disabled).toBe(true);
+    expect(row("scrap")?.classList.contains("on")).toBe(true);
+    expect(host.querySelector(".sl-lists b")?.textContent).toBe("scrap");
+  });
+
+  it("offers a save on the bar, which names an unsaved set in the manager", () => {
+    live([RULE]);
+    const save = host.querySelector<HTMLButtonElement>(".sl-lists button")!;
+    expect(save.textContent).toBe("save…");
+    click(save, "the bar's save");
+    expect(nameBox()).toBeTruthy();
+  });
+
+  it("saves changes to the list on screen without asking, but asks before overwriting a different one", async () => {
+    const s = live([], { a: fileOf("a", [RULE]), b: fileOf("b", [RULE]) });
+    manage();
+    click(rowBtn("a", "load"), "load a");
+    await settle();
+    s.rules = [{ ...RULE, id: "r2" }];
+    act(s.draw);
+    // the bar offers the save without opening the manager
+    click(host.querySelector(".sl-lists button")!, "the bar's save");
+    await settle();
+    expect(confirmBox()).toBe("");
+    expect(s.lists.a.rules[0].id).toBe("r2");
+    manage();
+    type(nameBox(), "b");
+    expect(saveBtn().textContent).toBe("overwrite “b”");
+    click(saveBtn(), "overwrite");
+    await settle();
+    expect(confirmBox()).toContain("Overwrite “b”");
+  });
+
+  it("switches between saved lists without asking when nothing on screen is unsaved", async () => {
+    live([], { a: fileOf("a", [RULE]), b: fileOf("b", [{ ...RULE, id: "r7" }]) });
+    manage();
+    click(rowBtn("a", "load"), "load a");
+    await settle();
+    manage();
+    click(rowBtn("b", "load"), "load b");
+    await settle();
+    expect(confirmBox()).toBe("");
+    expect(host.querySelector(".sl-lists b")?.textContent).toBe("b");
+  });
+
+  it("starts a new empty list, asking only when the rules on screen would be lost", async () => {
+    const s = live([RULE]);
+    manage();
+    click(button("＋ new empty list"), "new list");
+    await settle();
+    expect(confirmBox()).toContain("Clear the current 1 rule");
+    click(button("Clear"), "the confirmation");
+    await settle();
+    expect(s.rules).toEqual([]);
+  });
+
+  it("deletes a saved list from its row", async () => {
+    const s = live([], { a: fileOf("a", [RULE]) });
+    manage();
+    click(rowBtn("a", "delete"), "the delete button");
+    await settle();
+    click(button("Delete"), "the confirmation");
+    await settle();
+    expect(s.lists).toEqual({});
   });
 
   it("merges an imported list's categories without overwriting the player's own", async () => {
@@ -356,8 +499,9 @@ describe("saved lists (V38)", () => {
       cats: { EMP: ["Ion Cannon"], "mining tools": ["Something Else"] },
     };
     render([], onChange, { shared: file }, vi.fn(), onCats);
-    click(button("shared"), "the saved list");
-    await act(async () => {});
+    manage();
+    click(rowBtn("shared", "load"), "the load button");
+    await settle();
     expect(onCats).toHaveBeenCalledWith({ "mining tools": ["Mining Laser"], EMP: ["Ion Cannon"] });
     expect(host.querySelector(".sum-msg")!.textContent).toContain("EMP");
   });

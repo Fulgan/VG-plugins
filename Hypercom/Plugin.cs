@@ -21,7 +21,7 @@ namespace Hypercom
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "fulgan.vanguardgalaxy.hypercom";
-        public const string Version = "0.5.0";
+        public const string Version = "0.5.1";
 
         internal static ManualLogSource Log;
 
@@ -33,6 +33,7 @@ namespace Hypercom
         private ConfigEntry<bool> _allowRemote;
         private ConfigEntry<bool> _debugEndpoints;
         private HttpServer _server;
+        private Harmony _harmony;
         private VG.Core.UpdateNotice _notice;
 
         // Quick-save hotkey; `KeyCode.None` = disabled (the default).
@@ -40,6 +41,11 @@ namespace Hypercom
         private void Awake()
         {
             Log = Logger;
+
+            // Another game version than this build targets still loads; the log says so and names the build to install.
+            var gameNote = VG.Game.GameTarget.Notice("Hypercom", out var gameWarn);
+            if (gameWarn) Log.LogWarning(gameNote);
+            else if (gameNote != null) Log.LogInfo(gameNote);
 
             _enabled = Config.Bind("Server", "Enabled", true,
                 "Master switch for the local inventory-control HTTP server.");
@@ -100,7 +106,10 @@ namespace Hypercom
 
             try
             {
-                new Harmony(Guid).PatchAll(); // log-capture hooks (notifications + event log)
+                // Kept in a field: an instance that is only ever constructed inline can never be unpatched,
+                // so the hooks outlive a teardown that is meant to remove them.
+                _harmony = new Harmony(Guid);
+                _harmony.PatchAll(); // log-capture hooks (notifications + event log)
             }
             catch (System.Exception ex)
             {
@@ -571,8 +580,19 @@ namespace Hypercom
         // on scene/plugin teardown. Both are safe to call (Stop is idempotent), so the socket is always
         // released and never lingers to keep the process (and Steam's "running" state) alive.
         // Client-state writes are coalesced (see ClientState), so flush on the way out or the last few
-        // seconds of preference changes would be lost on a clean exit.
-        private void OnApplicationQuit() { ClientState.Flush(); Pairing.Flush(); _server?.Stop(); }
-        private void OnDestroy() { ClientState.Flush(); Pairing.Flush(); QrTexture.Release(ref _qr); _server?.Stop(); }
+        // seconds of preference changes would be lost on a clean exit. The combat log is the same shape one
+        // thread further out: its writer batches, and a background thread dies at process exit mid-batch.
+        private void Teardown()
+        {
+            ClientState.Flush();
+            Pairing.Flush();
+            CombatLog.Stop();
+            _server?.Stop();
+            try { _harmony?.UnpatchSelf(); } catch { }
+            _harmony = null;
+        }
+
+        private void OnApplicationQuit() => Teardown();
+        private void OnDestroy() { QrTexture.Release(ref _qr); Teardown(); }
     }
 }

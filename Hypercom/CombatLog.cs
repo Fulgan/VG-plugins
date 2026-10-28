@@ -49,11 +49,17 @@ namespace Hypercom
         private static readonly ConcurrentDictionary<int, byte> Seen = new ConcurrentDictionary<int, byte>();
         private static readonly object StartGate = new object();
         private static volatile bool _running;
+        private static Thread _writer;
 
         internal static string Path => System.IO.Path.Combine(BepInEx.Paths.ConfigPath, FileName);
 
         // Started on the first event rather than at load, so a player who never turns the debug flag
         // on never gets a thread.
+        //
+        // CALLED AFTER THE ROWS ARE QUEUED, and that order is what makes the idle exit below safe: the writer
+        // only stands down while holding `StartGate` AND seeing an empty queue, so a producer whose enqueue it
+        // could not have seen is guaranteed to find `_running` false here and start a replacement. Asking for
+        // the writer first would let a row be queued into a thread that has just decided to leave.
         private static void EnsureWriter()
         {
             if (_running) return;
@@ -61,7 +67,8 @@ namespace Hypercom
             {
                 if (_running) return;
                 _running = true;
-                new Thread(WriterLoop) { IsBackground = true, Name = "HypercomCombatLog" }.Start();
+                _writer = new Thread(WriterLoop) { IsBackground = true, Name = "HypercomCombatLog" };
+                _writer.Start();
             }
         }
 
@@ -71,15 +78,23 @@ namespace Hypercom
             {
                 try
                 {
-                    if (Pending.IsEmpty) { Thread.Sleep(FlushIntervalMs); continue; }
-                    var sb = new StringBuilder();
-                    var n = 0;
-                    while (n < MaxBatch && Pending.TryDequeue(out var row))
+                    if (Pending.IsEmpty)
                     {
-                        sb.Append(Json.Write(row)).Append('\n');
-                        n++;
+                        // Nothing queued and nothing more coming, because recording is off: END the thread
+                        // rather than wake twenty-five times a second for the rest of the session. The flag
+                        // is turned off from the settings UI mid-session, so "started once" cannot mean
+                        // "runs forever". Re-checked under the gate against a producer mid-enqueue.
+                        if (!Enabled)
+                        {
+                            lock (StartGate)
+                            {
+                                if (Pending.IsEmpty) { _running = false; _writer = null; return; }
+                            }
+                        }
+                        Thread.Sleep(FlushIntervalMs);
+                        continue;
                     }
-                    if (sb.Length > 0) File.AppendAllText(Path, sb.ToString());
+                    Drain();
                 }
                 catch (Exception e)
                 {
@@ -87,6 +102,35 @@ namespace Hypercom
                     Thread.Sleep(250);   // a failing disk must not spin the thread
                 }
             }
+        }
+
+        /// One batch, appended. Returns how many rows it wrote, so a caller draining to empty can stop.
+        private static int Drain()
+        {
+            var sb = new StringBuilder();
+            var n = 0;
+            while (n < MaxBatch && Pending.TryDequeue(out var row))
+            {
+                sb.Append(Json.Write(row)).Append('\n');
+                n++;
+            }
+            if (sb.Length > 0) File.AppendAllText(Path, sb.ToString());
+            return n;
+        }
+
+        // THE TAIL OF A FIGHT IS THE PART WORTH HAVING — it is why this writes to a file at all rather than
+        // keeping a ring in memory — and a background thread is killed at process exit without finishing its
+        // batch. So teardown drains on the CALLER's thread instead of hoping the writer wakes once more.
+        //
+        // Idempotent, because both teardown paths call it and either may run first.
+        internal static void Stop()
+        {
+            _running = false;
+            try { _writer?.Join(200); } catch { }   // brief and bounded; the thread is background anyway
+            _writer = null;
+            // Bounded: a disk refusing writes must not turn quitting the game into a hang.
+            try { for (var i = 0; i < 16 && Drain() > 0; i++) { } }
+            catch (Exception e) { Plugin.Log.LogWarning("combat log drain: " + e.Message); }
         }
 
         // Off unless the hidden debug flag is on, exactly like the routes that read this.
@@ -97,7 +141,6 @@ namespace Hypercom
             if (!Enabled || target == null) return;
             try
             {
-                EnsureWriter();
                 var id = target.GetInstanceID();
                 if (Seen.TryAdd(id, 0))
                 {
@@ -140,6 +183,8 @@ namespace Hypercom
                         ["depth"] = depth,
                     });
                 }
+                // Last, never first: see EnsureWriter.
+                EnsureWriter();
             }
             catch (Exception e) { Plugin.Log.LogWarning("combat log: " + e.Message); }
         }

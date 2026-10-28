@@ -18,6 +18,10 @@ import MapTab from "./MapTab";
 import BoostersTab, { useBoosterBuilder } from "./BoostersTab";
 import { isBooster, resonanceFigure, resonanceLive } from "./booster";
 import GearTab, { useGearBuilder, isTurret, type Ranking } from "./GearTab";
+import type { ShipView } from "./ShipCard";
+import { useBans, itemSignature, officerBanKey, banKey, type Bans } from "./bans";
+import BanChip from "./BanChip";
+import StandingPanels from "./StandingPanels";
 import { ItemTip } from "./ItemCard";
 import { Notice } from "./Notice";
 import { Modal, useConfirm } from "./Modal";
@@ -33,15 +37,15 @@ import type { CatalogTypes, Inventories, Item, Loadout, LoadoutPresetInfo, LogEn
 import { num, fmt, subFmt, statVal, mainVal, brokeMsg, barterMsg, undockedMsg, buyExpect, priceLabel, affordTip, affordLine, CREDIT_MARK, pluralName } from "./format";
 import { useHoverIntent } from "./useCursorTip";
 import { useWindowed } from "./useWindowed";
-import TabBadge, { TabNote } from "./TabBadge";
-import { gearTurretOpps, gearModuleOpps, gearBoosterOpps, wantedOpps, shopRailRows, type Opp } from "./opportunities";
+import TabBadge from "./TabBadge";
+import { gearTurretOpps, gearModuleOpps, gearBoosterOpps, wantedOpps, shopRailRows, railGroups, type Opp } from "./opportunities";
 import { ViewBar } from "./viewGrid";
 import { useApply } from "./useApply";
 import { load, save, onStorageFailure, clearStorageFailure, clearCachedPrefs, SNAPSHOT_KEY, LOG_KEY, COL_W_KEY, GRID_VIEW_KEY, type StorageFailure } from "./storage";
 import "./App.css";
 
-type Tab = "inventory" | "officers" | "boosters" | "gear" | "summary" | "map";
-const TABS: Tab[] = ["inventory", "officers", "boosters", "gear", "summary", "map"];
+type Tab = "inventory" | "officers" | "boosters" | "gear" | "summary" | "map" | "reputations";
+const TABS: Tab[] = ["inventory", "officers", "boosters", "gear", "summary", "map", "reputations"];
 // Hash router: the active tab lives in the URL (#/gear) so a tab is directly addressable / bookmarkable
 // and the browser back/forward buttons move between tabs. Unknown/empty hash → inventory.
 const tabFromHash = (): Tab => {
@@ -717,11 +721,15 @@ export default function App() {
   );
   const invShown = useMemo(() => filtered.filter(passes), [filtered, hidden]);
   const shopShown = useMemo(() => shops.filter(passes), [shops, hidden]);
-  // An item the player just SOLD is not an opportunity to buy: the rails exist to find what the station stocks
-  // that beats what is fitted, and offering back what was scrapped a minute ago is the opposite of that.
-  // What the STATION sells, which is what an upgrade rail and a want rule are about: a row you sold is your own
-  // gun coming back, ⊥ an offer the station made. The GRID shows both (tinted) — see `shopShown`.
-  const shopStock = useMemo(() => shops.filter((it) => !it.buyback), [shops]);
+  // WHAT IS ON THE SHELF, and a row the player sold is on it. This used to hold only fresh stock, on the
+  // argument that offering back what was scrapped a minute ago is the opposite of finding an upgrade — but the
+  // GAME has no buyback screen: sold goods go into the same shop grid, at a price, and a player reading that
+  // grid is reading one list. Filtering them here made the app disagree with the station in front of them, and
+  // a shopping rule for "reactors" matched 3 of the 6 the station was showing (measured, 2026-09-06).
+  //
+  // The rows still SAY which they are: the grid tints them and the rails carry the marker, so "my own gun coming
+  // back" stays visible as a fact about the row rather than as a silent absence.
+  const shopStock = shops;
   const loadoutShown = useMemo(() => currentItems.filter(passes), [currentItems, hidden]);
 
   const role = status?.role ?? null;
@@ -811,7 +819,24 @@ export default function App() {
   // `vitals` carries the GAME's own hull/armor/shield maxima, which is the only honest reading of a layer (the
   // reported figure already includes scaling passes no re-sum of item lines can reproduce). Without it the
   // defensive cap has nothing to measure and silently permits everything.
-  const gearBuilder = useGearBuilder(layout, inv, status?.shipGuid ?? null, critCtx, shipPools, status?.role ?? null, vitals);
+  // WHAT THIS SHIP REFUSES, owned here because the tabs and the rails have to refuse the same things.
+  //
+  // `present` is what keeps the list honest without a timer on things that still exist: everything the player
+  // holds, everything they have FITTED, and whether the payloads have arrived at all. A refusal of gear now
+  // mounted is lifted, one of gear still held is kept for as long as it is held, and one of neither is spent an
+  // hour later — the shop restocks hourly, so by then a shop offer's roll is gone for good.
+  const present = useMemo(() => {
+    const held = new Set<string>();
+    for (const st of inv?.stores ?? []) for (const it of st.items) held.add(itemSignature(it));
+    for (const o of officers?.officers ?? []) held.add(officerBanKey(o));
+    const fitted = new Set<string>();
+    for (const it of currentItems) fitted.add(itemSignature(it));
+    // READY means the reads that decide "no longer owned" have actually landed. Pruning against a half-loaded
+    // world would lift refusals because a fetch was in flight.
+    return { held, fitted, ready: !!inv && !!loadout };
+  }, [inv, officers, currentItems, loadout]);
+  const bans = useBans(status?.shipGuid ?? null, present);
+  const gearBuilder = useGearBuilder(layout, inv, status?.shipGuid ?? null, critCtx, shipPools, status?.role ?? null, vitals, bans);
 
   // WHAT A POINT OF EACH COMBAT STAT IS WORTH ON THE BATTERY BEING PLANNED.
   //
@@ -837,7 +862,42 @@ export default function App() {
     return statMarginals(status, planned);
   }, [status, layout, gearBuilder.assign]);
 
-  const boosterBuilder = useBoosterBuilder(loadout, inv);
+  const boosterBuilder = useBoosterBuilder(loadout, inv, shipPools, bans);
+
+  // THE TOTALS PANEL'S INPUTS, owned here rather than by any one tab.
+  //
+  // Every tab that changes the loadout draws the SAME panel under the same heading, so a player reads them as one
+  // number — which they are only if each carries the whole pending build. A boosters tab showing booster deltas
+  // while an unapplied gear plan sits one tab over would be two figures under one title.
+  //
+  // The booster plan travels as an out/in PAIR rather than as moved pools: a booster's pooled lines and its draw
+  // move the ship exactly as a module's do, so it folds through the projection the gear plan already uses, and the
+  // CURRENT column stays the ship as it stands. Swaps only — a slot going from empty to filled is not paired, and
+  // the panel then understates that plan rather than mis-stating it.
+  const shipView = useMemo<ShipView>(() => {
+    const curBoosters: Item[] = [], nextBoosters: Item[] = [];
+    for (const p of boosterBuilder.picks) {
+      const was = boosterBuilder.equippedBySlot[p.slot] ?? null, now = p.chosen ?? null;
+      if (was && now && was !== now) { curBoosters.push(was); nextBoosters.push(now); }
+    }
+    const hps = gearBuilder.hps, assign = gearBuilder.assign;
+    const totals = {
+      pools: gearBuilder.pools, reactor: reactorInfo, ranking: gearBuilder.ranking, vitals,
+      layerNote: gearBuilder.layerNote, budgetNote, shipGuid: layout?.shipGuid ?? status?.shipGuid ?? null,
+      curTurrets: hps.map((h) => h.equipped).filter((x): x is Item => !!x),
+      nextTurrets: hps.map((h) => assign[`t:${h.index}`] ?? h.equipped).filter((x): x is Item => !!x),
+      curOther: gearBuilder.mslots.map((m) => m.equipped).filter((x): x is Item => !!x),
+      nextOther: gearBuilder.mslots.map((m) => assign[`m:${m.slot}`] ?? m.equipped).filter((x): x is Item => !!x),
+      curBoosters, nextBoosters,
+    };
+    // The art is the ship those figures describe, and they travel as one block: the panel is a flex child sized
+    // to sit beside it, so on its own it stretches to fill whatever contains it.
+    const guid = layout?.shipGuid ?? status?.shipGuid ?? null;
+    return {
+      totals, name: layout?.name ?? loadout?.name ?? null,
+      img: guid ? api.shipImageUrl(conn, guid, layout?.name ?? "") : null,
+    };
+  }, [gearBuilder, boosterBuilder.picks, boosterBuilder.equippedBySlot, reactorInfo, vitals, budgetNote, layout, status, loadout, conn]);
   // What swapping one turret for another is WORTH, under the Gear tab's selected ranking — the rail's
   // objective has to be the optimizer's, or the two disagree and the rail recommends buying something the
   // optimizer then declines to fit. "simple" is the headline stat, as the game shows it. "expanded" scores
@@ -860,7 +920,9 @@ export default function App() {
   }, [gearBuilder.ranking, gearBuilder.hps, shipPools]);
 
   const oppsFor = useCallback((src: Item[]) => {
-    const cands = src.filter(passes);
+    // A REFUSED OFFER LEAVES THE RAIL, exactly as a refused item leaves the tab's pool. The rail re-offering what
+    // the player has already turned down reads as the refusal never having been heard.
+    const cands = src.filter((it) => passes(it) && !bans.has(it, "notice"));
     // The same floor the gear tab applies: below it a swap is model noise and the optimizer refuses it, so
     // advertising it here would offer what the tab then declines — a "+49.4" on a 90,577 index is 0.05%.
     const equippedT = gearBuilder.hps.map((h) => h.equipped).filter((x): x is Item => !!x);
@@ -876,14 +938,13 @@ export default function App() {
     // decisions that live outside it. A rail offering what the tab was told to stop offering is one slot with
     // two verdicts.
     const boosters = gearBoosterOpps(cands.filter(isBooster), boosterBuilder.slotTypes, boosterBuilder.equippedBySlot,
-                                     // No booster ban list any more, so nothing is refused here.
-                                     boosterBuilder.ctx, undefined, new Set(boosterBuilder.locked.keys()));
+                                     boosterBuilder.ctx, boosterBuilder.refused, new Set(boosterBuilder.locked.keys()));
     // The rails judge a module the way the tab does: on the battery it changes, wherever the pools allow it.
     const other = gearModuleOpps(cands.filter((i) => !isTurret(i) && !isBooster(i)), gearBuilder.mslots,
       shipPools?.energy, status?.role ?? null,
       gearBuilder.ranking === "expanded" ? shipPools : null, equippedT);
     return [...turrets, ...boosters, ...other].sort((a, b) => b.delta - a.delta);
-  }, [passes, currentItems, gearBuilder, boosterBuilder, gearGain]);
+  }, [passes, currentItems, gearBuilder, boosterBuilder, gearGain, bans]);
   const invOpps = useMemo(() => oppsFor(equippable), [equippable, hidden, oppsFor]);
   const shopOpps = useMemo(() => oppsFor(shopStock), [shopStock, hidden, oppsFor]);
   // What a `copies owned` clause is about: everything the player HOLDS, armory and fitted alike, since a spare
@@ -924,9 +985,12 @@ export default function App() {
   const shopInPlay = useMemo(() => shopStock.filter(passes), [shopStock, hidden]);
   // Wanted rows are ADDED to the upgrade rows rather than ranked against them — the two answer different
   // questions. An offer already on the rail as an upgrade keeps that row, since it says strictly more.
+  // A WANTED ROW IS REFUSED LIKE ANY OTHER. These are scored by their own path rather than through `oppsFor`, so
+  // the ban filter that path applies never reached them: an offer the player had told this ship to skip stayed on
+  // the rail because a shopping rule also claimed it.
   const shopWanted = useMemo(
-    () => wantedOpps(shopInPlay, wantRules, wantCtx, new Set(shopOpps.map((o) => o.item.name))),
-    [shopInPlay, wantRules, wantCtx, shopOpps]);
+    () => wantedOpps(shopInPlay.filter((it) => !bans.has(it, "notice")), wantRules, wantCtx, new Set(shopOpps.map((o) => itemSignature(o.item)))),
+    [shopInPlay, wantRules, wantCtx, shopOpps, bans]);
   const shopRail = useMemo(() => shopRailRows(shopOpps, shopWanted), [shopOpps, shopWanted]);
   const credits = status?.credits ?? null;
 
@@ -949,7 +1013,7 @@ export default function App() {
       })
       .sort((a, b) => Number(b.guid === status?.shipGuid) - Number(a.guid === status?.shipGuid));
   }, [officers, shipsAll, status?.shipGuid]);
-  const builder = useOfficerBuilder(officers?.officers ?? [], shipList, status?.shipGuid ?? null);
+  const builder = useOfficerBuilder(officers?.officers ?? [], shipList, status?.shipGuid ?? null, bans);
   const portraitUrl = useCallback((guid: string | null) => api.portraitUrl(conn, guid), [conn]);
 
   // Count of station recruits that would out-rank an assigned officer → Officers-tab badge.
@@ -1113,16 +1177,22 @@ export default function App() {
         <button className={tab === "summary" ? "on" : ""} onClick={() => setTab("summary")}>Summary
           <TabBadge kind="pending" count={applyApi.counts.total} label="new" title="Pending changes to apply — officers, boosters and gear" />
         </button>
-        {/* temporary: galaxy map proposal */}
-        <button className={tab === "map" ? "on" : ""} onClick={() => setTab("map")}>Map <TabNote text="wip" title="Work in progress" /></button>
+        <button className={tab === "map" ? "on" : ""} onClick={() => setTab("map")}>Map</button>
+        {/* STANDING IS ITS OWN QUESTION. It sat under the map because both are about who holds what, but the map
+            is a place to look things up and standing is a thing that CHANGES while you play, with a recorded
+            history to read: a panel at the foot of a scrollable map is not where either belongs. */}
+        <button className={tab === "reputations" ? "on" : ""} onClick={() => setTab("reputations")}>Reputations</button>
       </nav>
 
-      {tab === "officers" && <OfficersTab apply={applyApi} builder={builder} portraitUrl={portraitUrl} recruits={recruits} portraitByIcon={(icon) => api.portraitByIcon(conn, icon)} goSummary={() => setTab("summary")} conn={conn} docked={!!status?.docked} credits={credits} onHired={refresh} marginals={marginals} />}
-      {tab === "boosters" && <BoostersTab apply={applyApi} builder={boosterBuilder} docked={!!status?.docked} conn={conn} goSummary={() => setTab("summary")} marginals={marginals} />}
-      {tab === "gear" && <GearTab layout={layout} builder={gearBuilder} catalog={catTypes} conn={conn} currentShipGuid={status?.shipGuid ?? null} goSummary={() => setTab("summary")} reactor={reactorInfo} budgetNote={budgetNote} role={role} vitals={vitals} apply={applyApi} />}
-      {tab === "map" && <MapTab conn={conn} docked={!!status?.docked} standingBump={standingBump} />}
+      {tab === "officers" && <OfficersTab bans={bans} shipView={shipView} apply={applyApi} builder={builder} portraitUrl={portraitUrl} recruits={recruits} portraitByIcon={(icon) => api.portraitByIcon(conn, icon)} goSummary={() => setTab("summary")} conn={conn} docked={!!status?.docked} credits={credits} onHired={refresh} marginals={marginals} />}
+      {tab === "boosters" && <BoostersTab bans={bans} shipView={shipView} apply={applyApi} builder={boosterBuilder} docked={!!status?.docked} conn={conn} goSummary={() => setTab("summary")} marginals={marginals} />}
+      {tab === "gear" && <GearTab bans={bans} shipView={shipView} layout={layout} builder={gearBuilder} catalog={catTypes} conn={conn} currentShipGuid={status?.shipGuid ?? null} goSummary={() => setTab("summary")} reactor={reactorInfo} budgetNote={budgetNote} role={role} vitals={vitals} apply={applyApi} />}
+      {tab === "map" && <MapTab conn={conn} docked={!!status?.docked} />}
+      {/* `conquestUnlocked` was the map's own reading of whether that quadrant is drawn. Here the ladder is shown
+          whenever there is one to show, which is the gate the panel already applied beside it. */}
+      {tab === "reputations" && <StandingPanels conn={conn} bump={standingBump} conquestUnlocked />}
       {tab === "summary" && (
-        <SummaryTab officer={builder} boosters={boosterBuilder} gear={gearBuilder} portraitUrl={portraitUrl} conn={conn}
+        <SummaryTab shipView={shipView} officer={builder} boosters={boosterBuilder} gear={gearBuilder} portraitUrl={portraitUrl} conn={conn}
           docked={!!status?.docked} hasHangar={status?.hasPersonalHangar ?? true} currentShipGuid={status?.shipGuid ?? null} playthrough={status?.playthrough ?? null} playthroughName={status?.playthroughName ?? null} reloadNonce={presetsNonce} onChanged={refresh} apply={applyApi} />
       )}
 
@@ -1142,9 +1212,10 @@ export default function App() {
           <div className="opp-panel">
             <div className="opp-head">
               <h2>From inventories</h2>
+              <BanChip bans={bans} keys={equippable.filter((it) => bans.has(it, "notice")).map((it) => banKey("notice", it))} />
             </div>
             {loadout ? (
-              invOpps.length ? <OpportunityList opps={invOpps} equipped={currentItems} role={role} conn={conn} docked={!!status?.docked} onBought={refresh} ranking={gearBuilder.ranking} /> : <p className="hint" title="Nothing you own or can buy here beats what is equipped">none better</p>
+              invOpps.length ? <OpportunityList bans={bans} opps={invOpps} equipped={currentItems} role={role} conn={conn} docked={!!status?.docked} onBought={refresh} ranking={gearBuilder.ranking} /> : <p className="hint" title="Nothing you own or can buy here beats what is equipped">none better</p>
             ) : (
               <p className="hint">dock to see upgrades</p>
             )}
@@ -1168,7 +1239,7 @@ export default function App() {
               </select>
               {(cat || rar) && <button onClick={() => { setCat(""); setRar(""); }}>clear</button>}
               <button onClick={() => downloadText("inventory.csv", toCsv(invShown))}>CSV</button>
-              <button onClick={() => setSellOpen(true)} title="What is scrap, and why — rules you write, reviewed before anything sells">Sell list…</button>
+
             </div>
             <ItemGrid items={invShown} showWhere equipped={currentItems} role={role} flashed={flashed} conn={conn}
                         gridId="inv" view={gridView("inv")} onView={(v) => setGridView("inv", v)}
@@ -1237,17 +1308,30 @@ export default function App() {
         </main>
 
         <aside className="side">
+          {/* THE LISTS THE PLAYER WRITES, together and above the lists the app produces. Each had been wedged
+              beside something else — the shopping list into the shop rail's own head, where a heading and two
+              buttons took three rows before the first offer, and the sell list into the inventory toolbar. They
+              are the same kind of thing (a set of rules, edited in a dialog), so they read as one panel.
+
+              Both are DIALOGS for the reason the sell list already documented: editing a list is not a glance at
+              a value, and a 440px editor beside a 230px rail wraps every clause it contains. */}
           <div className="opp-panel">
-            <div className="opp-head">
-              <h2>From shop</h2>
-              {/* A DIALOG, like the sell list it shares its clause vocabulary with. Anchored to this button the
-                  editor got 440px beside a 230px rail, and a rule is a sentence plus a row of chips: every clause
-                  wrapped, a substat list ran to four lines, and the panel covered the rows it was written about.
-                  Editing a list is not a glance at a value, so it gets the room the sell list gets. */}
+            <div className="opp-head"><h2>My lists</h2></div>
+            <div className="list-buttons">
+              <button className={"mini" + (sellOpen ? " on" : "")} onClick={() => setSellOpen(true)}
+                      title="What is scrap, and why — rules you write, reviewed before anything sells">
+                sell list{sellRules.length ? ` (${sellRules.length})` : ""}
+              </button>
               <button className={"mini" + (wantOpen ? " on" : "")} onClick={() => setWantOpen((v) => !v)}
                       title="What to watch this station's shop for. Matches join the rail; nothing is bought.">
                 shopping list{wantRules.length ? ` (${wantRules.length})` : ""}
               </button>
+            </div>
+          </div>
+          <div className="opp-panel">
+            <div className="opp-head">
+              <h2>From shop</h2>
+              <BanChip bans={bans} keys={shopStock.filter((it) => bans.has(it, "notice")).map((it) => banKey("notice", it))} />
             </div>
             <Modal open={wantOpen} onClose={() => setWantOpen(false)} label="Shopping list" className="want-pop">
               <WantedRules rules={wantRules} offers={shopInPlay} vocabulary={wantVocab} catalog={wantCatalog} ctx={wantCtx}
@@ -1255,7 +1339,7 @@ export default function App() {
                            onChange={(next) => { setWantRules(next); save("shipoptimizer.wantRules", next); }} />
             </Modal>
             {shopRail.length ? (
-              <OpportunityList opps={shopRail} equipped={currentItems} showCost role={role} credits={credits} conn={conn} docked={!!status?.docked} onBought={refresh} ranking={gearBuilder.ranking} />
+              <OpportunityList grouped bans={bans} opps={shopRail} equipped={currentItems} showCost role={role} credits={credits} conn={conn} docked={!!status?.docked} onBought={refresh} ranking={gearBuilder.ranking} />
             ) : (
               <p className="hint" title={loadout ? "Nothing here beats what is equipped, and no want matched" : undefined}>
                 {loadout ? "none better" : "dock to see upgrades"}
@@ -1786,12 +1870,13 @@ export function ItemGrid({
           key={i}
           className={`row-click ${selected.has(exactKey(r.it)) ? "sel" : ""} ${flashed?.has(flashKey(r.it)) ? "flash" : ""}`}
           onClick={() => toggleSel(exactKey(r.it))}
-          /* enter/leave only — ItemTooltip follows the cursor itself (no re-render per move) */
-          onMouseEnter={(e) => showTip({ it: r.it, x: e.clientX, y: e.clientY })}
-          onMouseLeave={hideTip}
         >
+          {/* The card follows the cursor ∴ only the NAME opens it. On the whole row it covered the cells the
+              player was reading across, and any control at the far end of the row with it. */}
           {shown.map((c) => (
-            <td key={c.key} className={c.cls ?? ""}>{c.cell(r.it)}</td>
+            <td key={c.key} className={c.cls ?? ""}
+                onMouseEnter={c.key === "__name" ? (e) => showTip({ it: r.it, x: e.clientX, y: e.clientY }) : undefined}
+                onMouseLeave={c.key === "__name" ? hideTip : undefined}>{c.cell(r.it)}</td>
           ))}
         </tr>
       )))}
@@ -1844,7 +1929,7 @@ export function ItemGrid({
       </tr>
     </thead>
     // eslint-disable-next-line react-hooks/exhaustive-deps -- clickSort/setF/arrow are render-stable closures over state setters
-  ), [columns, filters, sort]);
+  ), [shown, filters, sort]);
 
   if (!items.length) return <p className="hint">(none)</p>;
   return (
@@ -1923,8 +2008,12 @@ function ItemTooltip({ it, x, y, equipped, role, conn }: { it: Item; x: number; 
   );
 }
 
-function OpportunityList({ opps, equipped, showCost, role, credits, conn, docked, onBought, ranking }: {
+function OpportunityList({ opps, equipped, showCost, role, credits, conn, docked, onBought, ranking, bans, grouped }: {
   opps: Opp[]; equipped: Item[]; showCost?: boolean; role?: string | null; credits?: number | null;
+  /** Refusing a row here is the same refusal the tabs honour: it leaves every list at once. */
+  bans?: Bans;
+  /** Split into blocks named by the shopping list that claimed each row. Shop rail only — see the render. */
+  grouped?: boolean;
   ranking?: Ranking;
   conn: Conn; docked?: boolean; onBought?: () => void;
 }) {
@@ -1990,16 +2079,19 @@ function OpportunityList({ opps, equipped, showCost, role, credits, conn, docked
     : "Gain in the headline main stat (simple ranking).";
   const shown = opps.filter((o) => !hiddenTypes.has(o.item.type ?? "") && (!affOnly || affordable(o)));
   // Row list memoized so hovering one doesn't rebuild the whole rail (same reasoning as the grid body).
-  const list = useMemo(() => (
-    <div className="opp-list">
-      {shown.map((o, i) => (
+  const list = useMemo(() => {
+  // THE ROW IS ONE FUNCTION whether it is drawn flat or under a heading: two copies of a row this dense is the
+  // duplication that costs this repo most, and the grouped rail differs only in what sits above the rows.
+  const rowEl = (o: Opp, i: number | string) => (
         <div
           key={i}
           className="opp-row"
-          onMouseEnter={(e) => showTip({ it: o.item, x: e.clientX, y: e.clientY })}
-          onMouseLeave={hideTip}
         >
-          <span className={`opp-name r-${o.item.rarity}`}>{o.item.name}</span>
+          {/* Only the name opens the card: it follows the cursor, and a row-wide target sits over the row's own
+              buttons at the far end. */}
+          <span className={`opp-name r-${o.item.rarity}`}
+                onMouseEnter={(e) => showTip({ it: o.item, x: e.clientX, y: e.clientY })}
+                onMouseLeave={hideTip}>{o.item.name}</span>
           {/* A wanted row is here because a shopping rule claimed it, so it has no gain to report — and showing
               its 0 delta as one would read "changes nothing", the opposite of why it is on the rail. */}
           {o.wanted
@@ -2014,7 +2106,17 @@ function OpportunityList({ opps, equipped, showCost, role, credits, conn, docked
               something else. Written out rather than left to a tooltip — a reason nobody hovers is a reason
  nobody checks, which is how three objective bugs survived a day of testing. */}
           {!o.wanted && o.why && o.delta === 0 && <span className="opp-why dim" title={o.why}>{o.why}</span>}
-          <span className="opp-type dim">{o.item.type}{o.slotLabel ? ` · ${o.slotLabel}` : ""}</span>
+          <span className="opp-type dim">
+            {[o.item.size, o.item.type].filter(Boolean).join(" ")}{o.slotLabel ? ` · ${o.slotLabel}` : ""}
+            {/* The player's own gun coming back is on the shelf like anything else, but where it came from is
+                part of reading the row. */}
+            {o.item.buyback && <span className="opp-back" title="You sold this here. It is back on the shelf at the station's price.">resold</span>}
+          </span>
+          {/* The refusal lives ON the row being refused, and stops the row's own hover card from following it. */}
+          {bans && (
+            <button className="li-ban" title="Stop offering this on this ship"
+                    onClick={(e) => { e.stopPropagation(); bans.toggle(o.item, "notice"); }}>ignore</button>
+          )}
           {showCost && (
             <span className={`opp-cost ${affordable(o) ? "dim" : "down"}`}><Price it={o.item} conn={conn} /></span>
           )}
@@ -2037,10 +2139,26 @@ function OpportunityList({ opps, equipped, showCost, role, credits, conn, docked
               );
             })()}
         </div>
-      ))}
+  );
+  // GROUPED ONLY WHERE THE BLOCKS MEAN SOMETHING. The shop rail carries rows a shopping RULE put there, so a
+  // heading names the rule that answers "why is this here"; the inventory rail has no such rules, and a single
+  // heading over one block is a line that says nothing.
+  return (
+    <div className="opp-list">
+      {grouped
+        ? railGroups(shown).map((g) => (
+            <div key={g.label} className="opp-group">
+              <div className="opp-group-head" title={g.wanted
+                ? "On the rail because this list asked for it. An offer two lists want is listed once, under the first, and the row names them all."
+                : "On the rail because it beats something equipped."}>{g.label}</div>
+              {g.rows.map((o, i) => rowEl(o, `${g.label}:${i}`))}
+            </div>
+          ))
+        : shown.map((o, i) => rowEl(o, i))}
     </div>
+  );
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `shown`/`affordable` derive from these
-  ), [opps, hiddenTypes, affOnly, showCost, credits, showTip, hideTip, docked, busy, buyMsg]);
+  }, [opps, hiddenTypes, affOnly, showCost, credits, showTip, hideTip, docked, busy, buyMsg, grouped]);
   return (
     <div>
       {confirmUi}

@@ -81,6 +81,27 @@ function useStandingHistory(conn: Conn, bump: number) {
   return { entries: hist.entries, clear, sampler };
 }
 
+/**
+ * When a logged change happened, in the terms a reader has: the clock for today, and the DAY as well once it is
+ * not today. A bare `09:23:41` on a row from last week reads as this morning, which is the one thing the column
+ * must not say.
+ *
+ * `day` is absent from a bridge older than the field, and the time alone is shown rather than a day guessed at.
+ */
+export function whenLabel(e: { t: string; day?: string }, today = new Date()): string {
+  if (!e.day) return e.t;
+  const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  if (e.day === iso(today)) return e.t;
+  // WHOLE DAYS, from the calendar dates themselves: an elapsed-hours difference calls 23:50 and 00:10 the same
+  // day across a midnight the player watched pass.
+  const [y, m, d] = e.day.split("-").map(Number);
+  const then = new Date(y, (m ?? 1) - 1, d ?? 1);
+  const days = Math.round((new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime() - then.getTime()) / 86_400_000);
+  if (days === 1) return `yesterday ${e.t}`;
+  if (days > 1 && days < 7) return `${days} days ago ${e.t}`;
+  return `${e.day} ${e.t}`;
+}
+
 export default function StandingPanels({ conn, conquestUnlocked = false, bump = 0 }: {
   conn: Conn; conquestUnlocked?: boolean; bump?: number;
 }) {
@@ -329,7 +350,7 @@ function ChangeLog({ conn, title, entries, ladder, onClear, watching, sampler, c
         <ol className="std-log-rows">
           {mine.map((e) => (
             <li key={`${e.seq}-${e.factionId}`} className={e.delta < 0 ? "down" : "up"}>
-              <span className="std-log-t">{e.t}</span>
+              <span className="std-log-t">{whenLabel(e)}</span>
               <span className="std-log-f">
                 <FactionMark conn={conn} id={e.factionId} name={e.faction} size={12} />
               </span>

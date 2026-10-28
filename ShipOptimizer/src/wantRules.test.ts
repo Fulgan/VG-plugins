@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { isInert, newWant, ownedCounts, wantMatches, wantSentence, wantedBy, type WantRule } from "./wantRules";
+import { itemSignature } from "./bans";
 import { wantedOpps } from "./opportunities";
 import type { FieldCtx } from "./sellRules";
 import type { Item } from "./types";
@@ -131,7 +132,9 @@ describe("wantedOpps", () => {
   it("leaves an offer the upgrade rows already carry to them", () => {
     // An upgrade row says strictly more about the same offer (what it displaces, and by how much), so two rows
     // for one item would be the rail contradicting itself.
-    const opps = wantedOpps([offer()], [r], ctx(), new Set(["Rail Cannon"]));
+    // `taken` holds SIGNATURES now, not names: the rails key by roll, so an offer is claimed by an upgrade row
+    // only when it is that exact item rather than another of the same name.
+    const opps = wantedOpps([offer()], [r], ctx(), new Set([itemSignature(offer())]));
     expect(opps).toEqual([]);
   });
 

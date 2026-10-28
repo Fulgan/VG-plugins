@@ -135,6 +135,53 @@ export function equippedIn(
  * fitted say which activities it actually serves, which is what stops "Combat hull" from meaning "your mining
  * laser's rolls are worthless".
  */
+/**
+ * WHAT MAKES THIS ITEM THIS ITEM: everything about it that a player can see and compare.
+ *
+ * Per the user: "the signature for an item should be a complete list of the item props: name, type, main stats,
+ * substats and slots". So it carries the name, the SIZE, the type, the level and rarity that place it, the main
+ * stat with its amount, every substat with its amount, the aspects fitted and how many slots to fit them in.
+ *
+ * SIZE EARNS ITS PLACE THE HARD WAY: a station stocked `Reactor Mk.XVI` in Large, Medium and Small at once, all
+ * three sharing the name AND the type ("Reactor"), which reads as one item three times over. Size is the only
+ * property separating them, and it decides which slot the thing can even go in.
+ *
+ * QUALITY IS STATED OUTRIGHT rather than left to be implied by the lines it scales. Workshop levels multiply
+ * every stat line EXCEPT the main stat, so two items at different quality usually differ in their substats
+ * anyway — but "usually" is not an identity, and an item with no substats at all would collapse into another.
+ *
+ * ⊥ WHERE IT SITS. An earlier pair of keys split owned items from store offers so that a shop ban could expire
+ * with the restock, and a store handle is what carried that. It made the control read as broken: the rails keep
+ * one row per item NAME, so refusing one roll simply promoted the next copy into the same row. A signature has
+ * no lifetime of its own and needs none — a reroll produces different substats, so the entry stops matching by
+ * itself, and two identical copies in two slots are one item to a player and are now one ban.
+ *
+ * Substats are SORTED, since the game states them in whatever order it rolled them and a player comparing two
+ * items does not read them as ordered.
+ *
+ * ⚠ HOW WELL IT NAMES ONE ITEM DEPENDS ON THE CATEGORY, and only equipment is safe. A turret, module or
+ * booster carries ROLLED substats, so a signature is unique to that instance for practical purposes and two
+ * matches really are the same item. Ore, trade goods, ammo and materials carry no roll at all: every stack
+ * of one good has the same props ∴ a signature matches all of them at once.
+ *
+ * Bans only ever address equipment (and officers, by their own guid), so the loose case never arises here.
+ * It would the moment something ACTED on a signature, which is why nothing does: a sale takes `location` +
+ * `key` + `count` per row (`sellRun.sellableRows`) and a purchase takes the offer's own handle, so selling
+ * one stack of ore can never mean selling every stack of it.
+ */
+export function itemSignature(it: Item): string {
+  const stat = (x: { stat?: string; name?: string; amount?: number | string }) =>
+    `${x.stat ?? x.name ?? ""}=${x.amount ?? ""}`;
+  const subs = (it.substats ?? []).map(stat).sort().join(",");
+  const aspects = (it.aspects ?? []).map((a) => a.name).sort().join("+");
+  return [
+    it.name, it.size ?? "", it.type ?? "", it.level, it.rarity, `q${it.bonus ?? 0}`,
+    it.mainStat ? stat(it.mainStat) : "",
+    subs, aspects, it.aspectSlots ?? 0,
+  ].join("|");
+}
+
+
 export function shipFit(
   role: string | null | undefined,
   mslots: ReadonlyArray<{ slot: string }>,
